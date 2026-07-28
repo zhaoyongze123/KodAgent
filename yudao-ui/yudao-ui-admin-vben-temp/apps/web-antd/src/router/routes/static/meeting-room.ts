@@ -13,6 +13,17 @@ const routes: RouteRecordRaw[] = [
     },
     children: [
       {
+        path: 'manage',
+        name: 'MeetingCenterManageStatic',
+        component: () => import('#/views/system/meeting-room/index.vue'),
+        meta: {
+          title: '会议室管理',
+          activePath: '/meeting-room/manage',
+          hideInMenu: true,
+          keepAlive: true,
+        },
+      },
+      {
         path: 'booking',
         name: 'MeetingCenterBookingStatic',
         component: () => import('#/views/system/meeting-booking/index.vue'),

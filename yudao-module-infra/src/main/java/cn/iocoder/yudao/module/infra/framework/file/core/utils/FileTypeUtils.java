@@ -83,7 +83,7 @@ public class FileTypeUtils {
         String mineType = getMineType(content, filename);
         response.setContentType(mineType);
         // 设置内容显示、下载文件名：https://www.cnblogs.com/wq-9/articles/12165056.html
-        if (isImage(mineType)) {
+        if (isInlinePreviewable(mineType)) {
             // 参见 https://github.com/YunaiV/ruoyi-vue-pro/issues/692 讨论
             response.setHeader("Content-Disposition", "inline;filename=" + HttpUtils.encodeUtf8(filename));
         } else {
@@ -106,6 +106,18 @@ public class FileTypeUtils {
      */
     public static boolean isImage(String mineType) {
         return StrUtil.startWith(mineType, "image/");
+    }
+
+    /**
+     * 浏览器可以直接在预览窗口中渲染的类型。
+     * Office 文档由前端交给 Office Online 预览，避免浏览器直接下载。
+     */
+    public static boolean isInlinePreviewable(String mineType) {
+        return isImage(mineType)
+                || "application/pdf".equalsIgnoreCase(mineType)
+                || StrUtil.startWith(mineType, "text/")
+                || StrUtil.startWith(mineType, "audio/")
+                || StrUtil.startWith(mineType, "video/");
     }
 
 }

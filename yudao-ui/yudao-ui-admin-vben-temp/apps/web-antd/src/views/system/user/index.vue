@@ -357,10 +357,6 @@ const [Grid, gridApi] = useVbenVxeGrid({
   max-width: 100%;
 }
 
-.oa-user-list-panel :deep(.vxe-grid--table-wrapper) {
-  overflow-x: auto;
-}
-
 .oa-user-list-panel :deep(.vben-form),
 .oa-user-list-panel :deep(.vxe-form--item),
 .oa-user-list-panel :deep(.vxe-form--item-inner),
@@ -384,7 +380,6 @@ const [Grid, gridApi] = useVbenVxeGrid({
   min-width: 0;
   max-width: 100%;
   margin-bottom: 0;
-  overflow-x: auto;
   overflow-y: hidden;
 }
 
@@ -394,7 +389,6 @@ const [Grid, gridApi] = useVbenVxeGrid({
   max-width: 100%;
   min-height: calc(100vh - 472px);
   max-height: calc(100vh - 472px);
-  overflow: auto;
   overscroll-behavior-x: contain;
 }
 

@@ -2,6 +2,7 @@ package cn.iocoder.yudao.module.system.dal.dataobject.personalschedule;
 
 import cn.iocoder.yudao.framework.tenant.core.db.TenantBaseDO;
 import com.baomidou.mybatisplus.annotation.KeySequence;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
@@ -22,11 +23,13 @@ public class PersonalScheduleAttendeeDO extends TenantBaseDO {
     /**
      * 日程编号
      */
+    @TableField("schedule_id")
     private Long scheduleId;
 
     /**
      * 用户编号
      */
+    @TableField("user_id")
     private Long userId;
 
 }

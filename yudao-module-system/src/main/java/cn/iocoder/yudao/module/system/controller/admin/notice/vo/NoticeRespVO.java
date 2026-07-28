@@ -46,7 +46,16 @@ public class NoticeRespVO {
     @Schema(description = "阅读人数", example = "12")
     private Long readCount;
 
+    @Schema(description = "未读人数", example = "4")
+    private Long unreadCount;
+
+    @Schema(description = "分发对象")
+    private List<NoticeTargetRespVO> targets;
+
     @Schema(description = "阅读明细")
     private List<NoticeReadRespVO> readList;
+
+    @Schema(description = "未读明细")
+    private List<NoticeUnreadRespVO> unreadList;
 
 }

@@ -256,7 +256,6 @@ onMounted(async () => {
         <section class="oa-bpm-leave-panel" v-loading="formLoading">
           <header class="oa-bpm-leave-panel-head">
             <div>
-              <div class="oa-bpm-leave-eyebrow">Request Form</div>
               <h3 class="oa-bpm-leave-title">{{ getTitle }}</h3>
             </div>
             <Button type="default" @click="onBack">
@@ -276,12 +275,6 @@ onMounted(async () => {
       </Col>
       <Col :span="8">
         <aside class="oa-bpm-leave-panel" v-loading="processTimeLineLoading">
-          <header class="oa-bpm-leave-panel-head">
-            <div>
-              <div class="oa-bpm-leave-eyebrow">Process Timeline</div>
-              <h3 class="oa-bpm-leave-title">流程</h3>
-            </div>
-          </header>
           <ProcessInstanceTimeline
             :activity-nodes="activityNodes"
             :show-status-icon="false"

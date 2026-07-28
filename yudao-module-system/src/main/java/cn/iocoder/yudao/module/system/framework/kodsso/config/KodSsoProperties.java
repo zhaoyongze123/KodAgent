@@ -25,6 +25,11 @@ public class KodSsoProperties {
      */
     private String baseUrl;
     /**
+     * 后端访问可道云的地址。为空时回退到 baseUrl；生产环境可配置为 Docker 内网地址，
+     * 避免业务容器通过宿主机公网地址回环访问仅绑定 127.0.0.1 的可道云端口。
+     */
+    private String serverBaseUrl;
+    /**
      * 可道云侧 appName
      */
     private String appName = "ruoyi-admin";

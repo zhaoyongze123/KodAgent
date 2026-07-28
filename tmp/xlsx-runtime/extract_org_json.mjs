@@ -1,0 +1,10 @@
+import { FileBlob, SpreadsheetFile } from '@oai/artifact-tool';
+const path = '/Users/mac/项目/若伊部署/output/xlsx/规划院部门树人员与审批流程-20260710.xlsx';
+const wb = await SpreadsheetFile.importXlsx(await FileBlob.load(path));
+const sheet = wb.worksheets.getItem('部门树人员');
+const rows = sheet.getUsedRange().values;
+const headers = rows[0];
+const data = rows.slice(1).map(row => Object.fromEntries(headers.map((h,i)=>[h,row[i] ?? null])));
+const people = data.filter(r => r['人员']);
+const unique = [...new Set(people.map(r => r['人员']))];
+console.log(JSON.stringify({rowCount:data.length, peopleRows:people.length, uniquePeople:unique.length, uniquePeopleList:unique, people}, null, 2));

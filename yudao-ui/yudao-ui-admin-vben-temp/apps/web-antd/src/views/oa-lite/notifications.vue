@@ -17,6 +17,10 @@ import {
 } from '#/api/system/notify/message';
 import { getNotice } from '#/api/system/notice';
 import { router } from '#/router';
+import {
+  resolveNotificationPresentation,
+  resolveNotificationPreview,
+} from '#/views/oa-lite/notification-presenter';
 
 type ReadFilter = 'all' | 'read' | 'unread';
 const OA_LITE_NOTICE_PUSH_EVENT = 'oa-lite-notice-push';
@@ -42,6 +46,9 @@ const readFilterOptions: Array<{ key: ReadFilter; label: string }> = [
 
 const unreadCount = computed(
   () => messages.value.filter((item) => !item.readStatus).length,
+);
+const selectedPresentation = computed(() =>
+  selectedMessage.value ? resolveNotificationPresentation(selectedMessage.value) : undefined,
 );
 
 function resolveReadStatus(filter: ReadFilter) {
@@ -107,33 +114,6 @@ function handleBack() {
   router.push({ name: 'OALite' });
 }
 
-function stripHtmlContent(value?: string) {
-  if (!value) {
-    return '';
-  }
-  return value
-    .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function resolveMessagePreview(item: SystemNotifyMessageApi.NotifyMessage) {
-  const noticeId = extractNoticeId(item);
-  if (!noticeId) {
-    return stripHtmlContent(item.templateContent) || '点击查看详情';
-  }
-  const content =
-    typeof item.templateParams?.content === 'string' ? item.templateParams.content : '';
-  const preview = stripHtmlContent(content || item.templateContent);
-  return preview || '点击查看公告详情';
-}
-
 async function handleViewDetail(item: SystemNotifyMessageApi.NotifyMessage) {
   if (!item.readStatus) {
     await updateNotifyMessageRead([item.id]);
@@ -188,6 +168,18 @@ async function handleMarkAllRead() {
   }
 }
 
+function handleOpenNotificationAction() {
+  const action = selectedPresentation.value?.action;
+  if (!action) {
+    return;
+  }
+  if (action.to) {
+    router.push(action.to);
+  } else if (action.url) {
+    window.open(action.url, '_blank', 'noopener,noreferrer');
+  }
+}
+
 onMounted(() => {
   loadMessages();
   if (typeof window !== 'undefined') {
@@ -207,7 +199,6 @@ onUnmounted(() => {
     <div class="oa-notify-shell">
       <section class="oa-notify-hero">
         <div class="oa-notify-hero-main">
-          <div class="oa-notify-eyebrow">Notifications</div>
           <h1 class="oa-notify-heading">消息中心</h1>
         </div>
         <div class="oa-notify-hero-summary">
@@ -219,9 +210,6 @@ onUnmounted(() => {
 
       <section class="oa-notify-section">
         <div class="oa-notify-section-head">
-          <div>
-            <h3 class="oa-notify-section-title">消息筛选与处理</h3>
-          </div>
           <div class="oa-notify-header-actions">
             <Button @click="handleBack">返回 OA</Button>
             <Button type="primary" @click="handleMarkAllRead">全部标记已读</Button>
@@ -251,11 +239,6 @@ onUnmounted(() => {
       </section>
 
       <section class="oa-notify-section oa-notify-list-panel">
-        <div class="oa-notify-section-head">
-          <div>
-            <h3 class="oa-notify-section-title">消息列表</h3>
-          </div>
-        </div>
         <div class="oa-notify-section-body">
           <section class="oa-notify-list-shell">
             <div class="oa-notify-list-head">
@@ -283,7 +266,9 @@ onUnmounted(() => {
                       <span v-if="!item.readStatus" class="oa-notify-inline-mark">未读</span>
                       </div>
                     <div class="oa-notify-item-content">
-                      <div class="oa-notify-item-subject">{{ resolveMessagePreview(item) }}</div>
+                      <div class="oa-notify-item-subject">
+                        {{ resolveNotificationPreview(item) }}
+                      </div>
                     </div>
                     <div class="oa-notify-item-time">
                       <span>{{ formatDateTime(item.createTime) }}</span>
@@ -345,31 +330,70 @@ onUnmounted(() => {
     >
       <template v-if="selectedMessage">
         <div class="oa-notify-detail">
-          <div class="oa-notify-detail-row">
-            <span class="label">发送人</span>
-            <span>{{ selectedMessage.templateNickname }}</span>
-          </div>
-          <div class="oa-notify-detail-row">
-            <span class="label">状态</span>
+          <section
+            v-if="selectedPresentation"
+            class="oa-notify-detail-hero"
+            :class="`tone-${selectedPresentation.tone}`"
+          >
+            <div class="oa-notify-detail-hero-copy">
+              <div class="oa-notify-detail-kicker">{{ selectedPresentation.subtitle }}</div>
+              <h3 class="oa-notify-detail-title">{{ selectedPresentation.title }}</h3>
+              <p class="oa-notify-detail-summary">{{ selectedPresentation.preview }}</p>
+            </div>
             <Tag
-              :color="selectedMessage.readStatus ? 'default' : 'processing'"
-              class="oa-notify-status-tag"
-              :class="{
-                read: selectedMessage.readStatus,
-                unread: !selectedMessage.readStatus,
-              }"
+              class="oa-notify-status-tag oa-notify-status-tag--hero"
+              :class="[
+                selectedMessage.readStatus ? 'read' : 'unread',
+                `tone-${selectedPresentation.tone}`,
+              ]"
             >
-              {{ selectedMessage.readStatus ? '已读' : '未读' }}
+              {{ selectedPresentation.statusLabel }}
             </Tag>
-          </div>
-          <div class="oa-notify-detail-row">
-            <span class="label">发送时间</span>
-            <span>{{ formatDateTime(selectedMessage.createTime) }}</span>
-          </div>
-          <div class="oa-notify-detail-row" v-if="selectedMessage.readTime">
-            <span class="label">阅读时间</span>
-            <span>{{ formatDateTime(selectedMessage.readTime) }}</span>
-          </div>
+          </section>
+
+          <section class="oa-notify-detail-meta-card">
+            <div class="oa-notify-detail-meta-grid">
+              <div class="oa-notify-detail-meta-item">
+                <span class="label">发送人</span>
+                <span>{{ selectedMessage.templateNickname }}</span>
+              </div>
+              <div class="oa-notify-detail-meta-item">
+                <span class="label">阅读状态</span>
+                <Tag
+                  :color="selectedMessage.readStatus ? 'default' : 'processing'"
+                  class="oa-notify-status-tag"
+                  :class="{
+                    read: selectedMessage.readStatus,
+                    unread: !selectedMessage.readStatus,
+                  }"
+                >
+                  {{ selectedMessage.readStatus ? '已读' : '未读' }}
+                </Tag>
+              </div>
+              <div class="oa-notify-detail-meta-item">
+                <span class="label">发送时间</span>
+                <span>{{ formatDateTime(selectedMessage.createTime) }}</span>
+              </div>
+              <div class="oa-notify-detail-meta-item" v-if="selectedMessage.readTime">
+                <span class="label">阅读时间</span>
+                <span>{{ formatDateTime(selectedMessage.readTime) }}</span>
+              </div>
+            </div>
+          </section>
+
+          <section v-if="selectedPresentation" class="oa-notify-detail-brief">
+            <div class="oa-notify-detail-brief-head">关键信息</div>
+            <div class="oa-notify-detail-brief-grid">
+              <div
+                v-for="field in selectedPresentation.fields"
+                :key="field.label"
+                class="oa-notify-detail-brief-item"
+              >
+                <span class="label">{{ field.label }}</span>
+                <span class="value">{{ field.value }}</span>
+              </div>
+            </div>
+          </section>
           <template v-if="selectedNotice">
             <div class="oa-notify-detail-notice-head">
               <div>
@@ -421,9 +445,25 @@ onUnmounted(() => {
               <Empty v-else description="暂无附件" :image="Empty.PRESENTED_IMAGE_SIMPLE" />
             </section>
           </template>
-          <div v-else class="oa-notify-detail-content oa-notify-detail-content--plain">
-            {{ selectedMessage.templateContent }}
-          </div>
+          <section v-else-if="selectedPresentation" class="oa-notify-detail-content-shell">
+            <div class="oa-notify-detail-content-head">
+              {{ selectedPresentation.bodyTitle }}
+            </div>
+            <div class="oa-notify-detail-content oa-notify-detail-content--plain">
+              <p
+                v-for="paragraph in selectedPresentation.body"
+                :key="paragraph"
+                class="oa-notify-detail-paragraph"
+              >
+                {{ paragraph }}
+              </p>
+            </div>
+            <div v-if="selectedPresentation.action" class="oa-notify-detail-actions">
+              <Button type="primary" @click="handleOpenNotificationAction">
+                {{ selectedPresentation.action.label }}
+              </Button>
+            </div>
+          </section>
         </div>
       </template>
     </Modal>
@@ -763,33 +803,147 @@ onUnmounted(() => {
 .oa-notify-detail {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
 }
 
-.oa-notify-detail-row {
+.oa-notify-detail-hero {
   display: flex;
-  gap: 12px;
-  align-items: center;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 20px;
+  border: 1px solid color-mix(in srgb, var(--oa-shell-border) 82%, transparent);
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--oa-accent) 8%, white),
+      color-mix(in srgb, var(--oa-accent) 2%, white)
+    );
+}
+
+.oa-notify-detail-hero.tone-success {
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, #16a34a 10%, white),
+      color-mix(in srgb, #16a34a 2%, white)
+    );
+}
+
+.oa-notify-detail-hero.tone-warning {
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, #d97706 12%, white),
+      color-mix(in srgb, #d97706 2%, white)
+    );
+}
+
+.oa-notify-detail-hero.tone-danger {
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, #dc2626 10%, white),
+      color-mix(in srgb, #dc2626 2%, white)
+    );
+}
+
+.oa-notify-detail-hero-copy {
+  min-width: 0;
+}
+
+.oa-notify-detail-kicker {
+  color: var(--oa-ink-soft);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.oa-notify-detail-title {
+  margin: 8px 0 0;
+  color: var(--oa-ink);
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.32;
+}
+
+.oa-notify-detail-summary {
+  margin: 10px 0 0;
+  max-width: 68ch;
+  color: var(--oa-ink-soft);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.oa-notify-detail-meta-card,
+.oa-notify-detail-brief,
+.oa-notify-detail-content-shell {
+  padding: 18px 20px;
+  border: 1px solid color-mix(in srgb, var(--oa-shell-border) 82%, transparent);
+  background: color-mix(in srgb, white 94%, var(--oa-accent) 1%);
+}
+
+.oa-notify-detail-meta-grid,
+.oa-notify-detail-brief-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 18px;
+}
+
+.oa-notify-detail-meta-item,
+.oa-notify-detail-brief-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
   color: var(--oa-ink);
 }
 
-.oa-notify-detail-row .label {
-  min-width: 72px;
+.oa-notify-detail-meta-item .label,
+.oa-notify-detail-brief-item .label {
   color: var(--oa-ink-soft);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.oa-notify-detail-brief-head,
+.oa-notify-detail-content-head {
+  margin-bottom: 14px;
+  color: var(--oa-ink);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.oa-notify-detail-brief-item .value {
+  color: var(--oa-ink);
+  font-size: 15px;
+  line-height: 1.6;
 }
 
 .oa-notify-detail-content {
-  padding: 14px 0 16px;
-  border-radius: 0;
-  border-top: 1px solid var(--oa-shell-border);
-  border-bottom: 1px solid var(--oa-shell-border);
+  padding: 0;
+  border: 0;
   color: var(--oa-ink);
-  line-height: 1.85;
+  line-height: 1.8;
   background: transparent;
 }
 
 .oa-notify-detail-content--plain {
-  white-space: pre-wrap;
+  white-space: normal;
+}
+
+.oa-notify-detail-paragraph {
+  margin: 0;
+}
+
+.oa-notify-detail-paragraph + .oa-notify-detail-paragraph {
+  margin-top: 10px;
+}
+
+.oa-notify-detail-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 18px;
 }
 
 .oa-notify-detail-notice-head {
@@ -877,18 +1031,23 @@ onUnmounted(() => {
 
 :deep(.oa-notify-modal .ant-modal-content) {
   overflow: hidden;
-  border-radius: 0;
-  border: 1px solid var(--oa-shell-border);
-  box-shadow: none;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--oa-shell-border) 82%, transparent);
+  box-shadow: 0 18px 44px rgb(15 23 42 / 10%);
 }
 
 :deep(.oa-notify-modal .ant-modal-body) {
-  padding-top: 12px;
+  padding-top: 18px;
 }
 
 :deep(.oa-notify-modal .ant-modal-header) {
-  border-bottom: 1px solid var(--oa-shell-border);
+  border-bottom: 1px solid color-mix(in srgb, var(--oa-shell-border) 82%, transparent);
   background: transparent;
+}
+
+:deep(.oa-notify-modal .ant-modal-title) {
+  font-size: 18px;
+  font-weight: 600;
 }
 
 :deep(.oa-notify-status-tag.read) {
@@ -901,6 +1060,30 @@ onUnmounted(() => {
   border-color: color-mix(in srgb, var(--oa-accent) 34%, var(--oa-shell-border)) !important;
   color: var(--oa-accent) !important;
   background: transparent !important;
+}
+
+:deep(.oa-notify-status-tag--hero) {
+  padding-inline: 10px !important;
+  padding-block: 3px !important;
+  font-weight: 600;
+}
+
+:deep(.oa-notify-status-tag--hero.tone-success) {
+  border-color: color-mix(in srgb, #16a34a 28%, transparent) !important;
+  color: #15803d !important;
+  background: color-mix(in srgb, #16a34a 10%, white) !important;
+}
+
+:deep(.oa-notify-status-tag--hero.tone-warning) {
+  border-color: color-mix(in srgb, #d97706 30%, transparent) !important;
+  color: #b45309 !important;
+  background: color-mix(in srgb, #d97706 11%, white) !important;
+}
+
+:deep(.oa-notify-status-tag--hero.tone-danger) {
+  border-color: color-mix(in srgb, #dc2626 26%, transparent) !important;
+  color: #b91c1c !important;
+  background: color-mix(in srgb, #dc2626 9%, white) !important;
 }
 
 @media (max-width: 768px) {
@@ -951,6 +1134,24 @@ onUnmounted(() => {
 
   .oa-notify-pagination {
     justify-content: center;
+  }
+
+  .oa-notify-detail-hero,
+  .oa-notify-detail-meta-grid,
+  .oa-notify-detail-brief-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .oa-notify-detail-hero {
+    flex-direction: column;
+  }
+
+  .oa-notify-detail-actions {
+    justify-content: stretch;
+  }
+
+  .oa-notify-detail-actions :deep(.ant-btn) {
+    width: 100%;
   }
 }
 </style>

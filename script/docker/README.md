@@ -5,7 +5,7 @@
 这套脚本用于当前仓库的 OA/BPM 版本进行三套环境管理：
 
 - `dev`：本地开发 / 本机联调
-- `stage`：`192.168.1.107` 生产测试环境
+- `stage`：`124.221.4.228` 生产测试环境
 - `prod`：未来正式生产环境
 
 环境变量入口统一放在：
@@ -24,7 +24,7 @@
 
 当前已验证的 stage 远端目录：
 
-- `/home/daiwei/deployments/ruoyi-release`
+- `/root/deployments/ruoyi-release`
 
 ## 本地直接运行
 
@@ -55,9 +55,10 @@ DEPLOY_ENV=stage bash script/docker/deploy.sh
 2. 构建 `ruoyi-server:local` 和 `ruoyi-admin:local`
 3. `docker save` 导出镜像 tar
 4. 上传到目标环境机器
-5. 在远端 `/home/daiwei/deployments/ruoyi-release` 重载应用
-6. 自动清理本地导出包、未使用 Docker 镜像 / 构建缓存，以及服务器上的旧 dangling 镜像
-7. 校验 `http://127.0.0.1:48080/actuator/health`
+5. 在应用重载前自动执行 `sql/mysql/system-kod-sso-token-upgrade.sql` 数据库迁移
+6. 在远端 `/root/deployments/ruoyi-release` 重载应用
+7. 自动清理本地导出包、未使用 Docker 镜像 / 构建缓存，以及服务器上的旧 dangling 镜像
+8. 校验 `http://127.0.0.1:48080/actuator/health`
 
 说明：
 
@@ -73,7 +74,7 @@ cd /Users/mac/项目/若伊部署
 IMPORT_DATABASE=true bash script/docker/deploy.sh
 ```
 
-- `bash script/docker/deploy-to-107.sh` 是兼容入口，固定走 `stage`，并默认 `IMPORT_DATABASE=true`
+- `bash script/docker/deploy-to-228.sh` 是固定走 `stage` 的快捷入口，并默认 `IMPORT_DATABASE=true`
 
 ## 切换环境
 
@@ -103,7 +104,7 @@ docker compose --env-file script/docker/env/dev.env -f script/docker/docker-comp
 
 注意：
 
-- stage 目标地址是内网 `192.168.1.107`，GitHub 官方托管 Runner 无法直接访问。
+- stage 目标地址是 `124.221.4.228`，GitHub 官方托管 Runner 无法直接访问。
 - workflow 必须跑在能访问该内网地址的 `self-hosted runner` 上，并打上 `ruoyi-deploy` 标签。
 - workflow 会用 `script/docker/env/stage.env.example` 作为模板，再把 GitHub Secrets 注入成临时 `.stage.ci.env`。
 - workflow 最终直接调用 `script/docker/deploy.sh`，和手工部署走同一套逻辑，避免两边漂移。
@@ -136,4 +137,4 @@ CLEAN_LOCAL_ARTIFACTS=false CLEAN_LOCAL_DOCKER_CACHE=false DEPLOY_ENV=stage bash
 - `dev` 直接使用已入库的 `dev.env`
 - `stage / prod` 只提交 `.env.example` 模板，真实机密保留在部署机或 CI Secret
 - 手工部署和 CI 部署统一走 `script/docker/deploy.sh`
-- `192.168.1.107` 明确归类为 `stage`，不要再把它当正式生产环境
+- `124.221.4.228` 明确归类为本项目唯一部署服务器

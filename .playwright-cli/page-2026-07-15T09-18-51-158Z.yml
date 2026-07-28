@@ -1,0 +1,84 @@
+- generic [active] [ref=e2]:
+  - generic:
+    - iframe [ref=e383]:
+      - main [ref=f2e5]:
+        - complementary [ref=f2e6]:
+          - menu [ref=f2e8]:
+            - menuitem "会议室管理" [ref=f2e9] [cursor=pointer]
+            - menuitem "会议室预定" [ref=f2e12] [cursor=pointer]
+            - menuitem "会议室排期" [ref=f2e15] [cursor=pointer]
+        - generic [ref=f2e20]:
+          - generic [ref=f2e21]: 会议室预定
+          - generic [ref=f2e24]:
+            - generic [ref=f2e25]:
+              - button "全部预定" [ref=f2e26] [cursor=pointer]
+              - button "我的预定" [ref=f2e28] [cursor=pointer]
+            - generic [ref=f2e31]:
+              - generic [ref=f2e37]:
+                - button "重 置" [ref=f2e38] [cursor=pointer]
+                - button "搜 索" [ref=f2e40] [cursor=pointer]
+                - generic [ref=f2e42] [cursor=pointer]: 收起
+              - generic [ref=f2e49]:
+                - generic [ref=f2e51]:
+                  - generic [ref=f2e52]: 预定列表
+                  - generic [ref=f2e56]:
+                    - button "新建预定" [ref=f2e60] [cursor=pointer]
+                    - button "" [ref=f2e63] [cursor=pointer]
+                  - generic [ref=f2e65]:
+                    - button "" [ref=f2e66] [cursor=pointer]
+                    - button "" [ref=f2e68] [cursor=pointer]
+                    - button "" [ref=f2e70] [cursor=pointer]
+                - generic [ref=f2e77]:
+                  - generic [ref=f2e78]:
+                    - table [ref=f2e82]:
+                      - rowgroup [ref=f2e93]:
+                        - row [ref=f2e94]:
+                          - columnheader "编号" [ref=f2e95]
+                          - columnheader "会议主题" [ref=f2e100]
+                          - columnheader "会议室" [ref=f2e105]
+                          - columnheader "开始时间" [ref=f2e110]
+                          - columnheader "结束时间" [ref=f2e115]
+                          - columnheader "申请人" [ref=f2e120]
+                          - columnheader "状态" [ref=f2e125]
+                          - columnheader "创建时间" [ref=f2e130]
+                    - generic [ref=f2e136]:
+                      - table:
+                        - rowgroup
+                  - generic [ref=f2e138]:
+                    - table [ref=f2e141]:
+                      - rowgroup [ref=f2e152]:
+                        - row [ref=f2e153]:
+                          - columnheader "操作" [ref=f2e154]
+                    - generic [ref=f2e160]:
+                      - table:
+                        - rowgroup
+                - generic [ref=f2e173]:
+                  - generic [ref=f2e174]: 共 0 条记录
+                  - generic [ref=f2e176] [cursor=pointer]:
+                    - generic "10条/页" [ref=f2e177]:
+                      - textbox "请选择" [ref=f2e178]: 10条/页
+                    - generic [ref=f2e179]: 
+                  - button "" [ref=f2e182]
+                  - button "" [ref=f2e184]
+                  - button "" [ref=f2e186]
+                  - button "1" [ref=f2e189] [cursor=pointer]
+                  - button "" [ref=f2e190]
+                  - button "" [ref=f2e192]
+                  - button "" [ref=f2e194]
+    - generic [ref=e384]:
+      - link [ref=e386] [cursor=pointer]:
+        - /url: "#/"
+      - generic "隐藏/显示" [ref=e388] [cursor=pointer]: 
+      - generic [ref=e390]:
+        - generic "桌面" [ref=e391] [cursor=pointer]: 
+        - generic "文件管理" [ref=e394] [cursor=pointer]: 
+        - generic "审批发起" [ref=e397] [cursor=pointer]: 
+        - generic [ref=e400] [cursor=pointer]:
+          - generic [ref=e401]: 
+          - generic [ref=e402]: 会议室
+        - generic "日程" [ref=e403] [cursor=pointer]: 
+        - generic "党务管理" [ref=e406] [cursor=pointer]: 
+        - generic "项目" [ref=e409] [cursor=pointer]
+      - generic [ref=e412]:
+        - generic [ref=e413]: 
+        - generic [ref=e416]:              

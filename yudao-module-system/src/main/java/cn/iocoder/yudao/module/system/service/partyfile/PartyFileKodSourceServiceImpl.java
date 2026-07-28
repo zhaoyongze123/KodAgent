@@ -35,6 +35,9 @@ import static cn.iocoder.yudao.module.system.enums.ErrorCodeConstants.*;
 @Validated
 public class PartyFileKodSourceServiceImpl implements PartyFileKodSourceService {
 
+    private static final int KOD_HTTP_CONNECT_TIMEOUT_MILLIS = 3_000;
+    private static final int KOD_HTTP_READ_TIMEOUT_MILLIS = 10_000;
+
     private static final int TOKEN_EXPIRE_MINUTES = 240;
 
     @Resource
@@ -329,6 +332,8 @@ public class PartyFileKodSourceServiceImpl implements PartyFileKodSourceService 
         try (HttpResponse response = HttpRequest.post(loginUrl)
                 .form("name", source.getServiceUsername())
                 .form("password", source.getServicePassword())
+                .setConnectionTimeout(KOD_HTTP_CONNECT_TIMEOUT_MILLIS)
+                .setReadTimeout(KOD_HTTP_READ_TIMEOUT_MILLIS)
                 .execute()) {
             loginResp = parseJsonResponse(response, "可道云登录返回为空");
         } catch (Exception ex) {
@@ -358,7 +363,10 @@ public class PartyFileKodSourceServiceImpl implements PartyFileKodSourceService 
     }
 
     private JsonNode requestKodJson(String url, String emptyMessage) {
-        try (HttpResponse response = HttpRequest.get(url).execute()) {
+        try (HttpResponse response = HttpRequest.get(url)
+                .setConnectionTimeout(KOD_HTTP_CONNECT_TIMEOUT_MILLIS)
+                .setReadTimeout(KOD_HTTP_READ_TIMEOUT_MILLIS)
+                .execute()) {
             return parseJsonResponse(response, emptyMessage);
         } catch (Exception ex) {
             throw wrapKodException(null, ex);

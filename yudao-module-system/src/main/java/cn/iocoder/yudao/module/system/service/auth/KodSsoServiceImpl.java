@@ -120,29 +120,59 @@ public class KodSsoServiceImpl implements KodSsoService {
                 cacheItem.getUserId(), cacheItem.getUsername(), LoginLogTypeEnum.LOGIN_KOD_SSO));
     }
 
+    @Override
+    public String getCurrentUserKodAccessToken(Long userId) {
+        validateEnabled();
+        validateBaseConfig();
+        KodSsoUserBindDO bind = kodSsoUserBindMapper.selectByUserId(userId);
+        if (bind == null || StrUtil.isBlank(bind.getKodAccessToken())) {
+            throw exception(AUTH_KOD_SSO_TOKEN_INVALID, "当前账号尚未完成可道云登录，请先重新登录可道云");
+        }
+        return bind.getKodAccessToken();
+    }
+
+    @Override
+    public String getKodBaseUrl() {
+        validateEnabled();
+        validateBaseConfig();
+        return getKodServerBaseUrl();
+    }
+
     private KodSsoResolvedUser resolveOrCreateUser(String kodAccessToken) {
         validateEnabled();
         validateBaseConfig();
         KodUserProfile profile = fetchKodUserProfile(kodAccessToken);
         AdminUserDO matchedUser = matchExistingUser(profile);
         if (matchedUser != null) {
-            upsertBind(matchedUser.getId(), profile);
+            upsertBind(matchedUser.getId(), profile, kodAccessToken);
+            persistKodAccessToken(matchedUser.getId(), kodAccessToken);
             syncLocalProfile(matchedUser, profile);
             syncLocalDept(matchedUser, profile);
             syncLocalRoles(matchedUser.getId(), profile);
             return new KodSsoResolvedUser(matchedUser.getId(), matchedUser.getUsername());
         }
         Long userId = createLocalUser(profile);
-        upsertBind(userId, profile);
+        upsertBind(userId, profile, kodAccessToken);
+        persistKodAccessToken(userId, kodAccessToken);
         AdminUserDO user = adminUserService.getUser(userId);
         return new KodSsoResolvedUser(userId, user.getUsername());
+    }
+
+    private void persistKodAccessToken(Long userId, String kodAccessToken) {
+        if (userId == null || StrUtil.isBlank(kodAccessToken)) {
+            return;
+        }
+        int updated = kodSsoUserBindMapper.updateKodAccessTokenByUserId(userId, kodAccessToken);
+        if (updated != 1) {
+            log.warn("可道云 SSO 令牌刷新未更新绑定记录，userId={}, updatedRows={}", userId, updated);
+        }
     }
 
     private KodUserProfile fetchKodUserProfile(String kodAccessToken) {
         if (StrUtil.isBlank(kodAccessToken)) {
             throw exception(AUTH_KOD_SSO_TOKEN_INVALID, "缺少可道云访问令牌");
         }
-        String url = normalizeBaseUrl(kodSsoProperties.getBaseUrl())
+        String url = getKodServerBaseUrl()
                 + "?user/sso/apiCheckToken&accessToken=" + HttpUtils.encodeUtf8(kodAccessToken)
                 + "&appName=" + HttpUtils.encodeUtf8(kodSsoProperties.getAppName());
         String response = HttpUtils.get(url, Collections.emptyMap());
@@ -236,13 +266,14 @@ public class KodSsoServiceImpl implements KodSsoService {
         }
     }
 
-    private void createBind(Long userId, KodUserProfile profile) {
+    private void createBind(Long userId, KodUserProfile profile, String kodAccessToken) {
         KodSsoUserBindDO bind = new KodSsoUserBindDO();
         bind.setUserId(userId);
         bind.setKodUserId(profile.getKodUserId());
         bind.setKodUsername(profile.getKodUsername());
         bind.setKodNickname(profile.getKodNickname());
         bind.setRawProfileJson(profile.getRawProfileJson());
+        bind.setKodAccessToken(kodAccessToken);
         kodSsoUserBindMapper.insert(bind);
     }
 
@@ -260,29 +291,29 @@ public class KodSsoServiceImpl implements KodSsoService {
         return baseUrl + "#" + fragmentWithCode;
     }
 
-    private void upsertBind(Long userId, KodUserProfile profile) {
+    private void upsertBind(Long userId, KodUserProfile profile, String kodAccessToken) {
         KodSsoUserBindDO bind = kodSsoUserBindMapper.selectByUserId(userId);
         if (bind == null) {
             KodSsoUserBindDO bindByKodUserId = kodSsoUserBindMapper.selectByKodUserId(profile.getKodUserId());
             if (bindByKodUserId != null) {
                 bindByKodUserId.setUserId(userId);
-                syncBind(bindByKodUserId, profile);
+                syncBind(bindByKodUserId, profile, kodAccessToken);
                 return;
             }
             KodSsoUserBindDO bindByKodUsername = kodSsoUserBindMapper.selectByKodUsername(profile.getKodUsername());
             if (bindByKodUsername != null) {
                 bindByKodUsername.setUserId(userId);
-                syncBind(bindByKodUsername, profile);
+                syncBind(bindByKodUsername, profile, kodAccessToken);
                 return;
             }
-            createBind(userId, profile);
+            createBind(userId, profile, kodAccessToken);
             return;
         }
         bind.setKodUserId(profile.getKodUserId());
-        syncBind(bind, profile);
+        syncBind(bind, profile, kodAccessToken);
     }
 
-    private void syncBind(KodSsoUserBindDO bind, KodUserProfile profile) {
+    private void syncBind(KodSsoUserBindDO bind, KodUserProfile profile, String kodAccessToken) {
         boolean changed = false;
         if (!StrUtil.equals(bind.getKodUserId(), profile.getKodUserId())) {
             bind.setKodUserId(profile.getKodUserId());
@@ -298,6 +329,10 @@ public class KodSsoServiceImpl implements KodSsoService {
         }
         if (!StrUtil.equals(bind.getRawProfileJson(), profile.getRawProfileJson())) {
             bind.setRawProfileJson(profile.getRawProfileJson());
+            changed = true;
+        }
+        if (StrUtil.isNotBlank(kodAccessToken) && !StrUtil.equals(bind.getKodAccessToken(), kodAccessToken)) {
+            bind.setKodAccessToken(kodAccessToken);
             changed = true;
         }
         if (changed) {
@@ -492,6 +527,11 @@ public class KodSsoServiceImpl implements KodSsoService {
         if (StrUtil.hasBlank(kodSsoProperties.getBaseUrl(), kodSsoProperties.getAppName())) {
             throw exception(AUTH_KOD_SSO_BAD_REQUEST, "缺少 baseUrl 或 appName 配置");
         }
+    }
+
+    private String getKodServerBaseUrl() {
+        return normalizeBaseUrl(StrUtil.blankToDefault(
+                kodSsoProperties.getServerBaseUrl(), kodSsoProperties.getBaseUrl()));
     }
 
     private String normalizeBaseUrl(String baseUrl) {

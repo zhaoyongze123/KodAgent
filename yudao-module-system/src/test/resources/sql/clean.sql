@@ -9,6 +9,8 @@ DELETE FROM "system_user_session";
 DELETE FROM "system_post";
 DELETE FROM "system_user_post";
 DELETE FROM "system_notice";
+DELETE FROM "system_notice_read";
+DELETE FROM "system_notice_target";
 DELETE FROM "system_personal_schedule_attendee";
 DELETE FROM "system_personal_schedule";
 DELETE FROM "system_meeting_booking_attendee";

@@ -17,5 +17,10 @@ public class PartyFileKodFolderRespVO {
 
     private String path;
 
+    /**
+     * 是否为叶子目录。目录选择器按需展开目录时使用，避免一次性递归加载整棵目录树。
+     */
+    private Boolean isLeaf;
+
     private List<PartyFileKodFolderRespVO> children;
 }

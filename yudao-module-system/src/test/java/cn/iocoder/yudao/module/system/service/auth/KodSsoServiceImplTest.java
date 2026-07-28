@@ -109,6 +109,7 @@ public class KodSsoServiceImplTest extends BaseDbUnitTest {
         }
 
         verify(adminUserService, never()).updateUserProfile(anyLong(), any());
+        verify(kodSsoUserBindMapper).updateKodAccessTokenByUserId(11L, "kod-token");
     }
 
     @Test
@@ -263,6 +264,7 @@ public class KodSsoServiceImplTest extends BaseDbUnitTest {
         verify(adminUserService, never()).updateUserProfile(anyLong(), any());
         verify(permissionService, never()).assignUserRole(anyLong(), anySet());
         verify(adminUserService).updateUserDept(33L, 3L);
+        verify(kodSsoUserBindMapper).updateKodAccessTokenByUserId(33L, "kod-token-3");
     }
 
     @Test

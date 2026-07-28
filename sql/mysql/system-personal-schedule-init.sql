@@ -46,19 +46,32 @@ CREATE TABLE IF NOT EXISTS `system_personal_schedule_attendee` (
 -- ----------------------------
 -- Menu
 -- 说明：
--- 1. 菜单挂在系统管理下，默认分配给管理员和普通员工角色
--- 2. 如果你的系统里系统管理菜单 id 不是 1，请修改 @system_parent_id
--- 3. 如果普通员工角色 id 不是 2，请同步调整 role_id
+-- 1. 菜单挂在独立“日程”模块下，默认分配给管理员和普通员工角色
+-- 2. 如果普通员工角色 id 不是 2，请同步调整 role_id
 -- ----------------------------
-SET @system_parent_id := 1;
+SET @schedule_root_id := 30061;
 SET @personal_schedule_menu_id := 30060;
 
-UPDATE `system_menu` SET `component` = 'system/personal-schedule/index'
+INSERT INTO `system_menu` (`id`, `name`, `permission`, `type`, `sort`, `parent_id`, `path`, `icon`, `component`, `component_name`, `status`, `visible`, `keep_alive`, `always_show`, `creator`, `create_time`, `updater`, `update_time`, `deleted`)
+SELECT @schedule_root_id, '日程', '', 1, 40, 0, '/schedule', 'mdi:calendar-month-outline', NULL, NULL, 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'
+WHERE NOT EXISTS (SELECT 1 FROM `system_menu` WHERE `id` = @schedule_root_id);
+
+UPDATE `system_menu`
+SET `parent_id` = @schedule_root_id, `path` = 'calendar', `sort` = 1,
+    `component` = 'system/personal-schedule/index', `component_name` = 'ScheduleCenterCalendar'
 WHERE `id` = @personal_schedule_menu_id;
 
 INSERT INTO `system_menu` (`id`, `name`, `permission`, `type`, `sort`, `parent_id`, `path`, `icon`, `component`, `component_name`, `status`, `visible`, `keep_alive`, `always_show`, `creator`, `create_time`, `updater`, `update_time`, `deleted`)
-SELECT @personal_schedule_menu_id, '个人日程', '', 2, 8, @system_parent_id, 'personal-schedule', 'mdi:calendar-account', 'system/personal-schedule/index', 'SystemPersonalSchedule', 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'
+SELECT @personal_schedule_menu_id, '个人日程', '', 2, 1, @schedule_root_id, 'calendar', 'mdi:calendar-account', 'system/personal-schedule/index', 'ScheduleCenterCalendar', 0, b'1', b'1', b'1', '1', NOW(), '1', NOW(), b'0'
 WHERE NOT EXISTS (SELECT 1 FROM `system_menu` WHERE `id` = @personal_schedule_menu_id);
+
+INSERT INTO `system_role_menu` (`role_id`, `menu_id`, `creator`, `create_time`, `updater`, `update_time`, `deleted`, `tenant_id`)
+SELECT 1, @schedule_root_id, '1', NOW(), '1', NOW(), b'0', 1
+WHERE NOT EXISTS (SELECT 1 FROM `system_role_menu` WHERE `role_id` = 1 AND `menu_id` = @schedule_root_id AND `deleted` = b'0');
+
+INSERT INTO `system_role_menu` (`role_id`, `menu_id`, `creator`, `create_time`, `updater`, `update_time`, `deleted`, `tenant_id`)
+SELECT 2, @schedule_root_id, '1', NOW(), '1', NOW(), b'0', 1
+WHERE NOT EXISTS (SELECT 1 FROM `system_role_menu` WHERE `role_id` = 2 AND `menu_id` = @schedule_root_id AND `deleted` = b'0');
 
 INSERT INTO `system_role_menu` (`role_id`, `menu_id`, `creator`, `create_time`, `updater`, `update_time`, `deleted`, `tenant_id`)
 SELECT 1, @personal_schedule_menu_id, '1', NOW(), '1', NOW(), b'0', 1

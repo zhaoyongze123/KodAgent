@@ -7,6 +7,7 @@ import cn.iocoder.yudao.module.system.controller.admin.notice.vo.NoticeSaveReqVO
 import cn.iocoder.yudao.module.system.dal.dataobject.notice.NoticeDO;
 
 import java.util.List;
+import java.util.Set;
 
 /**
  * 通知公告 Service 接口
@@ -74,5 +75,13 @@ public interface NoticeService {
      * @param userNickname 用户昵称
      */
     void markNoticeRead(Long id, Long userId, String userNickname);
+
+    /**
+     * 解析通知公告分发到的用户编号列表
+     *
+     * @param id 公告编号
+     * @return 用户编号集合
+     */
+    Set<Long> getNoticeTargetUserIds(Long id);
 
 }

@@ -22,11 +22,16 @@ type StandaloneRootMenuPath =
   | '/schedule';
 
 const MEETING_CENTER_MENU_PATHS = new Set([
+  '/meeting-room/manage',
   '/meeting-room/booking',
   '/meeting-room/schedule',
 ]);
 
 const MEETING_CENTER_MENU_ITEMS: MenuRecordRaw[] = [
+  {
+    name: '会议室管理',
+    path: '/meeting-room/manage',
+  },
   {
     name: '会议室预定',
     path: '/meeting-room/booking',
@@ -49,10 +54,15 @@ const SCHEDULE_CENTER_MENU_ITEMS: MenuRecordRaw[] = [
 ];
 
 const PARTY_FILE_CENTER_MENU_PATHS = new Set([
+  '/party-file/manage',
   '/party-file/my',
 ]);
 
 const PARTY_FILE_CENTER_MENU_ITEMS: MenuRecordRaw[] = [
+  {
+    name: '党务文件管理',
+    path: '/party-file/manage',
+  },
   {
     name: '我的党务文件',
     path: '/party-file/my',

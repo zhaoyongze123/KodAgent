@@ -48,13 +48,6 @@ watch(
 
 <template>
   <div v-loading="loading" class="oa-bpmn-viewer-shell">
-    <div class="oa-bpmn-viewer-head">
-      <div>
-        <div class="oa-bpmn-viewer-eyebrow">BPMN Diagram</div>
-        <div class="oa-bpmn-viewer-title">标准流程图</div>
-      </div>
-      <div class="oa-bpmn-viewer-caption">查看完整节点、连线与高亮状态</div>
-    </div>
     <div class="oa-bpmn-viewer-body">
       <MyProcessViewer
         key="processViewer"

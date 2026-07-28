@@ -3,6 +3,12 @@ import type { PageParam, PageResult } from '@vben/request';
 import { requestClient } from '#/api/request';
 
 export namespace SystemNoticeApi {
+  export interface NoticeTarget {
+    targetType: number;
+    targetId?: number;
+    targetName?: string;
+  }
+
   export interface NoticeAttachment {
     id: number;
     name: string;
@@ -14,7 +20,16 @@ export namespace SystemNoticeApi {
   export interface NoticeRead {
     userId: number;
     userNickname: string;
+    deptId?: number;
+    deptName?: string;
     readTime?: Date | string;
+  }
+
+  export interface NoticeUnread {
+    userId: number;
+    userNickname: string;
+    deptId?: number;
+    deptName?: string;
   }
 
   /** 公告信息 */
@@ -30,8 +45,11 @@ export namespace SystemNoticeApi {
     creator?: string;
     createTime?: Date;
     attachments?: NoticeAttachment[];
+    targets?: NoticeTarget[];
     readCount?: number;
+    unreadCount?: number;
     readList?: NoticeRead[];
+    unreadList?: NoticeUnread[];
   }
 }
 

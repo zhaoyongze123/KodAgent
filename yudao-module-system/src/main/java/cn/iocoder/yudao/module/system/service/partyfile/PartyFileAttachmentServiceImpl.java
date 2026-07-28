@@ -20,18 +20,26 @@ import cn.iocoder.yudao.module.system.controller.admin.partyfile.vo.file.PartyFi
 import cn.iocoder.yudao.module.system.controller.admin.partyfile.vo.file.PartyFileKodFileRespVO;
 import cn.iocoder.yudao.module.system.controller.admin.partyfile.vo.file.PartyFileKodSelectFileReqVO;
 import cn.iocoder.yudao.module.system.controller.admin.partyfile.vo.file.PartyFileKodSelectReqVO;
+import cn.iocoder.yudao.module.system.controller.admin.partyfile.vo.file.PartyFileKodUserFilesReqVO;
+import cn.iocoder.yudao.module.system.controller.admin.partyfile.vo.file.PartyFileKodUserSelectReqVO;
+import cn.iocoder.yudao.module.system.controller.admin.partyfile.vo.kodsource.PartyFileKodFolderRespVO;
 import cn.iocoder.yudao.module.system.dal.dataobject.partyfile.PartyFileKodAttachmentDO;
 import cn.iocoder.yudao.module.system.dal.dataobject.partyfile.PartyFileKodSourceDO;
 import cn.iocoder.yudao.module.system.dal.mysql.partyfile.PartyFileKodAttachmentMapper;
 import cn.iocoder.yudao.module.system.enums.partyfile.PartyFileStorageTypeEnum;
+import cn.iocoder.yudao.module.system.service.auth.KodSsoService;
 import com.fasterxml.jackson.databind.JsonNode;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.multipart.MultipartFile;
 
 import javax.annotation.Resource;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 import static cn.iocoder.yudao.framework.common.exception.util.ServiceExceptionUtil.exception;
@@ -41,7 +49,11 @@ import static cn.iocoder.yudao.module.system.enums.ErrorCodeConstants.PARTY_FILE
 
 @Service
 @Validated
+@Slf4j
 public class PartyFileAttachmentServiceImpl implements PartyFileAttachmentService {
+
+    private static final int KOD_FOLDER_CONNECT_TIMEOUT_MILLIS = 3_000;
+    private static final int KOD_FOLDER_READ_TIMEOUT_MILLIS = 10_000;
 
     @Resource
     private FileService fileService;
@@ -53,6 +65,8 @@ public class PartyFileAttachmentServiceImpl implements PartyFileAttachmentServic
     private PartyFileKodSourceServiceImpl partyFileKodSourceService;
     @Resource
     private PartyFileKodAttachmentMapper partyFileKodAttachmentMapper;
+    @Resource
+    private KodSsoService kodSsoService;
 
     @Override
     public PartyFileAttachmentUploadRespVO uploadAttachment(MultipartFile file, Integer storageType, Long kodSourceId,
@@ -107,6 +121,52 @@ public class PartyFileAttachmentServiceImpl implements PartyFileAttachmentServic
     }
 
     @Override
+    public List<PartyFileKodFolderRespVO> getCurrentUserKodFolderTree(Long userId) {
+        String rootPath = "/";
+        List<PartyFileKodFolderRespVO> children = getCurrentUserKodFolderChildren(userId, rootPath);
+        return Collections.singletonList(buildUserFolderNode("全部文件", rootPath,
+                children, children.isEmpty()));
+    }
+
+    @Override
+    public List<PartyFileKodFolderRespVO> getCurrentUserKodFolderChildren(Long userId, String kodFolderPath) {
+        String path = normalizeUserFolderPath(kodFolderPath);
+        JsonNode current = requestUserKodFolderList(
+                kodSsoService.getCurrentUserKodAccessToken(userId), path);
+        return parseUserFolderChildren(current.path("folderList"));
+    }
+
+    @Override
+    public List<PartyFileKodFileRespVO> getCurrentUserKodFiles(Long userId, PartyFileKodUserFilesReqVO reqVO) {
+        String path = normalizeUserFolderPath(reqVO.getKodFolderPath());
+        JsonNode current = requestUserKodFolderList(kodSsoService.getCurrentUserKodAccessToken(userId), path);
+        return parseKodFiles(current.path("fileList"));
+    }
+
+    @Override
+    public List<PartyFileAttachmentUploadRespVO> selectCurrentUserKodFiles(Long userId,
+                                                                             PartyFileKodUserSelectReqVO reqVO) {
+        String accessToken = kodSsoService.getCurrentUserKodAccessToken(userId);
+        String parentPath = normalizeUserFolderPath(reqVO.getKodFolderPath());
+        Map<String, PartyFileKodFileRespVO> visibleFiles = new HashMap<>();
+        for (PartyFileKodFileRespVO file : parseKodFiles(
+                requestUserKodFolderList(accessToken, parentPath).path("fileList"))) {
+            visibleFiles.put(file.getPath(), file);
+        }
+        List<PartyFileAttachmentUploadRespVO> result = new ArrayList<>();
+        for (PartyFileKodSelectFileReqVO requested : reqVO.getFiles()) {
+            PartyFileKodFileRespVO visible = visibleFiles.get(StrUtil.trim(requested.getPath()));
+            if (visible == null) {
+                throw exception(PARTY_FILE_KOD_REQUEST_FAILED,
+                        "当前用户无权选择可道云文件：" + requested.getName());
+            }
+            result.add(createKodAttachment(0L, parentPath, visible.getPath(), visible.getName(),
+                    visible.getSize(), visible.getType()));
+        }
+        return result;
+    }
+
+    @Override
     public FileDO getFile(Long fileId) {
         return fileMapper.selectById(fileId);
     }
@@ -120,6 +180,12 @@ public class PartyFileAttachmentServiceImpl implements PartyFileAttachmentServic
         PartyFileKodAttachmentDO kodAttachment = partyFileKodAttachmentMapper.selectByFileId(fileId);
         if (kodAttachment == null) {
             return fileService.getFileContent(file.getConfigId(), file.getPath());
+        }
+        if (Objects.equals(kodAttachment.getKodSourceId(), 0L)) {
+            String accessToken = kodSsoService.getCurrentUserKodAccessToken(
+                    cn.iocoder.yudao.framework.security.core.util.SecurityFrameworkUtils.getLoginUserId());
+            return readKodFile(kodSsoService.getKodBaseUrl(), accessToken, kodAttachment.getKodFilePath(),
+                    "当前用户可道云文件");
         }
         PartyFileKodSourceDO source = partyFileKodSourceService.getEnabledSource(kodAttachment.getKodSourceId());
         return partyFileKodSourceService.executeWithValidAccessToken(source, accessToken -> readKodFile(source,
@@ -189,6 +255,100 @@ public class PartyFileAttachmentServiceImpl implements PartyFileAttachmentServic
                 file.getName(), file.getSize(), fileType);
     }
 
+    private List<PartyFileKodFolderRespVO> parseUserFolderChildren(JsonNode folderList) {
+        if (!folderList.isArray() || folderList.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<PartyFileKodFolderRespVO> result = new ArrayList<>();
+        for (JsonNode folder : folderList) {
+            String childPath = firstNonBlank(folder, null, "path", "sourceID");
+            String childName = firstNonBlank(folder, null, "name", "pathDisplay");
+            if (StrUtil.isBlank(childPath) || StrUtil.isBlank(childName)) {
+                continue;
+            }
+            // 不在这里继续递归。前端展开节点时再请求当前目录的直接子目录。
+            result.add(buildUserFolderNode(childName, childPath, null, false));
+        }
+        return result;
+    }
+
+    private PartyFileKodFolderRespVO buildUserFolderNode(String name, String path,
+                                                           List<PartyFileKodFolderRespVO> children,
+                                                           boolean isLeaf) {
+        PartyFileKodFolderRespVO node = new PartyFileKodFolderRespVO();
+        node.setKey(path);
+        node.setTitle(name);
+        node.setValue(path);
+        node.setPath(path);
+        node.setIsLeaf(isLeaf);
+        node.setChildren(children);
+        return node;
+    }
+
+    private List<PartyFileKodFileRespVO> parseKodFiles(JsonNode fileList) {
+        if (!fileList.isArray() || fileList.isEmpty()) {
+            return new ArrayList<>();
+        }
+        List<PartyFileKodFileRespVO> result = new ArrayList<>();
+        for (JsonNode fileNode : fileList) {
+            PartyFileKodFileRespVO file = new PartyFileKodFileRespVO();
+            file.setName(firstNonBlank(fileNode, null, "name"));
+            file.setPath(firstNonBlank(fileNode, null, "path"));
+            file.setPathDisplay(firstNonBlank(fileNode, null, "pathDisplay"));
+            file.setSize(fileNode.has("size") ? fileNode.path("size").asLong(0L) : 0L);
+            file.setType(FileTypeUtils.getMineType(file.getName()));
+            if (StrUtil.isBlank(file.getName()) || StrUtil.isBlank(file.getPath())) {
+                continue;
+            }
+            result.add(file);
+        }
+        return result;
+    }
+
+    private JsonNode requestUserKodFolderList(String accessToken, String path) {
+        String url = kodSsoService.getKodBaseUrl()
+                + "?explorer/list/path&accessToken=" + HttpUtils.encodeUtf8(accessToken)
+                + "&path=" + HttpUtils.encodeUtf8(normalizeUserFolderPath(path));
+        try (HttpResponse response = HttpRequest.get(url)
+                .setConnectionTimeout(KOD_FOLDER_CONNECT_TIMEOUT_MILLIS)
+                .setReadTimeout(KOD_FOLDER_READ_TIMEOUT_MILLIS)
+                .execute()) {
+            if (response.getStatus() >= 400) {
+                throw exception(PARTY_FILE_KOD_REQUEST_FAILED,
+                        "当前用户可道云目录请求失败，HTTP " + response.getStatus());
+            }
+            JsonNode root = JsonUtils.parseTree(response.body());
+            JsonNode data = root != null && root.has("data") && root.get("data").isObject()
+                    ? root.get("data") : root;
+            if (root == null || root.isMissingNode() || isKodFailure(root, data)) {
+                throw exception(PARTY_FILE_KOD_REQUEST_FAILED,
+                        "当前用户无权访问该可道云目录或令牌已失效");
+            }
+            return data == null || data.isMissingNode() ? root : data;
+        } catch (ServiceException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw exception(PARTY_FILE_KOD_REQUEST_FAILED,
+                    "当前用户可道云目录请求失败：" + StrUtil.blankToDefault(ex.getMessage(), "未知错误"));
+        }
+    }
+
+    private boolean isKodFailure(JsonNode root, JsonNode data) {
+        if (root.has("code")) {
+            JsonNode code = root.get("code");
+            if (code.isBoolean()) {
+                return !code.booleanValue();
+            }
+            return "false".equalsIgnoreCase(code.asText()) || "10001".equals(code.asText());
+        }
+        return data != null && data.has("code") && !"true".equalsIgnoreCase(data.get("code").asText());
+    }
+
+    private String normalizeUserFolderPath(String path) {
+        String normalized = StrUtil.trim(path);
+        return StrUtil.isBlank(normalized) ? "/" : normalized;
+    }
+
     private PartyFileAttachmentUploadRespVO createKodAttachment(Long kodSourceId, String parentPath, String filePath,
                                                                 String fileName, Long fileSize, String fileType) {
         FileClient client = fileConfigService.getMasterFileClient();
@@ -224,14 +384,18 @@ public class PartyFileAttachmentServiceImpl implements PartyFileAttachmentServic
     }
 
     private byte[] readKodFile(PartyFileKodSourceDO source, String accessToken, String filePath) {
-        String url = source.getBaseUrl()
+        return readKodFile(source.getBaseUrl(), accessToken, filePath,
+                partyFileKodSourceService.buildSourceLabel(source));
+    }
+
+    private byte[] readKodFile(String baseUrl, String accessToken, String filePath, String sourceLabel) {
+        String url = baseUrl
                 + "?explorer/index/fileOut&accessToken=" + HttpUtils.encodeUtf8(accessToken)
                 + "&path=" + HttpUtils.encodeUtf8(filePath);
         try (HttpResponse response = HttpRequest.get(url).execute()) {
             if (response.getStatus() >= 400) {
                 throw exception(PARTY_FILE_KOD_REQUEST_FAILED,
-                        partyFileKodSourceService.buildSourceErrorMessage(source,
-                                "读取文件失败，HTTP " + response.getStatus()));
+                        "可道云文件【" + sourceLabel + "】读取失败，HTTP " + response.getStatus());
             }
             String contentType = StrUtil.blankToDefault(response.header("Content-Type"), "");
             if (StrUtil.containsIgnoreCase(contentType, "application/json")) {
@@ -239,18 +403,19 @@ public class PartyFileAttachmentServiceImpl implements PartyFileAttachmentServic
                 String message = extractKodMessage(root);
                 if (partyFileKodSourceService.isKodAuthFailure(message)) {
                     throw exception(PARTY_FILE_KOD_REQUEST_FAILED,
-                            partyFileKodSourceService.buildSourceErrorMessage(source, message));
+                            "可道云文件【" + sourceLabel + "】访问令牌已失效，请重新登录可道云");
                 }
                 throw exception(PARTY_FILE_KOD_REQUEST_FAILED,
-                        partyFileKodSourceService.buildSourceErrorMessage(source,
-                                StrUtil.blankToDefault(message, "读取文件失败")));
+                        "可道云文件【" + sourceLabel + "】读取失败："
+                                + StrUtil.blankToDefault(message, "读取文件失败"));
             }
             return response.bodyBytes();
         } catch (ServiceException ex) {
             throw ex;
         } catch (Exception ex) {
             throw exception(PARTY_FILE_KOD_REQUEST_FAILED,
-                    partyFileKodSourceService.buildSourceErrorMessage(source, ex.getMessage()));
+                    "可道云文件【" + sourceLabel + "】读取失败："
+                            + StrUtil.blankToDefault(ex.getMessage(), "未知错误"));
         }
     }
 

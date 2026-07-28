@@ -13,6 +13,17 @@ const routes: RouteRecordRaw[] = [
     },
     children: [
       {
+        path: 'manage',
+        name: 'PartyFileCenterManageStatic',
+        component: () => import('#/views/system/party-file/index.vue'),
+        meta: {
+          title: '党务文件管理',
+          activePath: '/party-file/manage',
+          hideInMenu: true,
+          keepAlive: true,
+        },
+      },
+      {
         path: 'my',
         name: 'PartyFileCenterMyStatic',
         component: () => import('#/views/system/party-file/my-index.vue'),

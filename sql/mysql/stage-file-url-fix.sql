@@ -2,7 +2,7 @@
 -- 适用场景：浏览器访问头像或本地文件时跳到 127.0.0.1:48080 导致拒绝连接
 
 SET @old_domain = 'http://127.0.0.1:48080';
-SET @new_domain = 'http://192.168.1.107:48080';
+SET @new_domain = 'http://124.221.4.228:48080';
 
 -- 1. 修复会通过后端转发返回文件 URL 的文件配置
 UPDATE `infra_file_config`

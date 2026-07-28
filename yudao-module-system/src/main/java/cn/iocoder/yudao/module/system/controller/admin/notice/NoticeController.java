@@ -29,6 +29,7 @@ import javax.validation.Valid;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static cn.iocoder.yudao.framework.common.pojo.CommonResult.success;
 
@@ -121,16 +122,36 @@ public class NoticeController {
         Map<String, Object> templateParams = new HashMap<>();
         templateParams.put("noticeId", notice.getId());
         templateParams.put("title", notice.getTitle());
-        templateParams.put("content", notice.getContent());
-        List<AdminUserDO> users = adminUserService.getUserListByStatus(CommonStatusEnum.ENABLE.getStatus());
+        templateParams.put("content", buildNoticeSummary(notice.getContent()));
+        Set<Long> targetUserIds = noticeService.getNoticeTargetUserIds(id);
+        List<AdminUserDO> users = targetUserIds.isEmpty()
+                ? java.util.Collections.emptyList()
+                : adminUserService.getUserList(targetUserIds).stream()
+                .filter(user -> CommonStatusEnum.ENABLE.getStatus().equals(user.getStatus()))
+                .collect(java.util.stream.Collectors.toList());
         users.forEach(user -> notifySendService.sendSingleNotifyToAdmin(
                 user.getId(),
                 SystemNoticeNotifyTemplateInitRunner.SYSTEM_NOTICE_NOTIFY_TEMPLATE_CODE,
                 templateParams
         ));
         // 通过 websocket 推送给在线的用户
-        webSocketSenderApi.sendObject(UserTypeEnum.ADMIN.getValue(), "notice-push", notice);
+        users.forEach(user -> webSocketSenderApi.sendObject(
+                UserTypeEnum.ADMIN.getValue(), user.getId(), "notice-push", notice));
         return success(true);
+    }
+
+    private String buildNoticeSummary(String content) {
+        String plainText = content == null ? "" : content
+                .replaceAll("(?is)<style.*?>.*?</style>", " ")
+                .replaceAll("(?is)<script.*?>.*?</script>", " ")
+                .replaceAll("(?is)<[^>]+>", " ")
+                .replace("&nbsp;", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+        if (plainText.isEmpty()) {
+            return "请点击查看公告详情";
+        }
+        return plainText.length() > 120 ? plainText.substring(0, 120) + "..." : plainText;
     }
 
 }

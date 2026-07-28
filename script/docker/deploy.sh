@@ -17,6 +17,8 @@ LOCAL_DB_USER="${LOCAL_DB_USER:-root}"
 LOCAL_DB_PASSWORD="${LOCAL_DB_PASSWORD:-123456}"
 REMOTE_DB_CONTAINER="${REMOTE_DB_CONTAINER:-ruoyi-mysql}"
 DB_DUMP_GZ="${DB_DUMP_GZ:-ruoyi-vue-pro.sql.gz}"
+DB_MIGRATION_FILE="${DB_MIGRATION_FILE:-sql/mysql/system-kod-sso-token-upgrade.sql}"
+DB_MIGRATION_NAME="${DB_MIGRATION_NAME:-system-kod-sso-token-upgrade.sql}"
 IMPORT_DATABASE="${IMPORT_DATABASE:-false}"
 REMOTE_ENV_BASENAME="${REMOTE_ENV_BASENAME:-ruoyi-deploy.env}"
 CLEAN_LOCAL_ARTIFACTS="${CLEAN_LOCAL_ARTIFACTS:-true}"
@@ -35,8 +37,36 @@ cleanup_local_artifacts() {
   fi
 }
 
+remove_old_local_repo_tags() {
+  local current_image="$1"
+  local current_repo="${current_image%%:*}"
+  local current_tag="${current_image#*:}"
+  local image_refs
+
+  image_refs="$(
+    docker images --format '{{.Repository}}:{{.Tag}}' "${current_repo}" 2>/dev/null \
+      | awk -F: -v repo="${current_repo}" -v keep_tag="${current_tag}" '
+          $1 == repo && $2 != "<none>" && $2 != keep_tag {
+            print $0
+          }
+        '
+  )"
+
+  if [ -z "${image_refs}" ]; then
+    return
+  fi
+
+  while IFS= read -r image_ref; do
+    [ -n "${image_ref}" ] || continue
+    echo "[步骤] 删除本地旧镜像标签 ${image_ref}"
+    docker rmi "${image_ref}" >/dev/null 2>&1 || true
+  done <<<"${image_refs}"
+}
+
 cleanup_local_docker_artifacts() {
   if [ "${CLEAN_LOCAL_DOCKER_CACHE}" = "true" ]; then
+    remove_old_local_repo_tags "${SERVER_IMAGE}"
+    remove_old_local_repo_tags "${ADMIN_IMAGE}"
     docker image prune -f >/dev/null 2>&1 || true
     docker builder prune -f >/dev/null 2>&1 || true
   fi
@@ -77,6 +107,10 @@ validate_env() {
   validate_value FRONTEND_ENV_FILE
   if [ ! -f "${ROOT_DIR}/${FRONTEND_ENV_FILE}" ]; then
     echo "[错误] 前端环境文件不存在: ${ROOT_DIR}/${FRONTEND_ENV_FILE}" >&2
+    exit 1
+  fi
+  if [ ! -f "${ROOT_DIR}/${DB_MIGRATION_FILE}" ]; then
+    echo "[错误] 数据库迁移文件不存在: ${ROOT_DIR}/${DB_MIGRATION_FILE}" >&2
     exit 1
   fi
   if [ "${DEPLOY_ENV}" != "dev" ]; then
@@ -144,8 +178,8 @@ upload_artifacts() {
   copy_to_remote "${ROOT_DIR}/${SERVER_TAR}" "/tmp/${SERVER_TAR}"
   copy_to_remote "${ROOT_DIR}/${ADMIN_TAR}" "/tmp/${ADMIN_TAR}"
   copy_to_remote "${ROOT_DIR}/script/docker/remote-reload-app.sh" "/tmp/remote-reload-app.sh"
+  copy_to_remote "${ROOT_DIR}/${DB_MIGRATION_FILE}" "/tmp/${DB_MIGRATION_NAME}"
   copy_to_remote "${ROOT_DIR}/script/docker/docker-compose.yml" "${REMOTE_DEPLOY_DIR}/docker-compose.yml"
-  copy_to_remote "${ENV_FILE}" "/tmp/${REMOTE_ENV_BASENAME}"
   if [ "${IMPORT_DATABASE}" = "true" ]; then
     copy_to_remote "${ROOT_DIR}/${DB_DUMP_GZ}" "/tmp/${DB_DUMP_GZ}"
   fi
@@ -153,18 +187,24 @@ upload_artifacts() {
 
 deploy_remote_app_only() {
   echo "[步骤] 远端重载应用（不覆盖数据库）"
-  remote_sh "chmod +x /tmp/remote-reload-app.sh && REMOTE_DEPLOY_DIR='${REMOTE_DEPLOY_DIR}' REMOTE_ENV_FILE='/tmp/${REMOTE_ENV_BASENAME}' SERVER_TAR='${SERVER_TAR}' ADMIN_TAR='${ADMIN_TAR}' /tmp/remote-reload-app.sh && rm -f /tmp/remote-reload-app.sh"
+  remote_sh "chmod +x /tmp/remote-reload-app.sh && REMOTE_DEPLOY_DIR='${REMOTE_DEPLOY_DIR}' SERVER_TAR='${SERVER_TAR}' ADMIN_TAR='${ADMIN_TAR}' DB_MIGRATION_FILE='/tmp/${DB_MIGRATION_NAME}' /tmp/remote-reload-app.sh && rm -f /tmp/remote-reload-app.sh"
 }
 
 deploy_remote_with_db() {
   echo "[步骤] 远端停旧服务、导入镜像并覆盖数据库"
   remote_sh \
-    "REMOTE_DEPLOY_DIR='${REMOTE_DEPLOY_DIR}' SERVER_TAR='${SERVER_TAR}' ADMIN_TAR='${ADMIN_TAR}' DB_DUMP_GZ='${DB_DUMP_GZ}' REMOTE_DB_CONTAINER='${REMOTE_DB_CONTAINER}' DB_NAME='${DB_NAME}' REMOTE_ENV_BASENAME='${REMOTE_ENV_BASENAME}' bash -s" <<'EOF'
+    "REMOTE_DEPLOY_DIR='${REMOTE_DEPLOY_DIR}' SERVER_TAR='${SERVER_TAR}' ADMIN_TAR='${ADMIN_TAR}' DB_DUMP_GZ='${DB_DUMP_GZ}' DB_MIGRATION_NAME='${DB_MIGRATION_NAME}' REMOTE_DB_CONTAINER='${REMOTE_DB_CONTAINER}' DB_NAME='${DB_NAME}' REMOTE_ENV_BASENAME='${REMOTE_ENV_BASENAME}' bash -s" <<'EOF'
 set -euo pipefail
 
-set -a
-source "/tmp/${REMOTE_ENV_BASENAME}"
-set +a
+if [ -f "${REMOTE_DEPLOY_DIR}/.env" ]; then
+  set -a
+  source "${REMOTE_DEPLOY_DIR}/.env"
+  set +a
+elif [ -f "/tmp/${REMOTE_ENV_BASENAME}" ]; then
+  set -a
+  source "/tmp/${REMOTE_ENV_BASENAME}"
+  set +a
+fi
 
 cd "${REMOTE_DEPLOY_DIR}"
 docker compose up -d mysql redis
@@ -178,14 +218,15 @@ for i in $(seq 1 60); do
     exit 1
   fi
 done
-printf 'DROP DATABASE IF EXISTS `%s`; CREATE DATABASE `%s` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;' "${DB_NAME}" "${DB_NAME}" | docker exec -i "${REMOTE_DB_CONTAINER}" mysql -uroot -p123456
-gzip -dc "/tmp/${DB_DUMP_GZ}" | docker exec -i "${REMOTE_DB_CONTAINER}" mysql -uroot -p123456 "${DB_NAME}"
+printf 'DROP DATABASE IF EXISTS `%s`; CREATE DATABASE `%s` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;' "${DB_NAME}" "${DB_NAME}" | docker exec -i "${REMOTE_DB_CONTAINER}" mysql -uroot -p"${MYSQL_ROOT_PASSWORD}"
+gzip -dc "/tmp/${DB_DUMP_GZ}" | docker exec -i "${REMOTE_DB_CONTAINER}" mysql -uroot -p"${MYSQL_ROOT_PASSWORD}" "${DB_NAME}"
+docker exec -i "${REMOTE_DB_CONTAINER}" mysql -uroot -p"${MYSQL_ROOT_PASSWORD}" "${DB_NAME}" < "/tmp/${DB_MIGRATION_NAME}"
 docker compose stop server admin || true
 docker compose rm -sf server admin || true
 docker load -i "/tmp/${SERVER_TAR}"
 docker load -i "/tmp/${ADMIN_TAR}"
 docker compose up -d --no-build server admin
-rm -f "/tmp/${SERVER_TAR}" "/tmp/${ADMIN_TAR}" "/tmp/${DB_DUMP_GZ}" "/tmp/${REMOTE_ENV_BASENAME}" /tmp/remote-reload-app.sh
+rm -f "/tmp/${SERVER_TAR}" "/tmp/${ADMIN_TAR}" "/tmp/${DB_DUMP_GZ}" "/tmp/${DB_MIGRATION_NAME}" "/tmp/${REMOTE_ENV_BASENAME}" /tmp/remote-reload-app.sh
 docker image prune -f >/dev/null 2>&1 || true
 EOF
   remote_sh "curl -fsS http://127.0.0.1:48080/actuator/health"
@@ -199,7 +240,7 @@ print_summary() {
     echo "[提示] 本地导出镜像和临时数据库包已自动清理"
   fi
   if [ "${CLEAN_LOCAL_DOCKER_CACHE}" = "true" ]; then
-    echo "[提示] 本地未使用的 Docker 镜像和构建缓存已自动清理"
+    echo "[提示] 本地旧版 ruoyi 镜像标签、未使用的 Docker 镜像和构建缓存已自动清理"
   fi
 }
 

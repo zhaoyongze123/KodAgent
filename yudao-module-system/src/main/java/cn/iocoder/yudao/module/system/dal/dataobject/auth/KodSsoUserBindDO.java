@@ -1,7 +1,9 @@
 package cn.iocoder.yudao.module.system.dal.dataobject.auth;
 
 import cn.iocoder.yudao.framework.tenant.core.db.TenantBaseDO;
+import cn.iocoder.yudao.framework.mybatis.core.type.EncryptTypeHandler;
 import com.baomidou.mybatisplus.annotation.KeySequence;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
@@ -10,7 +12,7 @@ import lombok.EqualsAndHashCode;
 /**
  * 可道云用户绑定
  */
-@TableName("system_kod_sso_user_bind")
+@TableName(value = "system_kod_sso_user_bind", autoResultMap = true)
 @KeySequence("system_kod_sso_user_bind_seq")
 @Data
 @EqualsAndHashCode(callSuper = true)
@@ -43,5 +45,11 @@ public class KodSsoUserBindDO extends TenantBaseDO {
      * 可道云原始资料
      */
     private String rawProfileJson;
+
+    /**
+     * 最近一次 SSO 登录的可道云用户令牌，仅用于后端按用户权限读取可道云文件。
+     */
+    @TableField(typeHandler = EncryptTypeHandler.class)
+    private String kodAccessToken;
 
 }

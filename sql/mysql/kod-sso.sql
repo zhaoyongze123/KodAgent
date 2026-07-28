@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS `system_kod_sso_user_bind` (
   `kod_username` varchar(128) NOT NULL DEFAULT '' COMMENT '可道云用户名',
   `kod_nickname` varchar(128) NOT NULL DEFAULT '' COMMENT '可道云昵称',
   `raw_profile_json` text COMMENT '可道云原始用户信息',
+  `kod_access_token` varchar(2048) DEFAULT NULL COMMENT '可道云用户令牌(加密)',
   `creator` varchar(64) DEFAULT '' COMMENT '创建者',
   `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `updater` varchar(64) DEFAULT '' COMMENT '更新者',

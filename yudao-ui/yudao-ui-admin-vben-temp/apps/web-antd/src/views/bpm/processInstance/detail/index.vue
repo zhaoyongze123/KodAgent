@@ -79,6 +79,13 @@ const writableFields: Array<string> = []; // 表单可以编辑的字段
 
 const BusinessFormComponent = shallowRef<any>(null); // 异步组件(业务表单）
 
+const businessKeyIsValid = () => {
+  const businessKey = processInstance.value?.businessKey;
+  return typeof businessKey === 'string'
+    ? /^\d+$/.test(businessKey)
+    : typeof businessKey === 'number' && Number.isSafeInteger(businessKey);
+};
+
 /** 获取详情 */
 async function getDetail() {
   // 获得审批详情
@@ -305,7 +312,13 @@ onMounted(async () => {
                       processDefinition?.formType === BpmModelFormType.CUSTOM
                     "
                   >
-                    <BusinessFormComponent :id="processInstance?.businessKey" />
+                    <BusinessFormComponent
+                      v-if="BusinessFormComponent && businessKeyIsValid()"
+                      :id="String(processInstance?.businessKey)"
+                    />
+                    <div v-else class="py-8 text-center text-gray-500">
+                      暂无可加载的业务表单信息
+                    </div>
                   </div>
                 </Col>
                 <Col :xs="24" :sm="24" :md="6" :lg="6" :xl="8">

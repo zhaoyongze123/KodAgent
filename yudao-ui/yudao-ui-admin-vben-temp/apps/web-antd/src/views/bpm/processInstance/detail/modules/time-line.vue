@@ -203,6 +203,18 @@ function getApprovalNodeTime(node: BpmProcessInstanceApi.ApprovalNodeInfo) {
   return '';
 }
 
+function getTimelineUser(task: any) {
+  return task?.assigneeUser || task?.ownerUser;
+}
+
+function getTimelineUserRole(activity: BpmProcessInstanceApi.ApprovalNodeInfo) {
+  return activity.name || '审批节点';
+}
+
+function getTimelineUserDept(user: any) {
+  return user?.deptName || user?.dept?.name || '';
+}
+
 const [UserSelectModalComp, userSelectModalApi] = useVbenModal({
   connectedComponent: UserSelectModal,
   destroyOnClose: true,
@@ -405,7 +417,12 @@ defineExpose({ setCustomApproveUsers, batchSetCustomApproveUsers });
               <Avatar class="!m-1" :size="28" v-else>
                 <span>{{ user.nickname.substring(0, 1) }}</span>
               </Avatar>
-              <span class="oa-process-timeline-user-name">{{ user.nickname }}</span>
+              <span class="oa-process-timeline-user-copy">
+                <span class="oa-process-timeline-user-name">{{ user.nickname }}</span>
+                <span class="oa-process-timeline-user-role">
+                  {{ getTimelineUserRole(activity) }}
+                </span>
+              </span>
             </div>
           </div>
 
@@ -422,37 +439,30 @@ defineExpose({ setCustomApproveUsers, batchSetCustomApproveUsers });
               >
                 <!-- 信息：头像昵称 -->
                 <div class="oa-process-timeline-user-chip">
-                  <template
-                    v-if="
-                      task.assigneeUser?.avatar || task.assigneeUser?.nickname
-                    "
-                  >
+                  <template v-if="getTimelineUser(task)">
                     <Avatar
                       class="!m-1"
                       :size="28"
-                      v-if="task.assigneeUser?.avatar"
-                      :src="task.assigneeUser?.avatar"
+                      v-if="getTimelineUser(task)?.avatar"
+                      :src="getTimelineUser(task)?.avatar"
                     />
                     <Avatar class="!m-1" :size="28" v-else>
-                      {{ task.assigneeUser?.nickname.substring(0, 1) }}
+                      {{ getTimelineUser(task)?.nickname?.substring(0, 1) }}
                     </Avatar>
-                    {{ task.assigneeUser?.nickname }}
-                  </template>
-                  <template
-                    v-else-if="
-                      task.ownerUser?.avatar || task.ownerUser?.nickname
-                    "
-                  >
-                    <Avatar
-                      class="!m-1"
-                      :size="28"
-                      v-if="task.ownerUser?.avatar"
-                      :src="task.ownerUser?.avatar"
-                    />
-                    <Avatar class="!m-1" :size="28" v-else>
-                      {{ task.ownerUser?.nickname.substring(0, 1) }}
-                    </Avatar>
-                    {{ task.ownerUser?.nickname }}
+                    <span class="oa-process-timeline-user-copy">
+                      <span class="oa-process-timeline-user-name">
+                        {{ getTimelineUser(task)?.nickname || '-' }}
+                      </span>
+                      <span class="oa-process-timeline-user-role">
+                        {{ getTimelineUserRole(activity) }}
+                      </span>
+                      <span
+                        v-if="getTimelineUserDept(getTimelineUser(task))"
+                        class="oa-process-timeline-user-dept"
+                      >
+                        {{ getTimelineUserDept(getTimelineUser(task)) }}
+                      </span>
+                    </span>
                   </template>
 
                   <!-- 信息：任务状态图标 -->
@@ -516,8 +526,17 @@ defineExpose({ setCustomApproveUsers, batchSetCustomApproveUsers });
               <Avatar class="!m-1" :size="28" v-else>
                 {{ user.nickname.substring(0, 1) }}
               </Avatar>
-              <span class="oa-process-timeline-user-name">
-                {{ user.nickname }}
+              <span class="oa-process-timeline-user-copy">
+                <span class="oa-process-timeline-user-name">{{ user.nickname }}</span>
+                <span class="oa-process-timeline-user-role">
+                  {{ getTimelineUserRole(activity) }}
+                </span>
+                <span
+                  v-if="getTimelineUserDept(user)"
+                  class="oa-process-timeline-user-dept"
+                >
+                  {{ getTimelineUserDept(user) }}
+                </span>
               </span>
 
               <!-- 候选任务状态图标 -->
@@ -684,6 +703,24 @@ defineExpose({ setCustomApproveUsers, batchSetCustomApproveUsers });
   font-size: 13px;
   color: var(--oa-ink);
   font-weight: 500;
+}
+
+.oa-process-timeline-user-copy {
+  display: inline-flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.oa-process-timeline-user-role,
+.oa-process-timeline-user-dept {
+  color: var(--oa-ink-soft);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.oa-process-timeline-user-role {
+  color: var(--oa-accent);
 }
 
 .oa-process-timeline-task-user {

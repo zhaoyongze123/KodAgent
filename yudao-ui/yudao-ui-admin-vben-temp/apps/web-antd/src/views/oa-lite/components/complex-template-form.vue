@@ -25,7 +25,7 @@ import { getApprovalDetail } from '#/api/bpm/processInstance';
 import { getSimpleDeptList } from '#/api/system/dept';
 import { getSimpleUserList } from '#/api/system/user';
 import { getUserProfile } from '#/api/system/user/profile';
-import { FileUpload } from '#/components/upload';
+import { KodFileUpload } from '#/components/upload';
 import ProcessInstanceTimeline from '#/views/bpm/processInstance/detail/modules/time-line.vue';
 import {
   applyProfileDefaults,
@@ -311,7 +311,7 @@ onMounted(async () => {
               v-else-if="field.type === 'switch'"
               v-model:checked="formState[field.field]"
             />
-            <FileUpload
+            <KodFileUpload
               v-else-if="field.type === 'files'"
               v-model:model-value="formState[field.field]"
               :max-number="10"
@@ -321,11 +321,6 @@ onMounted(async () => {
       </div>
 
       <div class="oa-lite-complex-card">
-        <div class="oa-lite-complex-flow-head">
-          <div class="oa-lite-complex-flow-title">流程预览</div>
-          <div class="oa-lite-complex-flow-tag">用户端发起</div>
-        </div>
-
         <div class="oa-lite-complex-flow-body">
           <ProcessInstanceTimeline
             :activity-nodes="activityNodes"

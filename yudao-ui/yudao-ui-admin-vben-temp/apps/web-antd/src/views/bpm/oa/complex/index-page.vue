@@ -193,12 +193,6 @@ onActivated(() => {
 <template>
   <Page auto-content-height>
     <section class="oa-bpm-complex-index-shell">
-      <header class="oa-bpm-complex-index-head">
-        <div>
-          <div class="oa-bpm-complex-index-eyebrow">Request Directory</div>
-          <h3 class="oa-bpm-complex-index-title">{{ `${config.title}列表` }}</h3>
-        </div>
-      </header>
       <Form layout="vertical">
         <Row :gutter="16">
           <Col

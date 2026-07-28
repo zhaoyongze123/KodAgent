@@ -188,7 +188,7 @@ WHERE `name` = '四楼会议室 100+8人';
 -- ----------------------------
 -- Menu
 -- 说明：
--- 1. 管理员菜单继续挂到“系统管理”下，普通用户单独走顶级“会议室”菜单
+-- 1. 管理员和普通用户共用顶级“会议室”模块，管理员额外看到“会议室管理”
 -- 2. 如果你的系统里系统管理菜单 id 不是 1，请修改 @system_parent_id
 -- 3. 如果你的环境普通员工角色 id 不是 2，请同步修改下面 role_id
 -- ----------------------------
@@ -348,5 +348,46 @@ WHERE NOT EXISTS (SELECT 1 FROM `system_role_menu` WHERE `role_id` = 2 AND `menu
 INSERT INTO `system_role_menu` (`role_id`, `menu_id`, `creator`, `create_time`, `updater`, `update_time`, `deleted`, `tenant_id`)
 SELECT 2, 300424, '1', NOW(), '1', NOW(), b'0', 1
 WHERE NOT EXISTS (SELECT 1 FROM `system_role_menu` WHERE `role_id` = 2 AND `menu_id` = 300424);
+
+-- 统一归属到顶级“会议室”模块，旧管理员目录仅保留兼容编号并停止展示
+UPDATE `system_menu`
+SET `parent_id` = @user_menu_root_id, `path` = 'manage', `sort` = 1,
+    `component_name` = 'MeetingCenterManage', `status` = 0, `visible` = b'1'
+WHERE `id` = @admin_menu_room_id;
+
+UPDATE `system_menu`
+SET `sort` = 2, `component_name` = 'MeetingCenterBooking', `permission` = ''
+WHERE `id` = @user_menu_booking_id;
+
+UPDATE `system_menu`
+SET `sort` = 3, `component_name` = 'MeetingCenterSchedule'
+WHERE `id` = @user_menu_schedule_id;
+
+UPDATE `system_menu` SET `status` = 1, `visible` = b'0'
+WHERE `id` IN (@admin_menu_root_id, @admin_menu_booking_id, @admin_menu_schedule_id);
+
+UPDATE `system_menu` SET `parent_id` = @user_menu_booking_id
+WHERE `id` IN (300421, 300422, 300423);
+UPDATE `system_menu` SET `parent_id` = @user_menu_schedule_id
+WHERE `id` = 300424;
+
+INSERT INTO `system_role_menu` (`role_id`, `menu_id`, `creator`, `create_time`, `updater`, `update_time`, `deleted`, `tenant_id`)
+SELECT 1, menu_id, '1', NOW(), '1', NOW(), b'0', 1
+FROM (
+  SELECT @user_menu_root_id AS menu_id
+  UNION ALL SELECT @user_menu_booking_id
+  UNION ALL SELECT @user_menu_schedule_id
+) menus
+WHERE NOT EXISTS (
+  SELECT 1 FROM `system_role_menu`
+  WHERE `role_id` = 1 AND `menu_id` = menus.menu_id AND `deleted` = b'0'
+);
+
+UPDATE `system_role_menu`
+SET `deleted` = b'1', `update_time` = NOW()
+WHERE `role_id` = 2
+  AND `menu_id` IN (@admin_menu_root_id, @admin_menu_room_id, @admin_menu_booking_id,
+                    @admin_menu_schedule_id, 300411, 300412, 300413, 300421, 300422, 300423)
+  AND `deleted` = b'0';
 
 SET FOREIGN_KEY_CHECKS = 1;

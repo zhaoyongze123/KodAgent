@@ -208,10 +208,6 @@ onMounted(() => {
         v-loading="loading"
       >
         <header class="oa-process-create-head">
-          <div>
-            <div class="oa-process-create-eyebrow">All Processes</div>
-            <h3 class="oa-process-create-title">全部流程</h3>
-          </div>
           <div class="oa-process-create-search">
             <InputSearch
               v-model:value="searchName"

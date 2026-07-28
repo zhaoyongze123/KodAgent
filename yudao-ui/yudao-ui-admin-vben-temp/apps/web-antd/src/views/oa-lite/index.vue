@@ -122,6 +122,7 @@ const activeTab = ref<MainTab>('create');
 const lastCenterTab = ref<ListTab>('pending');
 const selectedCreateCategoryCode = ref<string>();
 const selectedItem = ref<DetailPayload>(null);
+const filtersExpanded = ref(false);
 const categories = ref<BpmCategoryApi.Category[]>([]);
 const oaTemplateDefinitions = ref<BpmProcessDefinitionApi.ProcessDefinition[]>([]);
 const todoItems = ref<BpmTaskApi.Task[]>([]);
@@ -297,7 +298,7 @@ function buildApprovalEntryQuery() {
 }
 
 function shouldForceCreateMode() {
-  return isForceCreateEntry(route.query);
+  return route.path === OA_LITE_CREATE_PATH && isForceCreateEntry(route.query);
 }
 
 function isImageIcon(icon?: string) {
@@ -331,6 +332,13 @@ const createCategoryTabs = computed<BpmCategoryApi.Category[]>(() => {
   const categoryMap = new Map<string, BpmCategoryApi.Category>();
   availableTemplateDefinitions.value.forEach((item, index) => {
     const definition = item.definition;
+    const isStandaloneProjectTemplate =
+      (definition.key && ['oa_project', 'oa_staffing'].includes(definition.key)) ||
+      definition.category === 'project' ||
+      definition.categoryName === '项目管理';
+    if (isStandaloneProjectTemplate) {
+      return;
+    }
     categoryMap.set(definition.category, {
       code: definition.category,
       description: undefined,
@@ -590,7 +598,7 @@ function syncSelectedItem(tab: ListTab) {
   const matchedItem = currentIdentity
     ? list.find((item) => getItemIdentity(item) === currentIdentity)
     : undefined;
-  selectedItem.value = matchedItem || list[0] || null;
+  selectedItem.value = matchedItem || (tab === 'pending' ? null : list[0] || null);
 }
 
 function getSummaryText(summary?: { key: string; value: string }[]) {
@@ -1352,9 +1360,6 @@ onUnmounted(() => {
             <template v-else>
               <section class="oa-lite-center-shell">
                 <aside class="oa-lite-center-nav">
-                  <div class="oa-lite-center-nav-head">
-                    <h3>审批分组</h3>
-                  </div>
                   <button
                     v-for="item in dashboardNavItems"
                     :key="item.key"
@@ -1375,20 +1380,16 @@ onUnmounted(() => {
                 <div class="oa-lite-center-content">
                   <div class="oa-lite-list-panel">
                     <div class="oa-lite-list-headline">
-                      <div>
-                        <div class="oa-lite-section-title">{{ currentListTitle }}</div>
-                      </div>
+                      <span class="oa-lite-list-total">
+                        {{ currentPageState?.total || currentList.length }} 条记录
+                      </span>
                       <div class="oa-lite-list-toolbar">
-                        <span class="oa-lite-list-total">
-                          {{ currentPageState?.total || currentList.length }} 条记录
-                        </span>
-                        <span class="oa-lite-toolbar-divider" />
                         <Button type="link" @click="resetCurrentFilter">重置筛选</Button>
                       </div>
                     </div>
 
                     <div class="oa-lite-filter-shell">
-                      <div class="oa-lite-filters">
+                      <div class="oa-lite-filter-primary-row">
                         <Input
                           v-model:value="currentFilter!.name"
                           :placeholder="getKeywordPlaceholder()"
@@ -1399,7 +1400,25 @@ onUnmounted(() => {
                             <IconifyIcon icon="solar:magnifer-outline" />
                           </template>
                         </Input>
+                        <button
+                          class="oa-lite-filter-expand-button"
+                          :class="{ active: filtersExpanded }"
+                          type="button"
+                          :aria-expanded="filtersExpanded"
+                          aria-label="展开筛选条件"
+                          @click="filtersExpanded = !filtersExpanded"
+                        >
+                          <IconifyIcon icon="solar:filter-outline" />
+                          <span>筛选</span>
+                          <IconifyIcon
+                            icon="solar:alt-arrow-down-outline"
+                            class="oa-lite-filter-expand-arrow"
+                          />
+                        </button>
+                      </div>
 
+                      <div v-if="filtersExpanded" class="oa-lite-filter-expanded">
+                        <div class="oa-lite-filters">
                         <Select
                           v-if="showProcessFilter"
                           v-model:value="currentProcessFilterValue"
@@ -1441,13 +1460,14 @@ onUnmounted(() => {
                           format="YYYY-MM-DD HH:mm:ss"
                           :placeholder="getCreateTimePlaceholder()"
                         />
-                      </div>
+                        </div>
 
-                      <div class="oa-lite-filter-actions">
-                        <Button type="primary" @click="handleFilterSubmit">查询</Button>
-                        <Button class="oa-lite-white-button" @click="resetCurrentFilter">
-                          重置
-                        </Button>
+                        <div class="oa-lite-filter-actions">
+                          <Button type="primary" @click="handleFilterSubmit">查询</Button>
+                          <Button class="oa-lite-white-button" @click="resetCurrentFilter">
+                            重置
+                          </Button>
+                        </div>
                       </div>
                     </div>
 
@@ -1508,11 +1528,6 @@ onUnmounted(() => {
                   </div>
 
                   <div class="oa-lite-detail-panel">
-                    <div class="oa-lite-detail-panel-head">
-                      <div>
-                        <div class="oa-lite-section-title">流程详情</div>
-                      </div>
-                    </div>
                     <div v-if="currentDetailRequest" class="oa-lite-detail-scroll-region">
                       <ProcessDetail
                         :request="currentDetailRequest"
@@ -1522,7 +1537,11 @@ onUnmounted(() => {
                       />
                     </div>
                     <div v-else class="oa-lite-detail-empty">
-                      <Empty :description="`请选择要查看的${currentListTitle}详情`" />
+                      <div class="oa-lite-detail-empty-copy">
+                        <IconifyIcon icon="solar:checklist-minimalistic-outline" />
+                        <strong>请选择一条{{ currentListTitle }}</strong>
+                        <span>点击左侧列表后查看审批表单和完整审批链</span>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1541,6 +1560,12 @@ onUnmounted(() => {
   background: var(--oa-shell-bg);
   color: var(--oa-ink);
   position: relative;
+}
+
+.oa-lite-page:has(.oa-lite-main.is-center-mode) {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .oa-lite-page :deep(.bg-card),
@@ -1780,8 +1805,23 @@ onUnmounted(() => {
 }
 
 .oa-lite-main.is-center-mode {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  padding-bottom: 0;
   padding-right: 0;
   padding-left: 0;
+}
+
+.oa-lite-main.is-center-mode :deep(.ant-spin-nested-loading),
+.oa-lite-main.is-center-mode :deep(.ant-spin-container) {
+  height: 100%;
+  min-height: 0;
+}
+
+.oa-lite-main.is-center-mode :deep(.ant-spin-container) {
+  display: flex;
+  flex-direction: column;
 }
 
 .oa-lite-home-shell {
@@ -1793,6 +1833,8 @@ onUnmounted(() => {
 }
 
 .oa-lite-home-shell.is-center-mode {
+  height: 100%;
+  min-height: 0;
   max-width: none;
   margin: 0;
 }
@@ -2147,48 +2189,33 @@ onUnmounted(() => {
 }
 
 .oa-lite-center-shell {
-  --oa-lite-center-panel-height: calc(100dvh - 150px);
+  --oa-lite-center-panel-height: 100%;
   display: grid;
-  grid-template-columns: 180px minmax(0, 1fr);
-  gap: 20px;
-  align-items: start;
+  grid-template-columns: 176px minmax(0, 1fr);
+  gap: 16px;
+  align-items: stretch;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  padding: 16px 20px 18px;
+  background: var(--oa-shell-bg);
 }
 
 .oa-lite-center-nav {
-  padding: 0 16px 0 20px;
-  border-right: 1px solid var(--oa-shell-border);
+  padding: 4px 0;
+  border-right: 0;
   border-radius: 0;
   background: transparent;
-}
-
-.oa-lite-center-nav-head {
-  padding: 4px 0 18px;
-  border-bottom: 1px solid color-mix(in srgb, var(--oa-shell-border) 72%, transparent);
-}
-
-.oa-lite-center-nav-head h3 {
-  margin: 0;
-  color: var(--oa-ink);
-  font-size: 18px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-}
-
-.oa-lite-center-nav-head p {
-  margin: 10px 0 0;
-  color: var(--oa-ink-soft);
-  font-size: 12px;
-  line-height: 1.7;
 }
 
 .oa-lite-center-nav-item {
   width: 100%;
-  margin: 0;
+  min-height: 44px;
+  margin: 0 0 4px;
   border: none;
-  border-bottom: 1px solid color-mix(in srgb, var(--oa-shell-border) 72%, transparent);
-  border-radius: 0;
+  border-radius: 8px;
   background: transparent;
-  padding: 13px 0;
+  padding: 0 12px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2196,30 +2223,24 @@ onUnmounted(() => {
   color: var(--oa-ink-soft);
   cursor: pointer;
   transition:
-    padding-left 0.18s ease,
-    border-color 0.18s ease,
+    background-color 0.18s ease,
     color 0.18s ease;
   position: relative;
 }
 
 .oa-lite-center-nav-item:hover {
   color: var(--oa-ink);
+  background: color-mix(in srgb, var(--oa-shell-surface) 74%, transparent);
 }
 
 .oa-lite-center-nav-item.active {
   color: var(--oa-accent);
-  border-bottom-color: color-mix(in srgb, var(--oa-accent) 34%, var(--oa-shell-border));
-  padding-left: 12px;
+  background: var(--oa-shell-surface);
+  box-shadow: 0 1px 3px rgb(15 23 42 / 6%);
 }
 
 .oa-lite-center-nav-item.active::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 12px;
-  bottom: 12px;
-  width: 2px;
-  background: var(--oa-accent);
+  display: none;
 }
 
 .oa-lite-center-nav-main {
@@ -2230,7 +2251,7 @@ onUnmounted(() => {
 }
 
 .oa-lite-center-nav-icon {
-  font-size: 16px;
+  font-size: 18px;
   color: inherit;
   display: inline-flex;
   align-items: center;
@@ -2263,18 +2284,24 @@ onUnmounted(() => {
 
 .oa-lite-center-content {
   display: grid;
-  grid-template-columns: 340px minmax(0, 1fr);
-  gap: 20px;
-  min-height: var(--oa-lite-center-panel-height);
+  grid-template-columns: minmax(380px, 420px) minmax(0, 1fr);
+  gap: 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  height: 100%;
+  min-height: 0;
   align-items: stretch;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .oa-lite-list-panel,
 .oa-lite-detail-panel {
-  height: var(--oa-lite-center-panel-height);
-  background: transparent;
-  border: 0;
-  border-radius: 0;
+  height: 100%;
+  background: var(--oa-shell-surface);
+  border: 1px solid var(--oa-shell-border);
+  border-radius: 12px;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -2283,12 +2310,11 @@ onUnmounted(() => {
 }
 
 .oa-lite-list-panel {
-  padding: 0 18px 0 0;
-  border-right: 1px solid var(--oa-shell-border);
+  padding: 0 12px 12px;
 }
 
 .oa-lite-detail-panel {
-  padding: 0 0 0 2px;
+  padding: 0;
 }
 
 .oa-lite-section-header {
@@ -2326,15 +2352,100 @@ onUnmounted(() => {
 }
 
 .oa-lite-section-title {
-  font-size: 24px;
+  font-size: 16px;
   font-weight: 600;
   color: var(--oa-ink);
 }
 
+.oa-lite-list-headline {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 4px;
+  border-bottom: 0;
+}
+
+.oa-lite-list-total {
+  color: var(--oa-ink);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.oa-lite-list-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.oa-lite-list-toolbar :deep(.ant-btn-link) {
+  height: 28px;
+  padding: 0 4px;
+  color: var(--oa-ink-soft);
+  font-size: 12px;
+}
+
 .oa-lite-filters {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.oa-lite-filter-primary-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.oa-lite-filter-primary-row > :deep(.ant-input-affix-wrapper) {
+  flex: 1;
+  min-width: 0;
+}
+
+.oa-lite-filter-expand-button {
+  display: inline-flex;
+  height: 32px;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  border: 1px solid var(--oa-shell-border);
+  border-radius: 4px;
+  background: var(--oa-shell-surface);
+  color: var(--oa-ink-soft);
+  cursor: pointer;
+  font-size: 12px;
+  transition:
+    border-color 0.18s ease,
+    background-color 0.18s ease,
+    color 0.18s ease;
+}
+
+.oa-lite-filter-expand-button:hover,
+.oa-lite-filter-expand-button.active {
+  border-color: color-mix(in srgb, var(--oa-accent) 52%, var(--oa-shell-border));
+  background: color-mix(in srgb, var(--oa-accent) 7%, var(--oa-shell-surface));
+  color: var(--oa-accent);
+}
+
+.oa-lite-filter-expand-arrow {
+  margin-left: 1px;
+  font-size: 12px;
+  transition: transform 0.18s ease;
+}
+
+.oa-lite-filter-expand-button.active .oa-lite-filter-expand-arrow {
+  transform: rotate(180deg);
+}
+
+.oa-lite-filter-expanded {
+  padding-top: 8px;
+}
+
+.oa-lite-filter-range {
+  grid-column: 1 / -1;
 }
 
 .oa-lite-filter-control,
@@ -2343,8 +2454,8 @@ onUnmounted(() => {
 }
 
 .oa-lite-filter-shell {
-  margin-bottom: 16px;
-  padding: 0 0 14px;
+  margin-bottom: 8px;
+  padding: 0 0 12px;
   border-bottom: 1px solid var(--oa-shell-border);
   border-radius: 0;
   background: transparent;
@@ -2354,8 +2465,15 @@ onUnmounted(() => {
   display: flex;
   justify-content: flex-end;
   gap: 12px;
-  margin-top: 12px;
+  margin-top: 10px;
   flex-shrink: 0;
+}
+
+.oa-lite-filter-actions :deep(.ant-btn) {
+  height: 30px;
+  padding: 0 16px;
+  border-radius: 4px;
+  font-size: 13px;
 }
 
 .oa-lite-list-scroll-region {
@@ -2364,13 +2482,17 @@ onUnmounted(() => {
   flex-direction: column;
   min-height: 0;
   overflow-y: auto;
-  overflow-x: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  padding-right: 3px;
 }
 
 .oa-lite-list-spin {
   display: flex;
   flex: 1;
   min-height: 0;
+  min-width: 0;
+  width: 100%;
 }
 
 .oa-lite-list-spin :deep(.ant-spin-nested-loading),
@@ -2379,6 +2501,8 @@ onUnmounted(() => {
   flex: 1;
   flex-direction: column;
   min-height: 0;
+  min-width: 0;
+  width: 100%;
   overflow: visible;
 }
 
@@ -2386,6 +2510,8 @@ onUnmounted(() => {
   display: flex;
   flex: 1;
   min-height: 0;
+  min-width: 0;
+  width: 100%;
   overflow: visible;
 }
 
@@ -2394,9 +2520,11 @@ onUnmounted(() => {
   flex-direction: column;
   flex: none;
   min-height: 100%;
-  min-width: 100%;
+  min-width: 0;
+  width: 100%;
   overflow: visible;
-  padding-right: 0;
+  gap: 8px;
+  padding: 2px 2px 8px;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -2411,12 +2539,13 @@ onUnmounted(() => {
 
 .oa-lite-list-item {
   width: 100%;
-  border: 0;
-  border-bottom: 1px solid var(--oa-shell-border);
-  background: transparent;
-  border-radius: 0;
+  min-height: 92px;
+  margin: 0;
+  border: 1px solid var(--oa-shell-border);
+  background: var(--oa-shell-surface);
+  border-radius: 10px;
   text-align: left;
-  padding: 8px 0;
+  padding: 13px 14px;
   cursor: pointer;
   transition:
     background-color 0.18s ease,
@@ -2429,25 +2558,22 @@ onUnmounted(() => {
 }
 
 .oa-lite-list-item:last-child {
-  border-bottom: 0;
+  border-bottom-color: var(--oa-shell-border);
 }
 
 .oa-lite-list-item:hover {
-  border-bottom-color: color-mix(in srgb, var(--oa-accent) 18%, var(--oa-shell-border));
+  border-color: color-mix(in srgb, var(--oa-accent) 32%, var(--oa-shell-border));
+  background: color-mix(in srgb, var(--oa-accent) 3%, var(--oa-shell-surface));
 }
 
 .oa-lite-list-item.active {
-  border-bottom-color: color-mix(in srgb, var(--oa-accent) 34%, var(--oa-shell-border));
+  border: 2px solid var(--oa-accent);
+  padding: 12px 13px;
+  background: color-mix(in srgb, var(--oa-accent) 5%, var(--oa-shell-surface));
 }
 
 .oa-lite-list-item.active::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 8px;
-  bottom: 8px;
-  width: 2px;
-  background: var(--oa-accent);
+  display: none;
 }
 
 .oa-lite-list-main {
@@ -2472,7 +2598,7 @@ onUnmounted(() => {
 .oa-lite-list-title {
   overflow: hidden;
   color: var(--oa-ink);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   line-height: 1.35;
   text-overflow: ellipsis;
@@ -2484,7 +2610,7 @@ onUnmounted(() => {
   margin-top: 2px;
   color: var(--oa-ink-soft);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 400;
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2505,7 +2631,7 @@ onUnmounted(() => {
 
 .oa-lite-list-summary {
   overflow: hidden;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.35;
   color: var(--oa-ink-soft);
   text-overflow: ellipsis;
@@ -2524,7 +2650,7 @@ onUnmounted(() => {
   padding: 0;
   border-radius: 0;
   border: 0;
-  border-bottom: 1px solid var(--oa-shell-border);
+  border-bottom: 0;
   background: transparent !important;
   color: var(--oa-ink) !important;
   line-height: 1.5;
@@ -2562,7 +2688,9 @@ onUnmounted(() => {
 }
 
 .oa-lite-pagination-wrap {
-  margin-top: 18px;
+  margin-top: 10px;
+  padding: 10px 4px 0;
+  border-top: 1px solid var(--oa-shell-border);
   display: flex;
   justify-content: flex-end;
   flex-shrink: 0;
@@ -2571,14 +2699,9 @@ onUnmounted(() => {
 .oa-lite-detail-scroll-region {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
-  padding-right: 4px;
-}
-
-.oa-lite-detail-panel-head {
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--oa-shell-border);
-  margin-bottom: 16px;
+  overflow-y: hidden;
+  overflow-x: hidden;
+  padding-right: 0;
 }
 
 .oa-lite-detail-empty {
@@ -2587,6 +2710,33 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.oa-lite-detail-empty-copy {
+  display: flex;
+  max-width: 280px;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: var(--oa-ink-soft);
+  text-align: center;
+}
+
+.oa-lite-detail-empty-copy :deep(svg) {
+  margin-bottom: 4px;
+  color: var(--oa-accent);
+  font-size: 34px;
+}
+
+.oa-lite-detail-empty-copy strong {
+  color: var(--oa-ink);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.oa-lite-detail-empty-copy span {
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .oa-lite-white-button {

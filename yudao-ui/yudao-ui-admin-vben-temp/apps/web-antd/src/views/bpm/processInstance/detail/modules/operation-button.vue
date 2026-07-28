@@ -760,11 +760,6 @@ defineExpose({ loadTodoTask });
 </script>
 <template>
   <div class="oa-process-actions">
-    <div class="oa-process-actions-head">
-      <div>
-        <div class="oa-process-actions-title">审批操作台</div>
-      </div>
-    </div>
     <!-- 【通过】按钮 -->
     <!-- z-index 设置为300 避免覆盖签名弹窗 -->
     <Space size="middle" class="oa-process-actions-bar">
@@ -799,9 +794,6 @@ defineExpose({ loadTodoTask });
               label-width="100px"
             >
               <div v-if="runningTask?.formId > 0" class="oa-process-inline-section">
-                <div class="oa-process-inline-section-title">
-                  填写表单【{{ runningTask?.formName }}】
-                </div>
                 <FormCreate
                   v-model:value="approveForm.value"
                   v-model:api="approveFormFApi"

@@ -10,6 +10,9 @@ import cn.iocoder.yudao.module.system.controller.admin.partyfile.vo.file.PartyFi
 import cn.iocoder.yudao.module.system.controller.admin.partyfile.vo.file.PartyFileKodFileRespVO;
 import cn.iocoder.yudao.module.system.controller.admin.partyfile.vo.file.PartyFileKodFilesReqVO;
 import cn.iocoder.yudao.module.system.controller.admin.partyfile.vo.file.PartyFileKodSelectReqVO;
+import cn.iocoder.yudao.module.system.controller.admin.partyfile.vo.file.PartyFileKodUserFilesReqVO;
+import cn.iocoder.yudao.module.system.controller.admin.partyfile.vo.file.PartyFileKodUserSelectReqVO;
+import cn.iocoder.yudao.module.system.controller.admin.partyfile.vo.kodsource.PartyFileKodFolderRespVO;
 import cn.iocoder.yudao.module.system.controller.admin.partyfile.vo.file.PartyFileMyPageReqVO;
 import cn.iocoder.yudao.module.system.controller.admin.partyfile.vo.file.PartyFileAttachmentRespVO;
 import cn.iocoder.yudao.module.system.controller.admin.partyfile.vo.file.PartyFilePageReqVO;
@@ -121,16 +124,66 @@ public class PartyFileController {
 
     @PostMapping("/attachment/kod-files")
     @Operation(summary = "获取可道云目录文件列表")
-    @PreAuthorize("@ss.hasPermission('system:party-file:update')")
+    @PreAuthorize("@ss.hasAnyPermissions('system:party-file:update', 'bpm:oa-leave:create', 'bpm:process-instance:query')")
     public CommonResult<List<PartyFileKodFileRespVO>> getKodFiles(@Valid @RequestBody PartyFileKodFilesReqVO reqVO) {
         return success(partyFileAttachmentService.getKodFiles(reqVO.getKodSourceId(), reqVO.getKodFolderPath()));
     }
 
     @PostMapping("/attachment/kod-select")
     @Operation(summary = "选择可道云已有文件作为党务附件")
-    @PreAuthorize("@ss.hasPermission('system:party-file:update')")
+    @PreAuthorize("@ss.hasAnyPermissions('system:party-file:update', 'bpm:oa-leave:create', 'bpm:process-instance:query')")
     public CommonResult<List<PartyFileAttachmentUploadRespVO>> selectKodFiles(@Valid @RequestBody PartyFileKodSelectReqVO reqVO) {
         return success(partyFileAttachmentService.selectKodFiles(reqVO));
+    }
+
+    @GetMapping("/attachment/kod-user-folder-tree")
+    @Operation(summary = "获取当前用户有权限的可道云目录树")
+    @PreAuthorize("@ss.hasAnyPermissions('bpm:oa-leave:create', 'bpm:process-instance:query', 'system:party-file:update')")
+    public CommonResult<List<PartyFileKodFolderRespVO>> getCurrentUserKodFolderTree() {
+        return success(partyFileAttachmentService.getCurrentUserKodFolderTree(
+                SecurityFrameworkUtils.getLoginUserId()));
+    }
+
+    @GetMapping("/attachment/kod-user-folder-children")
+    @Operation(summary = "按需获取当前用户有权限的可道云子目录")
+    @PreAuthorize("@ss.hasAnyPermissions('bpm:oa-leave:create', 'bpm:process-instance:query', 'system:party-file:update')")
+    public CommonResult<List<PartyFileKodFolderRespVO>> getCurrentUserKodFolderChildren(
+            @RequestParam(value = "kodFolderPath", defaultValue = "/") String kodFolderPath) {
+        return success(partyFileAttachmentService.getCurrentUserKodFolderChildren(
+                SecurityFrameworkUtils.getLoginUserId(), kodFolderPath));
+    }
+
+    @PostMapping("/attachment/kod-user-files")
+    @Operation(summary = "获取当前用户有权限的可道云文件")
+    @PreAuthorize("@ss.hasAnyPermissions('bpm:oa-leave:create', 'bpm:process-instance:query', 'system:party-file:update')")
+    public CommonResult<List<PartyFileKodFileRespVO>> getCurrentUserKodFiles(
+            @Valid @RequestBody PartyFileKodUserFilesReqVO reqVO) {
+        return success(partyFileAttachmentService.getCurrentUserKodFiles(
+                SecurityFrameworkUtils.getLoginUserId(), reqVO));
+    }
+
+    @PostMapping("/attachment/kod-user-select")
+    @Operation(summary = "按当前用户权限选择可道云附件")
+    @PreAuthorize("@ss.hasAnyPermissions('bpm:oa-leave:create', 'bpm:process-instance:query', 'system:party-file:update')")
+    public CommonResult<List<PartyFileAttachmentUploadRespVO>> selectCurrentUserKodFiles(
+            @Valid @RequestBody PartyFileKodUserSelectReqVO reqVO) {
+        return success(partyFileAttachmentService.selectCurrentUserKodFiles(
+                SecurityFrameworkUtils.getLoginUserId(), reqVO));
+    }
+
+    @GetMapping("/attachment/access")
+    @Operation(summary = "读取可道云附件内容")
+    @PreAuthorize("@ss.hasAnyPermissions('system:party-file:query', 'bpm:oa-leave:create', 'bpm:process-instance:query')")
+    public void accessAttachment(@RequestParam("fileId") Long fileId, HttpServletResponse response) throws Exception {
+        FileDO file = partyFileAttachmentService.getFile(fileId);
+        if (file == null) {
+            throw exception(PARTY_FILE_ATTACHMENT_NOT_FOUND);
+        }
+        byte[] content = partyFileAttachmentService.getAttachmentContent(fileId);
+        response.setHeader("Content-Disposition", "inline;filename=" + HttpUtils.encodeUtf8(file.getName()));
+        response.setContentType(file.getType() != null ? file.getType() : "application/octet-stream");
+        response.getOutputStream().write(content);
+        response.getOutputStream().flush();
     }
 
     @GetMapping("/attachment/download")

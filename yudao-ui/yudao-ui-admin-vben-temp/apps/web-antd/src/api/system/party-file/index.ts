@@ -41,6 +41,7 @@ export namespace SystemPartyFileApi {
     title: string;
     value: string;
     path: string;
+    isLeaf?: boolean;
     children?: PartyFileKodFolder[];
   }
 
@@ -216,6 +217,44 @@ export function selectPartyFileKodFiles(data: {
     '/system/party-file/attachment/kod-select',
     data,
   );
+}
+
+export function getCurrentUserPartyFileKodFolderTree() {
+  return requestClient.get<SystemPartyFileApi.PartyFileKodFolder[]>(
+    '/system/party-file/attachment/kod-user-folder-tree',
+  );
+}
+
+export function getCurrentUserPartyFileKodFolderChildren(params: {
+  kodFolderPath: string;
+}) {
+  return requestClient.get<SystemPartyFileApi.PartyFileKodFolder[]>(
+    '/system/party-file/attachment/kod-user-folder-children',
+    { params },
+  );
+}
+
+export function getCurrentUserPartyFileKodFiles(params: {
+  kodFolderPath: string;
+}) {
+  return requestClient.post<SystemPartyFileApi.PartyFileKodFile[]>(
+    '/system/party-file/attachment/kod-user-files',
+    params,
+  );
+}
+
+export function selectCurrentUserPartyFileKodFiles(data: {
+  kodFolderPath: string;
+  files: SystemPartyFileApi.PartyFileKodFile[];
+}) {
+  return requestClient.post<SystemPartyFileApi.PartyFileAttachment[]>(
+    '/system/party-file/attachment/kod-user-select',
+    data,
+  );
+}
+
+export function getPartyFileAttachmentAccessUrl(fileId: number) {
+  return `/admin-api/system/party-file/attachment/access?fileId=${fileId}`;
 }
 
 export function getPartyFileKodSourcePage(params: PageParam & { name?: string; status?: number }) {

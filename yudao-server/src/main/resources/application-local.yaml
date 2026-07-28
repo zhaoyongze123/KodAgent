@@ -1,5 +1,5 @@
 server:
-  port: 48080
+  port: 7800
 
 yudao:
   security:
@@ -17,12 +17,13 @@ yudao:
   kod-sso:
     enabled: true
     # 本地联调：指向当前可访问的 kodbox 实例
-    base-url: ${KOD_SSO_BASE_URL:http://192.168.1.107:8001/}
+    base-url: ${KOD_SSO_BASE_URL:http://124.221.4.228:8001/}
+    server-base-url: ${KOD_SSO_SERVER_BASE_URL:}
     app-name: user:all
     # 本地联调：前端开发地址
-    redirect-uri: ${KOD_SSO_REDIRECT_URI:http://192.168.1.100:5666/#/auth/kod-sso-login?tenantId=1}
+    redirect-uri: ${KOD_SSO_REDIRECT_URI:http://192.168.1.100:7700/#/auth/kod-sso-login?tenantId=1}
     # 本地联调：后端对外地址，固定生成可道云回调地址
-    callback-base-url: ${KOD_SSO_CALLBACK_BASE_URL:http://192.168.1.100:48080}
+    callback-base-url: ${KOD_SSO_CALLBACK_BASE_URL:http://192.168.1.100:7800}
     tenant-id: 1
     auto-create-user: false
 
@@ -73,7 +74,7 @@ spring:
       primary: master
       datasource:
         master:
-          url: jdbc:mysql://127.0.0.1:3306/ruoyi-vue-pro?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true&rewriteBatchedStatements=true # MySQL Connector/J 8.X 连接的示例
+          url: jdbc:mysql://127.0.0.1:13306/ruoyi-vue-pro?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true&rewriteBatchedStatements=true # 本地 MySQL 容器映射端口
           #          url: jdbc:mysql://127.0.0.1:3306/ruoyi-vue-pro?useSSL=true&allowPublicKeyRetrieval=true&useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&rewriteBatchedStatements=true # MySQL Connector/J 5.X 连接的示例
           #          url: jdbc:postgresql://127.0.0.1:5432/ruoyi-vue-pro # PostgreSQL 连接的示例
           #          url: jdbc:oracle:thin:@127.0.0.1:1521:xe # Oracle 连接的示例
@@ -91,7 +92,7 @@ spring:
           #          password: Yudao@2024 # OpenGauss 连接的示例
         slave: # 模拟从库，可根据自己需要修改
           lazy: true # 开启懒加载，保证启动速度
-          url: jdbc:mysql://127.0.0.1:3306/ruoyi-vue-pro?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true&nullCatalogMeansCurrent=true
+          url: jdbc:mysql://127.0.0.1:13306/ruoyi-vue-pro?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true&nullCatalogMeansCurrent=true
           username: root
           password: 123456
 #        tdengine: # IoT 数据库（需要 IoT 物联网再开启噢！）
@@ -106,7 +107,7 @@ spring:
   # Redis 配置。Redisson 默认的配置足够使用，一般不需要进行调优
   redis:
     host: 127.0.0.1 # 地址
-    port: 6379 # 端口
+    port: 16379 # 本地 Redis 容器映射端口
     database: 0 # 数据库索引
 #    password: dev # 密码，建议生产环境开启
 
@@ -189,7 +190,7 @@ spring:
       # Spring Boot Admin Server 服务端的相关配置
       context-path: /admin # 配置 Spring
       # 允许嵌入 iframe 的域名（支持通配符），实际部署时，可以改为 "'self' [你的公网域名]"
-      frame-ancestors: "'self' localhost localhost:48080 127.0.0.1 127.0.0.1:48080"
+      frame-ancestors: "'self' localhost localhost:7700 localhost:7800 127.0.0.1 127.0.0.1:7700 127.0.0.1:7800"
 
 # 日志文件配置
 logging:

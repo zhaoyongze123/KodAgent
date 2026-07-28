@@ -12,6 +12,7 @@ import {
   BpmModelType,
   BpmProcessInstanceStatus,
 } from '@vben/constants';
+import { IconifyIcon } from '@vben/icons';
 import { formatDateTime } from '@vben/utils';
 import { useI18n } from '@vben/locales';
 
@@ -25,7 +26,7 @@ import {
 import { withdrawTask } from '#/api/bpm/task';
 import { getSimpleUserList } from '#/api/system/user';
 import { setConfAndFields2 } from '#/components/form-create';
-import { registerComponent } from '#/utils';
+import { normalizeOaAssetUrl, registerComponent } from '#/utils';
 import ProcessInstanceBpmnViewer from '#/views/bpm/processInstance/detail/modules/bpm-viewer.vue';
 import ProcessInstanceOperationButton from '#/views/bpm/processInstance/detail/modules/operation-button.vue';
 import ProcessInstanceSimpleViewer from '#/views/bpm/processInstance/detail/modules/simple-bpm-viewer.vue';
@@ -79,7 +80,8 @@ const normalForm = ref({
   rule: [],
   value: {},
 });
-const writableFields: string[] = [];
+const writableFields = ref<string[]>([]);
+const fieldPermissions = ref<Record<string, string>>({});
 
 const processInstance = computed(() => approvalDetail.value?.processInstance);
 const processDefinition = computed(
@@ -113,6 +115,234 @@ const showReadonlyChip = computed(() => props.section === 'copied');
 const showOperationButton = computed(
   () => props.section === 'pending' && Boolean(todoTask.value?.id),
 );
+const businessKeyIsValid = computed(() => {
+  const businessKey = processInstance.value?.businessKey;
+  return typeof businessKey === 'string'
+    ? /^\d+$/.test(businessKey)
+    : typeof businessKey === 'number' && Number.isSafeInteger(businessKey);
+});
+const hasEditableNormalForm = computed(
+  () => props.section === 'pending' && writableFields.value.length > 0,
+);
+
+interface OaLiteAttachment {
+  extension: string;
+  name: string;
+  size?: number;
+  url: string;
+}
+
+interface OaLiteDisplayField {
+  attachments: OaLiteAttachment[];
+  displayValue: string;
+  field: string;
+  rule: any;
+  title: string;
+}
+
+function parseSerializedValue(value: unknown): unknown {
+  if (typeof value !== 'string') {
+    return value;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || !['[', '{'].includes(trimmed[0] || '')) {
+    return value;
+  }
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
+  }
+}
+
+function hasDisplayValue(value: unknown) {
+  const parsed = parseSerializedValue(value);
+  if (parsed === undefined || parsed === null) {
+    return false;
+  }
+  if (typeof parsed === 'string') {
+    return parsed.trim() !== '';
+  }
+  if (Array.isArray(parsed)) {
+    return parsed.length > 0;
+  }
+  if (typeof parsed === 'object') {
+    return Object.keys(parsed).length > 0;
+  }
+  return true;
+}
+
+function getAssetUrl(value: unknown) {
+  if (!value || typeof value !== 'object') {
+    return String(value || '');
+  }
+  const item = value as Record<string, any>;
+  return String(
+    item.url ||
+      item.fileUrl ||
+      item.response?.url ||
+      item.response?.data ||
+      item.response ||
+      '',
+  );
+}
+
+function getAttachmentName(value: unknown, url: string) {
+  const name =
+    value && typeof value === 'object'
+      ? String((value as Record<string, any>).name || '')
+      : '';
+  const raw = name || url;
+  const withoutQuery = raw.split(/[?#]/, 1)[0] || raw;
+  const lastPart = withoutQuery.slice(withoutQuery.lastIndexOf('/') + 1);
+  try {
+    return decodeURIComponent(lastPart) || '未命名文件';
+  } catch {
+    return lastPart || '未命名文件';
+  }
+}
+
+function getFileExtension(name: string) {
+  return name.includes('.')
+    ? name.split('.').pop()?.toUpperCase() || 'FILE'
+    : 'FILE';
+}
+
+function getFileIcon(name: string) {
+  const extension = getFileExtension(name);
+  if (extension === 'PDF') {
+    return 'lucide:file-type-2';
+  }
+  if (['DOC', 'DOCX', 'TXT'].includes(extension)) {
+    return 'lucide:file-text';
+  }
+  if (['XLS', 'XLSX', 'CSV'].includes(extension)) {
+    return 'lucide:file-spreadsheet';
+  }
+  if (['PNG', 'JPG', 'JPEG', 'GIF', 'WEBP', 'SVG'].includes(extension)) {
+    return 'lucide:image';
+  }
+  return 'lucide:file';
+}
+
+function normalizeAttachments(value: unknown): OaLiteAttachment[] {
+  const parsed = parseSerializedValue(value);
+  let items = Array.isArray(parsed) ? parsed : [parsed];
+  if (typeof parsed === 'string' && parsed.includes(',')) {
+    items = parsed.split(',').map((item) => item.trim());
+  }
+  return items
+    .map((item) => {
+      const url = normalizeOaAssetUrl(getAssetUrl(item));
+      if (!url) {
+        return null;
+      }
+      const name = getAttachmentName(item, url);
+      const size =
+        item && typeof item === 'object'
+          ? Number(
+              (item as Record<string, any>).size ||
+                (item as Record<string, any>).response?.size ||
+                0,
+            )
+          : 0;
+      return {
+        extension: getFileExtension(name),
+        name,
+        size: size > 0 ? size : undefined,
+        url,
+      };
+    })
+    .filter(Boolean) as OaLiteAttachment[];
+}
+
+function formatFileSize(size?: number) {
+  if (!size || size <= 0) {
+    return '';
+  }
+  if (size < 1024) {
+    return `${size} B`;
+  }
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} KB`;
+  }
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function flattenNormalRules(rules: any[], fields: any[] = []) {
+  rules.forEach((rule) => {
+    if (rule?.field && rule?.title) {
+      fields.push(rule);
+    }
+    if (Array.isArray(rule?.children)) {
+      flattenNormalRules(rule.children, fields);
+    }
+    if (Array.isArray(rule?.props?.rule)) {
+      flattenNormalRules(rule.props.rule, fields);
+    }
+  });
+  return fields;
+}
+
+function getRuleOptions(rule: any) {
+  const options = rule?.options || rule?.props?.options || rule?.props?.fieldProps?.options;
+  return Array.isArray(options) ? options : [];
+}
+
+function getOptionLabel(rule: any, value: unknown) {
+  const matched = getRuleOptions(rule).find(
+    (option: any) => String(option?.value) === String(value),
+  );
+  return matched?.label ?? matched?.name;
+}
+
+function formatNormalValue(rule: any, value: unknown): string {
+  const parsed = parseSerializedValue(value);
+  if (Array.isArray(parsed)) {
+    return parsed
+      .map((item) => formatNormalValue(rule, item))
+      .filter(Boolean)
+      .join('、');
+  }
+  if (parsed && typeof parsed === 'object') {
+    const item = parsed as Record<string, any>;
+    return String(item.label || item.name || item.nickname || item.value || '');
+  }
+  if (parsed === true && String(rule?.type).toLowerCase().includes('switch')) {
+    return '是';
+  }
+  if (parsed === false && String(rule?.type).toLowerCase().includes('switch')) {
+    return '否';
+  }
+  const optionLabel = getOptionLabel(rule, parsed);
+  if (optionLabel !== undefined) {
+    return String(optionLabel);
+  }
+  const ruleType = String(rule?.type || '').toLowerCase();
+  if (ruleType.includes('date') || ruleType.includes('time')) {
+    return parsed ? formatDateTime(parsed as any) : '';
+  }
+  return parsed === undefined || parsed === null ? '' : String(parsed);
+}
+
+const normalDisplayFields = computed<OaLiteDisplayField[]>(() => {
+  const values = (normalForm.value.value || {}) as Record<string, any>;
+  return flattenNormalRules(normalForm.value.rule as any[])
+    .filter((rule) => fieldPermissions.value[rule.field] !== BpmFieldPermissionType.NONE)
+    .map((rule) => {
+      const attachments = String(rule.type || '').toLowerCase().includes('upload')
+        ? normalizeAttachments(values[rule.field])
+        : [];
+      return {
+        attachments,
+        displayValue: formatNormalValue(rule, values[rule.field]),
+        field: rule.field,
+        rule,
+        title: String(rule.title),
+      };
+    })
+    .filter((field) => field.attachments.length > 0 || hasDisplayValue(field.displayValue));
+});
 
 function getStatusText(status?: number) {
   switch (status) {
@@ -159,7 +389,8 @@ function resetNormalForm() {
   businessFormComponent.value = null;
   processModelView.value = {};
   approvalDetail.value = null;
-  writableFields.splice(0);
+  writableFields.value = [];
+  fieldPermissions.value = {};
 }
 
 function setFieldPermission(field: string, permission: string) {
@@ -168,7 +399,9 @@ function setFieldPermission(field: string, permission: string) {
   }
   if (permission === BpmFieldPermissionType.WRITE) {
     normalFormApi.value?.disabled(false, field);
-    writableFields.push(field);
+    if (!writableFields.value.includes(field)) {
+      writableFields.value.push(field);
+    }
   }
   if (permission === BpmFieldPermissionType.NONE) {
     normalFormApi.value?.hidden(true, field);
@@ -202,7 +435,8 @@ async function loadDetail() {
 
     const processDefinitionData = data.processDefinition;
     if (processDefinitionData.formType === BpmModelFormType.NORMAL) {
-      writableFields.splice(0);
+      writableFields.value = [];
+      fieldPermissions.value = data.formFieldsPermission || {};
       if (processDefinitionData.formConf && processDefinitionData.formFields) {
         setConfAndFields2(
           normalForm,
@@ -322,142 +556,215 @@ watch(
   <div class="oa-lite-process-detail">
     <Spin :spinning="loading">
       <template v-if="processInstance && processDefinition">
-        <div class="oa-lite-process-head">
-          <div class="oa-lite-process-head-main">
-            <div class="oa-lite-process-name-row">
-              <h3 class="oa-lite-process-name">{{ processInstance.name }}</h3>
-              <span
-                class="oa-lite-status-chip"
-                :class="`tone-${getStatusTone(processInstance.status)}`"
+        <div class="oa-lite-process-content">
+          <div class="oa-lite-process-overview">
+            <div class="oa-lite-process-head">
+              <div class="oa-lite-process-head-main">
+                <div class="oa-lite-process-name-row">
+                  <h3 class="oa-lite-process-name">
+                    {{ processInstance.name }}
+                  </h3>
+                  <span
+                    class="oa-lite-status-chip"
+                    :class="`tone-${getStatusTone(processInstance.status)}`"
+                  >
+                    {{ getStatusText(processInstance.status) }}
+                  </span>
+                </div>
+                <div class="oa-lite-process-desc-row">
+                  <span>
+                    {{ t('page.oaLite.processDetail.startUser') }}：{{
+                      processInstance.startUser?.nickname || '-'
+                    }}
+                  </span>
+                  <span>
+                    {{ t('page.oaLite.processDetail.submitTime') }}：{{
+                      formatDateTime(
+                        processInstance.startTime || processInstance.createTime,
+                      )
+                    }}
+                  </span>
+                </div>
+                <div class="oa-lite-process-id">
+                  {{ t('page.oaLite.processDetail.processNo') }}：{{
+                    processInstance.id || '-'
+                  }}
+                  <span class="oa-lite-process-id-divider">|</span>
+                  {{ t('page.oaLite.processDetail.businessKey') }}：{{
+                    processInstance.businessKey || '-'
+                  }}
+                </div>
+              </div>
+
+              <div class="oa-lite-detail-actions">
+                <Button
+                  v-if="canWithdrawTask"
+                  class="oa-lite-white-button"
+                  @click="handleWithdraw"
+                >
+                  {{ t('page.oaLite.processDetail.withdrawTask') }}
+                </Button>
+                <Button
+                  v-if="canCancelProcess"
+                  class="oa-lite-white-button"
+                  @click="handleCancelProcess"
+                >
+                  {{ t('page.oaLite.processDetail.cancelProcess') }}
+                </Button>
+                <Button
+                  v-if="canRecreateProcess"
+                  type="primary"
+                  class="oa-lite-white-primary"
+                  @click="handleRecreate"
+                >
+                  {{ t('page.oaLite.processDetail.restartProcess') }}
+                </Button>
+                <Tag v-if="showReadonlyChip" class="oa-lite-readonly-tag">
+                  {{ t('page.oaLite.processDetail.readonly') }}
+                </Tag>
+              </div>
+            </div>
+
+            <div class="oa-lite-process-tabs">
+              <button
+                class="oa-lite-process-tab"
+                :class="{ active: activeTab === 'form' }"
+                @click="activeTab = 'form'"
               >
-                {{ getStatusText(processInstance.status) }}
-              </span>
-            </div>
-            <div class="oa-lite-process-desc-row">
-              <span>
-                {{ t('page.oaLite.processDetail.startUser') }}：{{ processInstance.startUser?.nickname || '-' }}
-              </span>
-              <span>
-                {{ t('page.oaLite.processDetail.submitTime') }}：{{ formatDateTime(processInstance.startTime || processInstance.createTime) }}
-              </span>
-            </div>
-            <div class="oa-lite-process-id">
-              {{ t('page.oaLite.processDetail.processNo') }}：{{ processInstance.id || '-' }}
-              <span class="oa-lite-process-id-divider">|</span>
-              {{ t('page.oaLite.processDetail.businessKey') }}：{{ processInstance.businessKey || '-' }}
+                {{ t('page.oaLite.processDetail.tabs.detail') }}
+              </button>
+              <button
+                class="oa-lite-process-tab"
+                :class="{ active: activeTab === 'diagram' }"
+                @click="activeTab = 'diagram'"
+              >
+                {{ t('page.oaLite.processDetail.tabs.diagram') }}
+              </button>
+              <button
+                class="oa-lite-process-tab"
+                :class="{ active: activeTab === 'record' }"
+                @click="activeTab = 'record'"
+              >
+                {{ t('page.oaLite.processDetail.tabs.record') }}
+              </button>
             </div>
           </div>
 
-          <div class="oa-lite-detail-actions">
-            <Button
-              v-if="canWithdrawTask"
-              class="oa-lite-white-button"
-              @click="handleWithdraw"
-            >
-              {{ t('page.oaLite.processDetail.withdrawTask') }}
-            </Button>
-            <Button
-              v-if="canCancelProcess"
-              class="oa-lite-white-button"
-              @click="handleCancelProcess"
-            >
-              {{ t('page.oaLite.processDetail.cancelProcess') }}
-            </Button>
-            <Button
-              v-if="canRecreateProcess"
-              type="primary"
-              class="oa-lite-white-primary"
-              @click="handleRecreate"
-            >
-              {{ t('page.oaLite.processDetail.restartProcess') }}
-            </Button>
-            <Tag v-if="showReadonlyChip" class="oa-lite-readonly-tag">
-              {{ t('page.oaLite.processDetail.readonly') }}
-            </Tag>
+          <div v-if="activeTab === 'form'" class="oa-lite-detail-grid">
+            <section class="oa-lite-detail-card oa-lite-detail-card-form">
+              <component
+                :is="businessFormComponent"
+                v-if="
+                  processDefinition.formType === BpmModelFormType.CUSTOM &&
+                  businessFormComponent &&
+                  businessKeyIsValid
+                "
+                :id="String(processInstance.businessKey || '')"
+                :module-key="businessModuleKey"
+                class="oa-lite-business-form"
+              />
+              <form-create
+                v-else-if="
+                  processDefinition.formType === BpmModelFormType.NORMAL &&
+                  hasEditableNormalForm
+                "
+                v-model="normalForm.value"
+                v-model:api="normalFormApi"
+                :option="normalForm.option"
+                :rule="normalForm.rule"
+              />
+              <div
+                v-else-if="
+                  processDefinition.formType === BpmModelFormType.NORMAL
+                "
+                class="oa-lite-normal-form-fields"
+              >
+                <div
+                  v-for="field in normalDisplayFields"
+                  :key="field.field"
+                  class="oa-lite-normal-form-field"
+                >
+                  <span class="oa-lite-normal-form-label">
+                    {{ field.title }}
+                  </span>
+                  <div class="oa-lite-normal-form-value">
+                    <div
+                      v-if="field.attachments.length > 0"
+                      class="oa-lite-normal-attachment-list"
+                    >
+                      <a
+                        v-for="file in field.attachments"
+                        :key="file.url"
+                        class="oa-lite-normal-attachment"
+                        :href="file.url"
+                        :title="file.name"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        <span class="oa-lite-normal-attachment-icon">
+                          <IconifyIcon :icon="getFileIcon(file.name)" />
+                        </span>
+                        <span class="oa-lite-normal-attachment-main">
+                          <strong>{{ file.name }}</strong>
+                          <span>
+                            {{ file.extension }}
+                            <template v-if="formatFileSize(file.size)">
+                              · {{ formatFileSize(file.size) }}
+                            </template>
+                          </span>
+                        </span>
+                        <span class="oa-lite-normal-attachment-action">
+                          查看
+                        </span>
+                      </a>
+                    </div>
+                    <span v-else class="oa-lite-normal-form-text">
+                      {{ field.displayValue }}
+                    </span>
+                  </div>
+                </div>
+                <Empty
+                  v-if="normalDisplayFields.length === 0"
+                  :description="t('page.oaLite.processDetail.emptyBusinessForm')"
+                />
+              </div>
+              <Empty
+                v-else
+                :description="t('page.oaLite.processDetail.emptyBusinessForm')"
+              />
+            </section>
+
+            <aside class="oa-lite-detail-card">
+              <ProcessInstanceTimeline :activity-nodes="activityNodes" />
+            </aside>
           </div>
-        </div>
 
-        <div class="oa-lite-process-tabs">
-          <button
-            class="oa-lite-process-tab"
-            :class="{ active: activeTab === 'form' }"
-            @click="activeTab = 'form'"
-          >
-            {{ t('page.oaLite.processDetail.tabs.detail') }}
-          </button>
-          <button
-            class="oa-lite-process-tab"
-            :class="{ active: activeTab === 'diagram' }"
-            @click="activeTab = 'diagram'"
-          >
-            {{ t('page.oaLite.processDetail.tabs.diagram') }}
-          </button>
-          <button
-            class="oa-lite-process-tab"
-            :class="{ active: activeTab === 'record' }"
-            @click="activeTab = 'record'"
-          >
-            {{ t('page.oaLite.processDetail.tabs.record') }}
-          </button>
-        </div>
-
-        <div v-if="activeTab === 'form'" class="oa-lite-detail-grid">
-          <section class="oa-lite-detail-card oa-lite-detail-card-form">
-            <div class="oa-lite-detail-card-title">{{ t('page.oaLite.processDetail.businessForm') }}</div>
-            <component
-              :is="businessFormComponent"
-              v-if="
-                processDefinition.formType === BpmModelFormType.CUSTOM &&
-                businessFormComponent
-              "
-              :id="String(processInstance.businessKey || '')"
-              :module-key="businessModuleKey"
-              class="oa-lite-business-form"
+          <div v-else-if="activeTab === 'diagram'" class="oa-lite-detail-card">
+            <ProcessInstanceSimpleViewer
+              v-if="processDefinition.modelType === BpmModelType.SIMPLE"
+              :loading="loading"
+              :model-view="processModelView"
             />
-            <form-create
-              v-else-if="processDefinition.formType === BpmModelFormType.NORMAL"
-              v-model="normalForm.value"
-              v-model:api="normalFormApi"
-              :option="normalForm.option"
-              :rule="normalForm.rule"
+            <ProcessInstanceBpmnViewer
+              v-else
+              :loading="loading"
+              :model-view="processModelView"
             />
-            <Empty v-else :description="t('page.oaLite.processDetail.emptyBusinessForm')" />
-          </section>
+          </div>
 
-          <aside class="oa-lite-detail-card">
-            <div class="oa-lite-detail-card-title">{{ t('page.oaLite.processDetail.timeline') }}</div>
-            <ProcessInstanceTimeline :activity-nodes="activityNodes" />
-          </aside>
-        </div>
-
-        <div v-else-if="activeTab === 'diagram'" class="oa-lite-detail-card">
-          <div class="oa-lite-detail-card-title">{{ t('page.oaLite.processDetail.tabs.diagram') }}</div>
-          <ProcessInstanceSimpleViewer
-            v-if="processDefinition.modelType === BpmModelType.SIMPLE"
-            :loading="loading"
-            :model-view="processModelView"
-          />
-          <ProcessInstanceBpmnViewer
-            v-else
-            :loading="loading"
-            :model-view="processModelView"
-          />
-        </div>
-
-        <div v-else class="oa-lite-detail-card">
-          <div class="oa-lite-detail-card-title">{{ t('page.oaLite.processDetail.tabs.record') }}</div>
-          <BpmProcessInstanceTaskList
-            ref="taskListRef"
-            :id="String(processInstance.id)"
-            :loading="loading"
-          />
+          <div v-else class="oa-lite-detail-card">
+            <BpmProcessInstanceTaskList
+              ref="taskListRef"
+              :id="String(processInstance.id)"
+              :loading="loading"
+            />
+          </div>
         </div>
 
         <div
           v-if="showOperationButton"
           class="oa-lite-detail-card oa-lite-operation-card"
         >
-          <div class="oa-lite-detail-card-title">{{ t('page.oaLite.processDetail.approvalAction') }}</div>
           <div class="oa-lite-operation-bar">
             <ProcessInstanceOperationButton
               ref="operationButtonRef"
@@ -484,8 +791,9 @@ watch(
 .oa-lite-process-detail {
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  min-height: 100%;
+  height: 100%;
+  min-height: 0;
+  background: var(--oa-shell-surface-subtle);
 }
 
 .oa-lite-process-detail :deep(.ant-spin-nested-loading),
@@ -496,7 +804,24 @@ watch(
 .oa-lite-process-detail :deep(.ant-spin-container) {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  min-height: 0;
+}
+
+.oa-lite-process-content {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  gap: 16px;
+  overflow: auto;
+  padding: 20px 20px 24px;
+}
+
+.oa-lite-process-overview {
+  padding: 18px 20px 0;
+  border: 1px solid var(--oa-shell-border);
+  border-radius: 10px;
+  background: var(--oa-shell-surface);
 }
 
 .oa-lite-process-head {
@@ -504,6 +829,7 @@ watch(
   align-items: flex-start;
   justify-content: space-between;
   gap: 20px;
+  padding: 0;
 }
 
 .oa-lite-process-head-main {
@@ -519,7 +845,7 @@ watch(
 
 .oa-lite-process-name {
   margin: 0;
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 600;
   color: var(--oa-ink);
 }
@@ -555,7 +881,8 @@ watch(
   display: flex;
   gap: 18px;
   border-bottom: 1px solid var(--oa-shell-border);
-  padding-bottom: 12px;
+  margin-top: 14px;
+  padding: 0 0 10px;
 }
 
 .oa-lite-process-tab {
@@ -575,21 +902,28 @@ watch(
 
 .oa-lite-detail-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
-  gap: 24px;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 320px);
+  gap: 12px;
+  align-items: start;
 }
 
 .oa-lite-detail-card {
-  background: transparent;
-  border-radius: 0;
-  border: 0;
-  border-top: 1px solid var(--oa-shell-border);
-  padding: 18px 0 0;
+  background: var(--oa-shell-surface);
+  border-radius: 10px;
+  border: 1px solid var(--oa-shell-border);
+  padding: 20px;
   min-width: 0;
 }
 
 .oa-lite-detail-card-form {
   overflow: hidden;
+}
+
+.oa-lite-detail-grid > aside.oa-lite-detail-card {
+  position: sticky;
+  top: 0;
+  max-height: calc(100dvh - 330px);
+  overflow: auto;
 }
 
 .oa-lite-detail-card-title {
@@ -611,35 +945,30 @@ watch(
 }
 
 .oa-lite-operation-card {
-  margin-top: 4px;
-  padding-top: 20px;
-  border-top-color: color-mix(
-    in srgb,
-    var(--oa-shell-border-strong, var(--oa-shell-border)) 88%,
-    transparent
-  );
+  flex: none;
+  margin: 0 16px 16px;
+  border-radius: 10px;
+  padding: 0;
+  background: var(--oa-shell-surface);
 }
 
 .oa-lite-operation-bar {
   position: relative;
-
-  &::before {
-    content: '';
-    position: absolute;
-    inset: -2px 0 auto;
-    height: 1px;
-    background: color-mix(in srgb, var(--oa-shell-border) 64%, transparent);
-    opacity: 0.9;
-    pointer-events: none;
-  }
+  padding: 9px 14px;
 
   :deep(.ant-btn) {
-    border-radius: 0;
+    border-radius: 8px;
   }
 
   :deep(.oa-process-actions) {
     padding-top: 0;
     border-top: 0;
+    gap: 0;
+  }
+
+  :deep(.oa-process-actions-bar) {
+    flex-wrap: nowrap;
+    overflow-x: auto;
   }
 }
 
@@ -657,19 +986,31 @@ watch(
 
 .oa-lite-status-chip.tone-primary {
   background: transparent;
-  border-bottom-color: color-mix(in srgb, var(--oa-accent) 36%, var(--oa-shell-border));
+  border-bottom-color: color-mix(
+    in srgb,
+    var(--oa-accent) 36%,
+    var(--oa-shell-border)
+  );
   color: var(--oa-accent);
 }
 
 .oa-lite-status-chip.tone-success {
   background: transparent;
-  border-bottom-color: color-mix(in srgb, var(--oa-success) 42%, var(--oa-shell-border));
+  border-bottom-color: color-mix(
+    in srgb,
+    var(--oa-success) 42%,
+    var(--oa-shell-border)
+  );
   color: var(--oa-success-text);
 }
 
 .oa-lite-status-chip.tone-danger {
   background: transparent;
-  border-bottom-color: color-mix(in srgb, var(--oa-danger-text) 42%, var(--oa-shell-border));
+  border-bottom-color: color-mix(
+    in srgb,
+    var(--oa-danger-text) 42%,
+    var(--oa-shell-border)
+  );
   color: var(--oa-danger-text);
 }
 
@@ -688,7 +1029,143 @@ watch(
   border-radius: 0;
   background: transparent;
   color: var(--oa-accent);
-  border-color: color-mix(in srgb, var(--oa-accent) 34%, var(--oa-shell-border));
+  border-color: color-mix(
+    in srgb,
+    var(--oa-accent) 34%,
+    var(--oa-shell-border)
+  );
+}
+
+.oa-lite-normal-form-fields {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.oa-lite-normal-form-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 0 16px;
+  border-bottom: 1px solid var(--oa-shell-border);
+}
+
+.oa-lite-normal-form-field:first-child {
+  padding-top: 0;
+}
+
+.oa-lite-normal-form-field:last-of-type {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.oa-lite-normal-form-label {
+  color: var(--oa-ink-faint);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.oa-lite-normal-form-value {
+  min-width: 0;
+  max-width: 100%;
+  color: var(--oa-ink);
+  font-size: 14px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+
+.oa-lite-normal-form-text {
+  display: block;
+  white-space: pre-wrap;
+}
+
+.oa-lite-normal-attachment-list {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.oa-lite-normal-attachment {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 64px;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--oa-shell-border);
+  border-radius: 8px;
+  background: var(--oa-shell-surface-subtle);
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 0.18s ease, background-color 0.18s ease;
+}
+
+.oa-lite-normal-attachment:hover,
+.oa-lite-normal-attachment:focus-visible {
+  border-color: color-mix(
+    in srgb,
+    var(--oa-accent) 42%,
+    var(--oa-shell-border)
+  );
+  background: color-mix(
+    in srgb,
+    var(--oa-accent-soft) 62%,
+    var(--oa-shell-surface-subtle)
+  );
+  outline: none;
+}
+
+.oa-lite-normal-attachment-icon {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: var(--oa-accent-soft);
+  color: var(--oa-accent);
+  font-size: 20px;
+}
+
+.oa-lite-normal-attachment-main {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.oa-lite-normal-attachment-main strong,
+.oa-lite-normal-attachment-main span {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.oa-lite-normal-attachment-main strong {
+  color: var(--oa-ink);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.oa-lite-normal-attachment-main span {
+  color: var(--oa-ink-faint);
+  font-size: 12px;
+}
+
+.oa-lite-normal-attachment-action {
+  flex: none;
+  color: var(--oa-accent);
+  font-size: 12px;
 }
 
 .oa-lite-business-form {
@@ -712,19 +1189,17 @@ watch(
   }
 
   :deep(.oa-process-actions-bar .ant-btn) {
-    min-height: 40px;
-    border-color: color-mix(in srgb, var(--oa-shell-border) 92%, transparent);
-    background: color-mix(
-      in srgb,
-      var(--oa-shell-surface-muted) 78%,
-      var(--oa-shell-surface) 22%
-    );
+    min-width: 72px;
+    min-height: 48px;
+    border-color: transparent;
+    background: transparent;
     color: var(--oa-ink);
+    box-shadow: none;
   }
 
   :deep(.oa-process-actions-bar .ant-btn:hover),
   :deep(.oa-process-actions-bar .ant-btn:focus-visible) {
-    border-color: color-mix(in srgb, var(--oa-accent) 40%, var(--oa-shell-border));
+    border-color: transparent;
     color: var(--oa-accent);
     background: color-mix(
       in srgb,
@@ -734,9 +1209,9 @@ watch(
   }
 
   :deep(.oa-process-actions-bar .ant-btn.ant-btn-primary) {
-    background: var(--oa-accent);
-    border-color: var(--oa-accent);
-    color: var(--oa-accent-contrast);
+    background: color-mix(in srgb, var(--oa-accent) 9%, transparent);
+    border-color: transparent;
+    color: var(--oa-accent);
   }
 
   :deep(.oa-process-actions-bar .ant-btn.ant-btn-primary.ant-btn-dangerous) {
@@ -753,17 +1228,22 @@ watch(
     border-style: solid;
   }
 
-  :deep(.oa-process-actions-bar .ant-btn.ant-btn-primary.ant-btn-background-ghost) {
-    border-color: color-mix(in srgb, var(--oa-accent) 54%, var(--oa-shell-border));
-    color: var(--oa-accent);
-    background: color-mix(
+  :deep(
+    .oa-process-actions-bar .ant-btn.ant-btn-primary.ant-btn-background-ghost
+  ) {
+    border-color: color-mix(
       in srgb,
-      var(--oa-accent-soft) 18%,
-      transparent
+      var(--oa-accent) 54%,
+      var(--oa-shell-border)
     );
+    color: var(--oa-accent);
+    background: color-mix(in srgb, var(--oa-accent-soft) 18%, transparent);
   }
 
-  :deep(.oa-process-actions-bar .ant-btn.ant-btn-primary.ant-btn-background-ghost.ant-btn-dangerous) {
+  :deep(
+    .oa-process-actions-bar
+      .ant-btn.ant-btn-primary.ant-btn-background-ghost.ant-btn-dangerous
+  ) {
     border-color: color-mix(
       in srgb,
       var(--oa-danger-text) 52%,
@@ -775,7 +1255,11 @@ watch(
 
   :deep(.oa-process-actions-bar .ant-btn[disabled]),
   :deep(.oa-process-actions-bar .ant-btn[disabled]:hover) {
-    border-color: color-mix(in srgb, var(--oa-shell-border) 90%, transparent) !important;
+    border-color: color-mix(
+      in srgb,
+      var(--oa-shell-border) 90%,
+      transparent
+    ) !important;
     background: color-mix(
       in srgb,
       var(--oa-shell-surface-subtle) 88%,
@@ -790,9 +1274,9 @@ watch(
   }
 
   :deep(.bg-card) {
-    background: transparent !important;
-    border-top: 1px solid var(--oa-shell-border);
-    border-radius: 0;
+    background: var(--oa-shell-surface) !important;
+    border: 0;
+    border-radius: 8px;
   }
 
   :deep(.simple-process-model-container) {
@@ -901,7 +1385,9 @@ watch(
   :deep(.oa-process-actions .ant-input-affix-wrapper),
   :deep(.oa-process-actions .ant-select-selector),
   :deep(.oa-process-actions .ant-image),
-  :deep(.oa-process-actions .ant-btn:not(.ant-btn-primary):not(.ant-btn-dangerous)) {
+  :deep(
+    .oa-process-actions .ant-btn:not(.ant-btn-primary):not(.ant-btn-dangerous)
+  ) {
     border-color: color-mix(
       in srgb,
       var(--oa-shell-border-strong, var(--oa-shell-border)) 92%,
@@ -929,6 +1415,11 @@ watch(
 @media (max-width: 1200px) {
   .oa-lite-detail-grid {
     grid-template-columns: 1fr;
+  }
+
+  .oa-lite-detail-grid > aside.oa-lite-detail-card {
+    position: static;
+    max-height: none;
   }
 }
 

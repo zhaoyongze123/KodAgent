@@ -247,7 +247,6 @@ onMounted(async () => {
         <section class="oa-bpm-create-panel" v-loading="formLoading">
           <header class="oa-bpm-create-panel-head">
             <div>
-              <div class="oa-bpm-create-eyebrow">Request Form</div>
               <h3 class="oa-bpm-create-title">{{ getTitle }}</h3>
             </div>
             <Button type="default" @click="onBack">
@@ -267,12 +266,6 @@ onMounted(async () => {
       </Col>
       <Col :span="8">
         <aside class="oa-bpm-create-panel" v-loading="processTimeLineLoading">
-          <header class="oa-bpm-create-panel-head">
-            <div>
-              <div class="oa-bpm-create-eyebrow">Process Timeline</div>
-              <h3 class="oa-bpm-create-title">流程</h3>
-            </div>
-          </header>
           <ProcessInstanceTimeline
             :activity-nodes="activityNodes"
             :show-status-icon="false"

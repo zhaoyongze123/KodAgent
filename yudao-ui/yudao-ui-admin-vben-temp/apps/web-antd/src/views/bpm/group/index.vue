@@ -149,7 +149,6 @@ const [Grid, gridApi] = useVbenVxeGrid({
 .oa-group-page :deep(.vxe-table--body-wrapper) {
   min-height: calc(100vh - 456px);
   max-height: calc(100vh - 456px);
-  overflow: auto;
 }
 
 .oa-group-page :deep(.vxe-table--header-wrapper),

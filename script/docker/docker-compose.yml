@@ -48,6 +48,7 @@ services:
         --spring.redis.host=${REDIS_HOST:-redis}
         --yudao.kod-sso.enabled=${KOD_SSO_ENABLED:-false}
         --yudao.kod-sso.base-url=${KOD_SSO_BASE_URL:-http://replace-with-kodbox-host}
+        --yudao.kod-sso.server-base-url=${KOD_SSO_SERVER_BASE_URL:-}
         --yudao.kod-sso.app-name=${KOD_SSO_APP_NAME:-user:all}
         --yudao.kod-sso.redirect-uri=${KOD_SSO_REDIRECT_URI:-http://replace-with-frontend-host/#/auth/kod-sso-login?tenantId=1}
         --yudao.kod-sso.callback-base-url=${KOD_SSO_CALLBACK_BASE_URL:-http://replace-with-backend-host}

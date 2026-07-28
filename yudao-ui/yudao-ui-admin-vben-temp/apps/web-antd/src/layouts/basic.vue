@@ -25,10 +25,9 @@ import { useAccessStore, useUserStore } from '@vben/stores';
 import { formatDateTime } from '@vben/utils';
 import { useWebSocket } from '@vueuse/core';
 
-import { Modal, message } from 'ant-design-vue';
+import { message } from 'ant-design-vue';
 
 import {
-  extractNoticeId,
   getUnreadNotifyMessageCount,
   getUnreadNotifyMessageList,
   updateAllNotifyMessageRead,
@@ -48,6 +47,7 @@ import {
 } from '#/utils/kod-entry';
 import { isAdminUser } from '#/utils/oa-user';
 import LoginForm from '#/views/_core/authentication/login.vue';
+import { resolveNotificationPreview as presentNotificationPreview } from '#/views/oa-lite/notification-presenter';
 import NotifyMessageDetail from '#/views/system/notify/my/modules/detail.vue';
 
 defineOptions({ name: 'UnifiedOALiteLayout' });
@@ -74,8 +74,6 @@ const BPM_MANAGEMENT_MENU_PATHS = new Set([
   '/bpm/manager/definition',
   '/bpm/process-instance/manager',
   '/bpm/group',
-  '/bpm/process-expression',
-  '/bpm/process-listener',
 ]);
 
 const BPM_MANAGEMENT_MENU_ITEMS: MenuRecordRaw[] = [
@@ -107,14 +105,6 @@ const BPM_MANAGEMENT_MENU_ITEMS: MenuRecordRaw[] = [
     name: '用户组',
     path: '/bpm/group',
   },
-  {
-    name: '流程表达式',
-    path: '/bpm/process-expression',
-  },
-  {
-    name: '流程监听器',
-    path: '/bpm/process-listener',
-  },
 ];
 
 const SYSTEM_MANAGEMENT_MENU_PATHS = new Set([
@@ -123,11 +113,6 @@ const SYSTEM_MANAGEMENT_MENU_PATHS = new Set([
   '/system/dept',
   '/system/post',
   '/system/notice',
-  '/system/party-file',
-  '/system/personal-schedule',
-  '/system/meeting-room',
-  '/system/meeting-booking',
-  '/system/meeting-booking/schedule',
 ]);
 
 const SYSTEM_MANAGEMENT_MENU_ITEMS: MenuRecordRaw[] = [
@@ -151,43 +136,7 @@ const SYSTEM_MANAGEMENT_MENU_ITEMS: MenuRecordRaw[] = [
     name: '通知公告',
     path: '/system/notice',
   },
-  {
-    name: '党务文件',
-    path: '/system/party-file',
-  },
-  {
-    name: '个人日程',
-    path: '/system/personal-schedule',
-  },
-  {
-    name: '会议室管理',
-    path: '/system/meeting-room',
-  },
-  {
-    name: '会议室预定',
-    path: '/system/meeting-booking',
-  },
-  {
-    name: '会议室排期',
-    path: '/system/meeting-booking/schedule',
-  },
 ];
-
-function stripHtmlContent(value?: string) {
-  if (!value) {
-    return '';
-  }
-  return value
-    .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
 
 function resolveNotificationPreview(
   item: Pick<
@@ -195,13 +144,7 @@ function resolveNotificationPreview(
     'templateCode' | 'templateContent' | 'templateParams'
   >,
 ) {
-  const noticeId = extractNoticeId(item);
-  if (!noticeId) {
-    return stripHtmlContent(item.templateContent) || '点击查看详情';
-  }
-  const content =
-    typeof item.templateParams?.content === 'string' ? item.templateParams.content : '';
-  return stripHtmlContent(content || item.templateContent) || '点击查看公告详情';
+  return presentNotificationPreview(item);
 }
 
 function flattenMenus(
@@ -233,7 +176,6 @@ const unreadCount = ref(0);
 const tenants = ref<SystemTenantApi.Tenant[]>([]);
 const notificationTimer = ref<null | ReturnType<typeof setInterval>>(null);
 const themeMode = ref<'dark' | 'light'>('light');
-const settingsOpen = ref(false);
 const webSocketServer = ref('');
 const sidebarWidth = ref(OA_LITE_SIDEBAR_DEFAULT_WIDTH);
 const isSidebarResizing = ref(false);
@@ -339,11 +281,18 @@ const isOaLiteReturnRoute = computed(() => {
   return returnTo === 'oa-lite';
 });
 const isOARequestRoute = computed(() => route.path.startsWith('/bpm/oa/'));
+const isOaLiteProcessInstanceCreateRoute = computed(
+  () =>
+    route.name === 'BpmProcessInstanceCreate' &&
+    (isOaLiteReturnRoute.value ||
+      isApprovalEntryQuery(route.query) ||
+      currentActivePath.value === '/oa-lite'),
+);
 const isWorkbenchCreateRoute = computed(
   () =>
     route.path === '/oa-lite' ||
     isOARequestRoute.value ||
-    (route.path === '/bpm/process-instance/create' && isOaLiteReturnRoute.value),
+    isOaLiteProcessInstanceCreateRoute.value,
 );
 const isWorkbenchNotificationRoute = computed(
   () => route.path.startsWith('/oa-lite/notifications'),
@@ -356,6 +305,9 @@ const isWorkbenchRoute = computed(
     isWorkbenchCreateRoute.value ||
     isWorkbenchCenterRoute.value ||
     isWorkbenchNotificationRoute.value,
+);
+const isManagementRoute = computed(
+  () => route.path.startsWith('/bpm') || route.path.startsWith('/system'),
 );
 
 const currentMatchedMenu = computed(() => {
@@ -405,7 +357,7 @@ const currentRootMenuPath = computed(() => {
   if (isOARequestRoute.value) {
     return '';
   }
-  if (route.path === '/bpm/process-instance/create' && isOaLiteReturnRoute.value) {
+  if (isOaLiteProcessInstanceCreateRoute.value) {
     return '';
   }
   if (route.path === '/bpm' || route.path.startsWith('/bpm/')) {
@@ -490,7 +442,17 @@ function filterSidebarMenusByRoot(
     const standalonePathSet = getStandaloneCenterMenuPathSet(
       standaloneRootMenuPath,
     );
-    const standaloneMenus = getStandaloneCenterMenuItems(standaloneRootMenuPath);
+    const standaloneMenus = getStandaloneCenterMenuItems(
+      standaloneRootMenuPath,
+    ).filter((menu) => {
+      if (menu.path === '/meeting-room/manage') {
+        return hasAccessByCodes(['system:meeting-room:query']);
+      }
+      if (menu.path === '/party-file/manage') {
+        return hasAccessByCodes(['system:party-file:query']);
+      }
+      return true;
+    });
     const dynamicStandaloneMenus = flattenedMenus.filter((menu) =>
       standalonePathSet.has(menu.path || ''),
     );
@@ -561,10 +523,6 @@ const activeTopNavKey = computed(() => {
   }
   return currentRootMenuPath.value;
 });
-const isSystemRootActive = computed(
-  () => currentRootMenuPath.value === systemRootMenu.value?.path,
-);
-
 const contentStyle = computed<CSSProperties>(() => ({
   '--vben-content-height': isMeetingOrScheduleEntryMode.value
     ? '100vh'
@@ -582,9 +540,13 @@ function handleTopNavSelect(path: string) {
   }
   const shouldKeepApprovalEntry =
     isApprovalEntryMode.value && path.startsWith('/oa-lite');
+  const nextQuery = shouldKeepApprovalEntry ? { ...route.query, entry: KOD_ENTRY_APPROVAL } : {};
+  if (path !== '/oa-lite' && 'forceCreate' in nextQuery) {
+    delete nextQuery.forceCreate;
+  }
   router.push({
     path,
-    query: shouldKeepApprovalEntry ? { ...route.query, entry: KOD_ENTRY_APPROVAL } : {},
+    query: nextQuery,
   });
 }
 
@@ -724,10 +686,6 @@ function handleThemeToggle() {
       semiDarkSidebarSub: false,
     },
   });
-}
-
-function handleSystemSettings() {
-  settingsOpen.value = true;
 }
 
 async function handleLogout() {
@@ -897,15 +855,6 @@ watch(
   },
 );
 
-watch(
-  settingsOpen,
-  (open) => {
-    if (!open) {
-      return;
-    }
-  },
-  { immediate: false },
-);
 </script>
 
 <template>
@@ -987,14 +936,6 @@ watch(
             @read="handleNotificationRead"
             @view-all="handleNotificationViewAll"
           />
-          <button
-            class="oa-lite-unified-icon-button"
-            :class="{ active: isSystemRootActive || settingsOpen }"
-            aria-label="打开设置"
-            @click="handleSystemSettings"
-          >
-            <IconifyIcon icon="solar:settings-outline" />
-          </button>
           <UserDropdown
             :avatar="avatar"
             :description="userStore.userInfo?.email"
@@ -1013,6 +954,7 @@ watch(
         'is-standalone-entry': isMeetingOrScheduleEntryMode,
         'is-workbench': isWorkbenchRoute,
         'is-workbench-center': isWorkbenchCenterRoute,
+        'is-management': isManagementRoute,
       }"
     >
       <aside
@@ -1050,12 +992,18 @@ watch(
 
       <section
         class="oa-lite-unified-content"
-        :class="{ 'is-workbench': isWorkbenchRoute }"
+        :class="{
+          'is-workbench': isWorkbenchRoute,
+          'is-management': isManagementRoute,
+        }"
         :style="contentStyle"
       >
         <div
           class="oa-lite-unified-content-shell"
-          :class="{ 'is-workbench': isWorkbenchRoute }"
+          :class="{
+            'is-workbench': isWorkbenchRoute,
+            'is-management': isManagementRoute,
+          }"
         >
           <RouterView v-slot="{ Component }">
             <component :is="Component" v-if="Component" />
@@ -1070,83 +1018,6 @@ watch(
     >
       <LoginForm />
     </AuthenticationLoginExpiredModal>
-
-    <Modal
-      v-model:open="settingsOpen"
-      :footer="null"
-      :width="1080"
-      centered
-      title="工作台设置"
-      wrap-class-name="oa-lite-settings-modal"
-    >
-      <div class="oa-lite-settings-sheet">
-        <aside class="oa-lite-settings-sidebar">
-          <div class="oa-lite-settings-sidebar-head">
-            <h3>工作台设置</h3>
-            <span class="oa-lite-settings-sidebar-tag">界面</span>
-          </div>
-        </aside>
-
-        <section class="oa-lite-settings-content">
-          <header class="oa-lite-settings-content-head">
-            <div class="oa-lite-settings-content-title">界面控制台</div>
-          </header>
-
-          <section class="oa-lite-settings-section">
-            <div class="oa-lite-settings-section-head">
-              <h4>主题模式</h4>
-            </div>
-            <div class="oa-lite-settings-split-choice">
-              <button
-                class="oa-lite-settings-choice"
-                :class="{ active: themeMode === 'light' }"
-                type="button"
-                @click="themeMode !== 'light' && handleThemeToggle()"
-              >
-                <span class="oa-lite-settings-choice-top">
-                  <IconifyIcon icon="solar:sun-2-outline" />
-                  <span class="oa-lite-settings-choice-title">浅色</span>
-                </span>
-                <span v-if="themeMode === 'light'" class="oa-lite-settings-choice-state">
-                  当前
-                </span>
-              </button>
-              <button
-                class="oa-lite-settings-choice"
-                :class="{ active: themeMode === 'dark' }"
-                type="button"
-                @click="themeMode !== 'dark' && handleThemeToggle()"
-              >
-                <span class="oa-lite-settings-choice-top">
-                  <IconifyIcon icon="solar:moon-stars-outline" />
-                  <span class="oa-lite-settings-choice-title">暗色</span>
-                </span>
-                <span v-if="themeMode === 'dark'" class="oa-lite-settings-choice-state">
-                  当前
-                </span>
-              </button>
-            </div>
-          </section>
-
-          <section class="oa-lite-settings-section">
-            <div class="oa-lite-settings-section-head">
-              <h4>工作区操作</h4>
-            </div>
-            <div class="oa-lite-settings-list">
-              <button class="oa-lite-settings-row" type="button" @click="handleRefresh">
-                <span class="oa-lite-settings-row-main">
-                  <IconifyIcon icon="solar:refresh-outline" />
-                  <span class="oa-lite-settings-row-copy">
-                    <span class="oa-lite-settings-row-title">刷新当前界面</span>
-                  </span>
-                </span>
-                <span class="oa-lite-settings-row-meta">执行</span>
-              </button>
-            </div>
-          </section>
-        </section>
-      </div>
-    </Modal>
 
     <LockScreen
       v-if="accessStore.isLockScreen"
@@ -1340,6 +1211,53 @@ watch(
 .oa-lite-unified-main.is-workbench-center {
   padding-right: 0;
   padding-left: 0;
+  padding-bottom: 0;
+  flex: 1;
+  height: auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.oa-lite-unified-layout:has(.oa-lite-unified-main.is-workbench-center) {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Management pages own the viewport below the top bar. Keep this height chain
+ * explicit so the page shell and its table can consume the remaining space
+ * instead of collapsing to their content height. */
+.oa-lite-unified-layout:has(.oa-lite-unified-main.is-management) {
+  display: flex;
+  height: 100dvh;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.oa-lite-unified-main.is-management {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.oa-lite-unified-main.is-management .oa-lite-unified-sidebar,
+.oa-lite-unified-main.is-management .oa-lite-unified-sidebar-card,
+.oa-lite-unified-main.is-management .oa-lite-unified-resizer,
+.oa-lite-unified-main.is-management .oa-lite-unified-content,
+.oa-lite-unified-main.is-management .oa-lite-unified-content-shell {
+  height: 100%;
+  min-height: 0;
+}
+
+.oa-lite-unified-layout:has(.oa-lite-unified-main.is-workbench-center)
+  .oa-lite-unified-content,
+.oa-lite-unified-layout:has(.oa-lite-unified-main.is-workbench-center)
+  .oa-lite-unified-content-shell {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .oa-lite-unified-sidebar {

@@ -183,13 +183,6 @@ const setSimpleModelNodeTaskStatus = (
 </script>
 <template>
   <div v-loading="loading" class="oa-process-viewer-shell">
-    <div class="oa-process-viewer-head">
-      <div>
-        <div class="oa-process-viewer-eyebrow">Process Map</div>
-        <div class="oa-process-viewer-title">流程节点视图</div>
-      </div>
-      <div class="oa-process-viewer-caption">按审批状态高亮当前流程节点与连线</div>
-    </div>
     <div class="oa-process-viewer-body">
       <SimpleProcessViewer
         :flow-node="simpleModel"

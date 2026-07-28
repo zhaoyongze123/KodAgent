@@ -82,6 +82,9 @@ public interface ErrorCodeConstants {
 
     // ========== 通知公告 1-002-008-000 ==========
     ErrorCode NOTICE_NOT_FOUND = new ErrorCode(1_002_008_001, "当前通知公告不存在");
+    ErrorCode NOTICE_TARGET_ID_REQUIRED = new ErrorCode(1_002_008_002, "公告发布对象编号不能为空");
+    ErrorCode NOTICE_TARGET_TYPE_INVALID = new ErrorCode(1_002_008_003, "公告发布对象类型不合法");
+    ErrorCode NOTICE_TARGET_ALL_CONFLICT = new ErrorCode(1_002_008_004, "选择全员发布时不能再追加其他发布对象");
 
     // ========== 党务文件 1-002-009-000 ==========
     ErrorCode PARTY_FILE_CATEGORY_NOT_FOUND = new ErrorCode(1_002_009_001, "党务文件分类不存在");

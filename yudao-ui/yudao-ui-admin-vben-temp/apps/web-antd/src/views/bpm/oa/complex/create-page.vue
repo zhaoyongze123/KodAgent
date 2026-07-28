@@ -19,7 +19,7 @@ import { getApprovalDetail } from '#/api/bpm/processInstance';
 import { getSimpleDeptList } from '#/api/system/dept';
 import { getSimpleUserList } from '#/api/system/user';
 import { getUserProfile } from '#/api/system/user/profile';
-import { FileUpload } from '#/components/upload';
+import { KodFileUpload } from '#/components/upload';
 import { router } from '#/router';
 import { buildApprovalEntryBackRoute } from '#/utils/kod-entry';
 import ProcessInstanceTimeline from '#/views/bpm/processInstance/detail/modules/time-line.vue';
@@ -268,7 +268,6 @@ onMounted(async () => {
         <section class="oa-bpm-complex-panel">
           <header class="oa-bpm-complex-panel-head">
             <div>
-              <div class="oa-bpm-complex-eyebrow">Request Form</div>
               <h3 class="oa-bpm-complex-title">
                 {{ route.query.id ? `重新发起${config.title}` : `创建${config.title}` }}
               </h3>
@@ -330,7 +329,7 @@ onMounted(async () => {
                 v-else-if="field.type === 'switch'"
                 v-model:checked="formState[field.field]"
               />
-              <FileUpload
+              <KodFileUpload
                 v-else-if="field.type === 'files'"
                 v-model:model-value="formState[field.field]"
                 :max-number="10"
@@ -349,12 +348,6 @@ onMounted(async () => {
       </Col>
       <Col :span="8">
         <aside class="oa-bpm-complex-panel">
-          <header class="oa-bpm-complex-panel-head">
-            <div>
-              <div class="oa-bpm-complex-eyebrow">Process Timeline</div>
-              <h3 class="oa-bpm-complex-title">流程预览</h3>
-            </div>
-          </header>
           <ProcessInstanceTimeline
             :activity-nodes="activityNodes"
             :show-status-icon="false"

@@ -75,7 +75,7 @@ public class PartyFileKodSourceController {
 
     @GetMapping("/simple-list")
     @Operation(summary = "获取启用的可道云目录来源")
-    @PreAuthorize("@ss.hasPermission('system:party-file:query')")
+    @PreAuthorize("@ss.hasAnyPermissions('system:party-file:query', 'bpm:oa-leave:create', 'bpm:process-instance:query')")
     public CommonResult<List<PartyFileKodSourceRespVO>> simpleList() {
         return success(CollectionUtils.convertList(partyFileKodSourceService.getSimpleList(), this::buildRespVO));
     }
@@ -83,7 +83,7 @@ public class PartyFileKodSourceController {
     @GetMapping("/folder-tree")
     @Operation(summary = "获取可道云目录树")
     @Parameter(name = "id", description = "来源编号", required = true)
-    @PreAuthorize("@ss.hasPermission('system:party-file:query')")
+    @PreAuthorize("@ss.hasAnyPermissions('system:party-file:query', 'bpm:oa-leave:create', 'bpm:process-instance:query')")
     public CommonResult<List<PartyFileKodFolderRespVO>> folderTree(@RequestParam("id") Long id) {
         return success(partyFileKodSourceService.getFolderTree(id));
     }

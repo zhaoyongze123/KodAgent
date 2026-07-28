@@ -139,7 +139,7 @@ const [Grid, gridApi] = useVbenVxeGrid({
   gridOptions: {
     columns: useGridColumns(),
     keepSource: true,
-    showFooter: true,
+    showFooter: false,
     border: true,
     proxyConfig: {
       ajax: {
@@ -234,5 +234,22 @@ defineExpose({
 
 .oa-process-records-form-button {
   margin-left: 0 !important;
+}
+
+/* 表头、表体、底部由 VXE 分成多个滚动容器，只保留表体底部的横向滚动条。 */
+.oa-process-records :deep(.vxe-table--header-wrapper),
+.oa-process-records :deep(.vxe-table--footer-wrapper),
+.oa-process-records :deep(.vxe-table--fixed-left-body-wrapper),
+.oa-process-records :deep(.vxe-table--fixed-right-body-wrapper) {
+  overflow-x: hidden !important;
+  scrollbar-width: none;
+}
+
+.oa-process-records :deep(.vxe-table--header-wrapper::-webkit-scrollbar),
+.oa-process-records :deep(.vxe-table--footer-wrapper::-webkit-scrollbar),
+.oa-process-records :deep(.vxe-table--fixed-left-body-wrapper::-webkit-scrollbar),
+.oa-process-records :deep(.vxe-table--fixed-right-body-wrapper::-webkit-scrollbar) {
+  display: none;
+  height: 0;
 }
 </style>

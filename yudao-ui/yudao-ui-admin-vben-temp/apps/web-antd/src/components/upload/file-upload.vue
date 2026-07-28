@@ -17,6 +17,8 @@ import { Button, message, Upload } from 'ant-design-vue';
 import { UploadResultStatus } from './typing';
 import { useUpload, useUploadType } from './use-upload';
 
+import { normalizeOaAssetUrl } from '#/utils';
+
 defineOptions({ name: 'FileUpload', inheritAttrs: false });
 
 const props = withDefaults(defineProps<FileUploadProps>(), {
@@ -75,6 +77,29 @@ function normalizeInputValue(value: unknown): Array<Record<string, any> | string
   return Array.isArray(value) ? (value as Array<Record<string, any> | string>) : [value as Record<string, any> | string];
 }
 
+function getFileName(rawValue: unknown) {
+  const raw = String(rawValue || '');
+  const withoutQuery = raw.split(/[?#]/, 1)[0] || raw;
+  const lastPart = withoutQuery.slice(withoutQuery.lastIndexOf('/') + 1);
+  try {
+    return decodeURIComponent(lastPart) || '未命名文件';
+  } catch {
+    return lastPart || '未命名文件';
+  }
+}
+
+function normalizeFileItem(item: Record<string, any>, index: number) {
+  const url = normalizeOaAssetUrl(
+    String(item.url || item.fileUrl || item.response?.url || ''),
+  );
+  return {
+    ...item,
+    uid: item.uid || `${-index}`,
+    name: item.name || getFileName(url),
+    url,
+  };
+}
+
 watch(
   currentValue,
   (v) => {
@@ -89,12 +114,12 @@ watch(
           if (item && isString(item)) {
             return {
               uid: `${-i}`,
-              name: item.slice(Math.max(0, item.lastIndexOf('/') + 1)),
+              name: getFileName(item),
               status: UploadResultStatus.DONE,
-              url: item,
+              url: normalizeOaAssetUrl(item),
             };
           } else if (item && isObject(item)) {
-            return item;
+            return normalizeFileItem(item as Record<string, any>, i);
           }
           return null;
         })
@@ -143,6 +168,12 @@ async function handleRemove(file: UploadFile) {
 
 /** 处理文件预览 */
 function handlePreview(file: UploadFile) {
+  const url = normalizeOaAssetUrl(
+    String(file.url || (file.response as any)?.url || ''),
+  );
+  if (url && typeof window !== 'undefined') {
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
   emit('preview', file);
 }
 
