@@ -107,3 +107,9 @@ logs/
 
 # Local database files
 *.db
+
+# Documentation files: keep README files and runtime skill contracts
+*.md
+!README.md
+!**/README.md
+!**/SKILL.md

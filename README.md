@@ -174,7 +174,26 @@ flowchart LR
 mvn clean package -DskipTests
 ```
 
-按项目实际环境准备数据库、Redis 与应用配置后，启动 `yudao-server`。
+本地 Docker Compose 默认将依赖映射为：MySQL `13306`、Redis `16379`。
+`application-local.yaml` 已通过环境变量读取这两个端口，直接启动即可：
+
+```bash
+./scripts/migrate-agent-event-schema.sh
+
+OA_AGENT_API_KEY=本地开发密钥 \\
+OA_AGENT_IDENTITY_SECRET=至少 32 位的本地身份票据密钥 \\
+OA_AGENT_LEGACY_PRINCIPAL_ENABLED=true \\
+java -jar yudao-server/target/yudao-server.jar
+```
+
+如需覆盖本地依赖地址，可设置：
+
+```bash
+OA_MYSQL_HOST=127.0.0.1
+OA_MYSQL_PORT=13306
+OA_REDIS_HOST=127.0.0.1
+OA_REDIS_PORT=16379
+```
 
 ### 2. 前端启动
 
