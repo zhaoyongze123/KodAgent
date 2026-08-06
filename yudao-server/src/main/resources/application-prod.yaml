@@ -4,12 +4,14 @@ server:
 yudao:
   security:
     permit-all-urls:
+      - /agent/tools/**
       - /admin-api/system/auth/kod-sso/start
       - /admin-api/system/auth/kod-sso/callback
       - /admin-api/system/auth/kod-sso/direct-login
       - /admin-api/system/auth/kod-sso/exchange
   tenant:
     ignore-urls:
+      - /agent/tools/**
       - /admin-api/system/auth/kod-sso/start
       - /admin-api/system/auth/kod-sso/callback
       - /admin-api/system/auth/kod-sso/direct-login

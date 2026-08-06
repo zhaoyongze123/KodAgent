@@ -7,7 +7,12 @@ import cn.iocoder.yudao.module.system.controller.admin.notice.vo.NoticePageReqVO
 import cn.iocoder.yudao.module.system.controller.admin.notice.vo.NoticeSaveReqVO;
 import cn.iocoder.yudao.module.system.dal.dataobject.notice.NoticeDO;
 import cn.iocoder.yudao.module.system.dal.mysql.notice.NoticeMapper;
+import cn.iocoder.yudao.module.system.service.dept.DeptService;
+import cn.iocoder.yudao.module.system.service.permission.PermissionService;
+import cn.iocoder.yudao.module.system.service.permission.RoleService;
+import cn.iocoder.yudao.module.system.service.user.AdminUserService;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 
 import javax.annotation.Resource;
@@ -28,6 +33,19 @@ class NoticeServiceImplTest extends BaseDbUnitTest {
 
     @Resource
     private NoticeMapper noticeMapper;
+
+    // NoticeServiceImpl now owns audience resolution and therefore depends on
+    // these domain services.  This focused DB test imports only the notice
+    // service, so provide explicit test doubles instead of relying on beans
+    // from the full system application context.
+    @MockBean
+    private AdminUserService adminUserService;
+    @MockBean
+    private DeptService deptService;
+    @MockBean
+    private RoleService roleService;
+    @MockBean
+    private PermissionService permissionService;
 
     @Test
     public void testGetNoticePage_success() {
@@ -72,14 +90,16 @@ class NoticeServiceImplTest extends BaseDbUnitTest {
     public void testCreateNotice_success() {
         // 准备参数
         NoticeSaveReqVO reqVO = randomPojo(NoticeSaveReqVO.class)
-                .setId(null); // 避免 id 被赋值
+                .setId(null)
+                .setTargets(null)
+                .setPublishTarget("全体后台用户"); // 避免 id 和随机发布对象影响基础 CRUD 测试
 
         // 调用
         Long noticeId = noticeService.createNotice(reqVO);
         // 校验插入属性是否正确
         assertNotNull(noticeId);
         NoticeDO notice = noticeMapper.selectById(noticeId);
-        assertPojoEquals(reqVO, notice, "id");
+        assertPojoEquals(reqVO, notice, "id", "publishTarget");
     }
 
     @Test
@@ -89,13 +109,17 @@ class NoticeServiceImplTest extends BaseDbUnitTest {
         noticeMapper.insert(dbNoticeDO);
 
         // 准备更新参数
-        NoticeSaveReqVO reqVO = randomPojo(NoticeSaveReqVO.class, o -> o.setId(dbNoticeDO.getId()));
+        NoticeSaveReqVO reqVO = randomPojo(NoticeSaveReqVO.class, o -> {
+            o.setId(dbNoticeDO.getId());
+            o.setTargets(null);
+            o.setPublishTarget("全体后台用户");
+        });
 
         // 更新
         noticeService.updateNotice(reqVO);
         // 检验是否更新成功
         NoticeDO notice = noticeMapper.selectById(reqVO.getId());
-        assertPojoEquals(reqVO, notice);
+        assertPojoEquals(reqVO, notice, "publishTarget");
     }
 
     @Test

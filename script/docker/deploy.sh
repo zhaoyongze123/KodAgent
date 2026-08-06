@@ -14,7 +14,7 @@ DOCKER_PLATFORM="${DOCKER_PLATFORM:-linux/amd64}"
 LOCAL_DB_HOST="${LOCAL_DB_HOST:-127.0.0.1}"
 LOCAL_DB_PORT="${LOCAL_DB_PORT:-3306}"
 LOCAL_DB_USER="${LOCAL_DB_USER:-root}"
-LOCAL_DB_PASSWORD="${LOCAL_DB_PASSWORD:-123456}"
+LOCAL_DB_PASSWORD="${LOCAL_DB_PASSWORD:-}"
 REMOTE_DB_CONTAINER="${REMOTE_DB_CONTAINER:-ruoyi-mysql}"
 DB_DUMP_GZ="${DB_DUMP_GZ:-ruoyi-vue-pro.sql.gz}"
 IMPORT_DATABASE="${IMPORT_DATABASE:-false}"
@@ -35,8 +35,36 @@ cleanup_local_artifacts() {
   fi
 }
 
+remove_old_local_repo_tags() {
+  local current_image="$1"
+  local current_repo="${current_image%%:*}"
+  local current_tag="${current_image#*:}"
+  local image_refs
+
+  image_refs="$(
+    docker images --format '{{.Repository}}:{{.Tag}}' "${current_repo}" 2>/dev/null \
+      | awk -F: -v repo="${current_repo}" -v keep_tag="${current_tag}" '
+          $1 == repo && $2 != "<none>" && $2 != keep_tag {
+            print $0
+          }
+        '
+  )"
+
+  if [ -z "${image_refs}" ]; then
+    return
+  fi
+
+  while IFS= read -r image_ref; do
+    [ -n "${image_ref}" ] || continue
+    echo "[步骤] 删除本地旧镜像标签 ${image_ref}"
+    docker rmi "${image_ref}" >/dev/null 2>&1 || true
+  done <<<"${image_refs}"
+}
+
 cleanup_local_docker_artifacts() {
   if [ "${CLEAN_LOCAL_DOCKER_CACHE}" = "true" ]; then
+    remove_old_local_repo_tags "${SERVER_IMAGE}"
+    remove_old_local_repo_tags "${ADMIN_IMAGE}"
     docker image prune -f >/dev/null 2>&1 || true
     docker builder prune -f >/dev/null 2>&1 || true
   fi
@@ -75,6 +103,19 @@ validate_value() {
 validate_env() {
   validate_value SPRING_PROFILES_ACTIVE
   validate_value FRONTEND_ENV_FILE
+  validate_value MYSQL_ROOT_PASSWORD
+  validate_value MASTER_DATASOURCE_PASSWORD
+  validate_value SLAVE_DATASOURCE_PASSWORD
+  validate_value OA_AGENT_API_KEY
+  validate_value OA_AGENT_IDENTITY_SECRET
+  validate_value AGENT_MODEL_ENCRYPTION_KEY
+  validate_value AGENT_EVENT_POSTGRES_URL
+  validate_value AGENT_EVENT_POSTGRES_USERNAME
+  validate_value AGENT_EVENT_POSTGRES_PASSWORD
+  validate_value LANGGRAPH_POSTGRES_PASSWORD
+  if [ "${IMPORT_DATABASE}" = "true" ]; then
+    validate_value LOCAL_DB_PASSWORD
+  fi
   if [ ! -f "${ROOT_DIR}/${FRONTEND_ENV_FILE}" ]; then
     echo "[错误] 前端环境文件不存在: ${ROOT_DIR}/${FRONTEND_ENV_FILE}" >&2
     exit 1
@@ -145,6 +186,14 @@ upload_artifacts() {
   copy_to_remote "${ROOT_DIR}/${ADMIN_TAR}" "/tmp/${ADMIN_TAR}"
   copy_to_remote "${ROOT_DIR}/script/docker/remote-reload-app.sh" "/tmp/remote-reload-app.sh"
   copy_to_remote "${ROOT_DIR}/script/docker/docker-compose.yml" "${REMOTE_DEPLOY_DIR}/docker-compose.yml"
+  copy_to_remote "${ROOT_DIR}/sql/postgresql/agent_run_event.sql" "${REMOTE_DEPLOY_DIR}/agent_run_event.sql"
+  copy_to_remote "${ROOT_DIR}/sql/postgresql/agent_runtime.sql" "${REMOTE_DEPLOY_DIR}/agent_runtime.sql"
+  copy_to_remote "${ROOT_DIR}/sql/postgresql/agent_model_config.sql" "${REMOTE_DEPLOY_DIR}/agent_model_config.sql"
+  copy_to_remote "${ROOT_DIR}/sql/postgresql/party_knowledge.sql" "${REMOTE_DEPLOY_DIR}/party_knowledge.sql"
+  copy_to_remote "${ROOT_DIR}/sql/postgresql/party_knowledge_vector.sql" "${REMOTE_DEPLOY_DIR}/party_knowledge_vector.sql"
+  copy_to_remote "${ROOT_DIR}/sql/mysql/system-personal-schedule-init.sql" "${REMOTE_DEPLOY_DIR}/system-personal-schedule-init.sql"
+  copy_to_remote "${ROOT_DIR}/sql/mysql/agent_personal_schedule_effect.sql" "${REMOTE_DEPLOY_DIR}/agent_personal_schedule_effect.sql"
+  copy_to_remote "${ROOT_DIR}/sql/mysql/party-file-kod-schema-v2.sql" "${REMOTE_DEPLOY_DIR}/party-file-kod-schema-v2.sql"
   copy_to_remote "${ENV_FILE}" "/tmp/${REMOTE_ENV_BASENAME}"
   if [ "${IMPORT_DATABASE}" = "true" ]; then
     copy_to_remote "${ROOT_DIR}/${DB_DUMP_GZ}" "/tmp/${DB_DUMP_GZ}"
@@ -166,10 +215,18 @@ set -a
 source "/tmp/${REMOTE_ENV_BASENAME}"
 set +a
 
-cd "${REMOTE_DEPLOY_DIR}"
-docker compose up -d mysql redis
+  cd "${REMOTE_DEPLOY_DIR}"
+  export AGENT_EVENT_SCHEMA_SQL_HOST_PATH="${AGENT_EVENT_SCHEMA_SQL_HOST_PATH:-./agent_run_event.sql}"
+  export AGENT_RUNTIME_SCHEMA_SQL_HOST_PATH="${AGENT_RUNTIME_SCHEMA_SQL_HOST_PATH:-./agent_runtime.sql}"
+  export AGENT_MODEL_SCHEMA_SQL_HOST_PATH="${AGENT_MODEL_SCHEMA_SQL_HOST_PATH:-./agent_model_config.sql}"
+  export AGENT_PARTY_KNOWLEDGE_SCHEMA_SQL_HOST_PATH="${AGENT_PARTY_KNOWLEDGE_SCHEMA_SQL_HOST_PATH:-./party_knowledge.sql}"
+  export AGENT_PARTY_KNOWLEDGE_VECTOR_SCHEMA_SQL_HOST_PATH="${AGENT_PARTY_KNOWLEDGE_VECTOR_SCHEMA_SQL_HOST_PATH:-./party_knowledge_vector.sql}"
+  export OA_PERSONAL_SCHEDULE_SCHEMA_SQL_HOST_PATH="${OA_PERSONAL_SCHEDULE_SCHEMA_SQL_HOST_PATH:-./system-personal-schedule-init.sql}"
+  export OA_PERSONAL_SCHEDULE_EFFECT_SCHEMA_SQL_HOST_PATH="${OA_PERSONAL_SCHEDULE_EFFECT_SCHEMA_SQL_HOST_PATH:-./agent_personal_schedule_effect.sql}"
+  export OA_PARTY_FILE_SCHEMA_SQL_HOST_PATH="${OA_PARTY_FILE_SCHEMA_SQL_HOST_PATH:-./party-file-kod-schema-v2.sql}"
+docker compose up -d mysql redis langgraph-postgres
 for i in $(seq 1 60); do
-  if docker exec "${REMOTE_DB_CONTAINER}" mysqladmin ping -uroot -p123456 --silent >/dev/null 2>&1; then
+  if docker exec "${REMOTE_DB_CONTAINER}" mysqladmin ping -u"${MASTER_DATASOURCE_USERNAME:-root}" -p"${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set}" --silent >/dev/null 2>&1; then
     break
   fi
   sleep 2
@@ -178,8 +235,10 @@ for i in $(seq 1 60); do
     exit 1
   fi
 done
-printf 'DROP DATABASE IF EXISTS `%s`; CREATE DATABASE `%s` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;' "${DB_NAME}" "${DB_NAME}" | docker exec -i "${REMOTE_DB_CONTAINER}" mysql -uroot -p123456
-gzip -dc "/tmp/${DB_DUMP_GZ}" | docker exec -i "${REMOTE_DB_CONTAINER}" mysql -uroot -p123456 "${DB_NAME}"
+printf 'DROP DATABASE IF EXISTS `%s`; CREATE DATABASE `%s` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;' "${DB_NAME}" "${DB_NAME}" | docker exec -i "${REMOTE_DB_CONTAINER}" mysql -u"${MASTER_DATASOURCE_USERNAME:-root}" -p"${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set}"
+gzip -dc "/tmp/${DB_DUMP_GZ}" | docker exec -i "${REMOTE_DB_CONTAINER}" mysql -u"${MASTER_DATASOURCE_USERNAME:-root}" -p"${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD must be set}" "${DB_NAME}"
+docker compose run --rm oa-mysql-schema-migrate
+docker compose run --rm agent-event-schema-migrate
 docker compose stop server admin || true
 docker compose rm -sf server admin || true
 docker load -i "/tmp/${SERVER_TAR}"
@@ -199,7 +258,7 @@ print_summary() {
     echo "[提示] 本地导出镜像和临时数据库包已自动清理"
   fi
   if [ "${CLEAN_LOCAL_DOCKER_CACHE}" = "true" ]; then
-    echo "[提示] 本地未使用的 Docker 镜像和构建缓存已自动清理"
+    echo "[提示] 本地旧版 ruoyi 镜像标签、未使用的 Docker 镜像和构建缓存已自动清理"
   fi
 }
 

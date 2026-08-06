@@ -15,6 +15,12 @@ public class NoticeReadRespVO {
     @Schema(description = "用户姓名", example = "Administrator")
     private String userNickname;
 
+    @Schema(description = "部门编号", example = "10")
+    private Long deptId;
+
+    @Schema(description = "部门名称", example = "院部")
+    private String deptName;
+
     @Schema(description = "阅读时间")
     private LocalDateTime readTime;
 }

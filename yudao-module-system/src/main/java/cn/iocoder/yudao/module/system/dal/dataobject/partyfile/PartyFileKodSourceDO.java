@@ -24,24 +24,32 @@ public class PartyFileKodSourceDO extends BaseDO {
 
     private String name;
 
+    @TableField("base_url")
     private String baseUrl;
 
+    @TableField("app_name")
     private String appName;
 
+    @TableField("access_token")
     private String accessToken;
 
+    @TableField("service_username")
     private String serviceUsername;
 
     @TableField(typeHandler = EncryptTypeHandler.class)
     private String servicePassword;
 
+    @TableField("token_expire_time")
     private LocalDateTime tokenExpireTime;
 
+    @TableField("root_folder_path")
     private String rootFolderPath;
 
+    @TableField("root_folder_name")
     private String rootFolderName;
 
     private Integer status;
 
+    @TableField("is_default")
     private Boolean isDefault;
 }

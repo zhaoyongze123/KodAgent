@@ -68,4 +68,18 @@ INSERT INTO `system_role_menu` (`role_id`, `menu_id`, `creator`, `create_time`, 
 SELECT 2, @personal_schedule_menu_id, '1', NOW(), '1', NOW(), b'0', 1
 WHERE NOT EXISTS (SELECT 1 FROM `system_role_menu` WHERE `role_id` = 2 AND `menu_id` = @personal_schedule_menu_id);
 
+-- Agent Facade 使用独立的写权限，避免把 Agent 写操作隐式绑定到查询权限。
+SET @personal_schedule_write_permission_id := 30061;
+INSERT INTO `system_menu` (`id`, `name`, `permission`, `type`, `sort`, `parent_id`, `path`, `icon`, `component`, `component_name`, `status`, `visible`, `keep_alive`, `always_show`, `creator`, `create_time`, `updater`, `update_time`, `deleted`)
+SELECT @personal_schedule_write_permission_id, '个人日程写入', 'system:personal-schedule:write', 3, 1, @personal_schedule_menu_id, '', '', '', '', 0, b'0', b'0', b'0', '1', NOW(), '1', NOW(), b'0'
+WHERE NOT EXISTS (SELECT 1 FROM `system_menu` WHERE `id` = @personal_schedule_write_permission_id);
+
+INSERT INTO `system_role_menu` (`role_id`, `menu_id`, `creator`, `create_time`, `updater`, `update_time`, `deleted`, `tenant_id`)
+SELECT 1, @personal_schedule_write_permission_id, '1', NOW(), '1', NOW(), b'0', 1
+WHERE NOT EXISTS (SELECT 1 FROM `system_role_menu` WHERE `role_id` = 1 AND `menu_id` = @personal_schedule_write_permission_id);
+
+INSERT INTO `system_role_menu` (`role_id`, `menu_id`, `creator`, `create_time`, `updater`, `update_time`, `deleted`, `tenant_id`)
+SELECT 2, @personal_schedule_write_permission_id, '1', NOW(), '1', NOW(), b'0', 1
+WHERE NOT EXISTS (SELECT 1 FROM `system_role_menu` WHERE `role_id` = 2 AND `menu_id` = @personal_schedule_write_permission_id);
+
 SET FOREIGN_KEY_CHECKS = 1;

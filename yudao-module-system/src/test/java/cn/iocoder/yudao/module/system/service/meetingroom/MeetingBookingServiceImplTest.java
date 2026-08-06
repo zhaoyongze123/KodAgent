@@ -69,7 +69,9 @@ class MeetingBookingServiceImplTest extends BaseDbUnitTest {
     @Test
     void testCreateMeetingBooking_timeSlotInvalid() {
         MeetingRoomDO room = insertMeetingRoom("A-02");
-        LocalDateTime startTime = nextHourPlusDays(1).plusMinutes(30);
+        // 30-minute starts are valid under the shared 15-minute-granularity
+        // policy. Use a non-quarter-hour value to test the actual boundary.
+        LocalDateTime startTime = nextHourPlusDays(1).plusMinutes(10);
         MeetingBookingSaveReqVO reqVO = createReqVO(room.getId(), startTime, false, List.of());
 
         assertServiceException(() -> meetingBookingService.createMeetingBooking(100L, reqVO),
@@ -132,6 +134,17 @@ class MeetingBookingServiceImplTest extends BaseDbUnitTest {
 
         assertServiceException(() -> meetingBookingService.updateMeetingBookingByApplicant(100L, reqVO),
                 MEETING_BOOKING_STARTED_CANNOT_OPERATE);
+    }
+
+    @Test
+    void testUpdateMeetingBookingByApplicant_alreadyCancelled() {
+        MeetingRoomDO room = insertMeetingRoom("A-07-cancelled");
+        MeetingBookingDO booking = insertBooking(room.getId(), 100L, nextHourPlusDays(1), 2, "已取消", 1, "cancelled");
+        MeetingBookingSaveReqVO reqVO = createReqVO(room.getId(), nextHourPlusDays(2), false, List.of());
+        reqVO.setId(booking.getId());
+
+        assertServiceException(() -> meetingBookingService.updateMeetingBookingByApplicant(100L, reqVO),
+                MEETING_BOOKING_ALREADY_CANCELLED);
     }
 
     @Test
@@ -249,6 +262,18 @@ class MeetingBookingServiceImplTest extends BaseDbUnitTest {
     }
 
     @Test
+    void testCancelMeetingBookingByApplicant_alreadyCancelled() {
+        MeetingRoomDO room = insertMeetingRoom("A-12-cancelled");
+        MeetingBookingDO booking = insertBooking(room.getId(), 200L, nextHourPlusDays(1), 2, "已取消", 1, "cancelled");
+        MeetingBookingCancelReqVO reqVO = new MeetingBookingCancelReqVO();
+        reqVO.setId(booking.getId());
+        reqVO.setCancelReason("再次取消");
+
+        assertServiceException(() -> meetingBookingService.cancelMeetingBookingByApplicant(200L, reqVO),
+                MEETING_BOOKING_ALREADY_CANCELLED);
+    }
+
+    @Test
     void testGetAttendeeUserIds_success() {
         MeetingRoomDO room = insertMeetingRoom("A-13");
         LocalDateTime startTime = nextHourPlusDays(1);
@@ -304,7 +329,11 @@ class MeetingBookingServiceImplTest extends BaseDbUnitTest {
     }
 
     private LocalDateTime nextHourPlusDays(int days) {
-        return LocalDateTime.now().plusDays(days).plusHours(1)
+        // Keep every fixed two-hour test slot inside one calendar day. The
+        // previous "now + 1 hour" helper crosses midnight when CI runs late,
+        // causing the cross-day guard to mask the rule each test intends to
+        // verify.
+        return LocalDateTime.now().plusDays(days).withHour(10)
                 .withMinute(0).withSecond(0).withNano(0);
     }
 }

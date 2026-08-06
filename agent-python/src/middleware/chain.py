@@ -1,0 +1,74 @@
+"""Declarative middleware order for the root Agent graph."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from ..llm.runtime import DynamicModelMiddleware, RunLifecycleMiddleware
+from ..orchestration.plan_projection import PlanToolProjectionMiddleware
+from ..orchestration.phase_prompt import MainAgentPhasePromptMiddleware
+from ..orchestration.policies import CurrentUserMessageMiddleware, main_approval_tool_limit_middleware
+from .approval_batch_approval import ApprovalBatchAutoConfirmMiddleware
+from .approval_request_approval import ApprovalRequestAutoConfirmMiddleware
+from .approval_task_approval import ApprovalTaskAutoConfirmMiddleware
+from .meeting_approval import MeetingApprovalAutoConfirmMiddleware
+from .meeting_approval_resume import MeetingApprovalResumeMiddleware
+from .meeting_task_guard import MeetingTaskCallGuardMiddleware
+from .personal_schedule_approval import PersonalScheduleApprovalArgsMiddleware
+from .personal_schedule_approval_resume import PersonalScheduleApprovalResumeMiddleware
+from .tool_audit import ToolAuditMiddleware
+from .workflow_task_guard import DeterministicWorkflowTaskGuardMiddleware
+from ..services.party_file_approval import PartyFileApprovalAutoConfirmMiddleware
+
+
+class MiddlewareOrderError(RuntimeError):
+    pass
+
+
+def build_middleware_chain(*, dynamic_model: Any | None = None, phase_prompt: Any | None = None) -> list[Any]:
+    """Build and validate the root chain in one place.
+
+    The order is a contract: identity -> model/prompt -> route projection ->
+    guards/audit -> draft projection -> resume.  Reordering a dependency now
+    fails at startup instead of producing a missing card or duplicate write.
+    """
+    items = [
+        CurrentUserMessageMiddleware(trusted_source=True),
+        dynamic_model or DynamicModelMiddleware(),
+        phase_prompt or MainAgentPhasePromptMiddleware(),
+        PlanToolProjectionMiddleware(),
+        RunLifecycleMiddleware(),
+        MeetingTaskCallGuardMiddleware(),
+        DeterministicWorkflowTaskGuardMiddleware(),
+        ToolAuditMiddleware(),
+        MeetingApprovalAutoConfirmMiddleware(),
+        ApprovalBatchAutoConfirmMiddleware(),
+        ApprovalTaskAutoConfirmMiddleware(),
+        ApprovalRequestAutoConfirmMiddleware(),
+        PartyFileApprovalAutoConfirmMiddleware(),
+        PersonalScheduleApprovalArgsMiddleware(),
+        MeetingApprovalResumeMiddleware(),
+        PersonalScheduleApprovalResumeMiddleware(),
+        main_approval_tool_limit_middleware(),
+    ]
+    names = [str(getattr(item, "name", item.__class__.__name__)) for item in items]
+    if len(names) != len(set(names)):
+        raise MiddlewareOrderError(f"中间件名称重复: {names}")
+    required_order = (
+        ("CurrentUserMessageMiddleware", "PlanToolProjectionMiddleware"),
+        ("DynamicModelMiddleware", "MainAgentPhasePromptMiddleware"),
+        ("PlanToolProjectionMiddleware", "MeetingTaskCallGuardMiddleware"),
+        ("ToolAuditMiddleware", "MeetingApprovalAutoConfirmMiddleware"),
+        ("MeetingApprovalAutoConfirmMiddleware", "MeetingApprovalResumeMiddleware"),
+        ("PersonalScheduleApprovalArgsMiddleware", "PersonalScheduleApprovalResumeMiddleware"),
+    )
+    positions = {name: index for index, name in enumerate(names)}
+    for before, after in required_order:
+        if before not in positions or after not in positions:
+            raise MiddlewareOrderError(f"中间件链缺少依赖: {before} -> {after}")
+        if positions[before] >= positions[after]:
+            raise MiddlewareOrderError(f"中间件顺序无效: {before} 必须先于 {after}")
+    return items
+
+
+__all__ = ["MiddlewareOrderError", "build_middleware_chain"]

@@ -16,7 +16,17 @@ fi
 
 cd "${REMOTE_DEPLOY_DIR}"
 
-docker compose up -d mysql redis
+export AGENT_EVENT_SCHEMA_SQL_HOST_PATH="${AGENT_EVENT_SCHEMA_SQL_HOST_PATH:-./agent_run_event.sql}"
+export AGENT_RUNTIME_SCHEMA_SQL_HOST_PATH="${AGENT_RUNTIME_SCHEMA_SQL_HOST_PATH:-./agent_runtime.sql}"
+export AGENT_MODEL_SCHEMA_SQL_HOST_PATH="${AGENT_MODEL_SCHEMA_SQL_HOST_PATH:-./agent_model_config.sql}"
+export AGENT_PARTY_KNOWLEDGE_SCHEMA_SQL_HOST_PATH="${AGENT_PARTY_KNOWLEDGE_SCHEMA_SQL_HOST_PATH:-./party_knowledge.sql}"
+export AGENT_PARTY_KNOWLEDGE_VECTOR_SCHEMA_SQL_HOST_PATH="${AGENT_PARTY_KNOWLEDGE_VECTOR_SCHEMA_SQL_HOST_PATH:-./party_knowledge_vector.sql}"
+export OA_PERSONAL_SCHEDULE_SCHEMA_SQL_HOST_PATH="${OA_PERSONAL_SCHEDULE_SCHEMA_SQL_HOST_PATH:-./system-personal-schedule-init.sql}"
+export OA_PERSONAL_SCHEDULE_EFFECT_SCHEMA_SQL_HOST_PATH="${OA_PERSONAL_SCHEDULE_EFFECT_SCHEMA_SQL_HOST_PATH:-./agent_personal_schedule_effect.sql}"
+export OA_PARTY_FILE_SCHEMA_SQL_HOST_PATH="${OA_PARTY_FILE_SCHEMA_SQL_HOST_PATH:-./party-file-kod-schema-v2.sql}"
+docker compose up -d mysql redis langgraph-postgres
+docker compose run --rm oa-mysql-schema-migrate
+docker compose run --rm agent-event-schema-migrate
 docker compose stop server admin || true
 docker compose rm -sf server admin || true
 

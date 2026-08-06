@@ -1,7 +1,6 @@
 package cn.iocoder.yudao.module.system.service.meetingroom;
 
 import cn.hutool.core.collection.CollUtil;
-import cn.hutool.core.date.LocalDateTimeUtil;
 import cn.iocoder.yudao.framework.common.enums.CommonStatusEnum;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import cn.iocoder.yudao.framework.common.util.object.BeanUtils;
@@ -210,18 +209,7 @@ public class MeetingBookingServiceImpl implements MeetingBookingService {
     private void validateTimeSlot(LocalDateTime startTime, LocalDateTime endTime) {
         LocalDateTime now = LocalDateTime.now();
         log.info("[validateTimeSlot] startTime={}, endTime={}, now={}", startTime, endTime, now);
-        if (startTime == null || endTime == null || !startTime.isBefore(endTime)) {
-            throw exception(MEETING_BOOKING_TIME_INVALID);
-        }
-        if (!Objects.equals(startTime.toLocalDate(), endTime.toLocalDate())) {
-            throw exception(MEETING_BOOKING_CROSS_DAY_NOT_SUPPORTED);
-        }
-        if (startTime.getMinute() != 0 || endTime.getMinute() != 0 || startTime.getSecond() != 0 || endTime.getSecond() != 0) {
-            throw exception(MEETING_BOOKING_TIME_SLOT_INVALID);
-        }
-        if (LocalDateTimeUtil.between(startTime, endTime).toHours() != 2) {
-            throw exception(MEETING_BOOKING_TIME_SLOT_INVALID);
-        }
+        MeetingBookingPolicy.validate(startTime, endTime);
         if (endTime.isBefore(now)) {
             throw exception(MEETING_BOOKING_TIME_INVALID);
         }
@@ -230,6 +218,9 @@ public class MeetingBookingServiceImpl implements MeetingBookingService {
     private void validateApplicantOperation(Long operatorUserId, MeetingBookingDO booking) {
         if (!Objects.equals(operatorUserId, booking.getApplicantUserId())) {
             throw exception(MEETING_BOOKING_NOT_OWNER);
+        }
+        if (Objects.equals(booking.getStatus(), STATUS_CANCELLED)) {
+            throw exception(MEETING_BOOKING_ALREADY_CANCELLED);
         }
         if (!LocalDateTime.now().isBefore(booking.getStartTime())) {
             throw exception(MEETING_BOOKING_STARTED_CANNOT_OPERATE);

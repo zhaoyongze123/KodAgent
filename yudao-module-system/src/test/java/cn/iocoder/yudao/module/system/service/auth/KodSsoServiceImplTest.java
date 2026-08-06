@@ -28,6 +28,7 @@ import javax.annotation.Resource;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Objects;
 import java.util.regex.Matcher;
@@ -73,6 +74,10 @@ public class KodSsoServiceImplTest extends BaseDbUnitTest {
         kodSsoProperties.setAutoCreateUser(true);
         kodSsoProperties.setUsernamePrefix("kod");
         kodSsoProperties.setDefaultRoleIds(Collections.emptySet());
+        // apiCheckToken only returns the KodBox user profile.  Local roles are
+        // assigned from an explicit OA-side mapping, never from roleID/isRoot
+        // fields that are absent from the real response contract.
+        kodSsoProperties.setUserRoleMappings(new HashMap<>());
         kodSsoProperties.setRedirectUri(null);
         kodSsoProperties.setKodCommonRoleId(1L);
         kodSsoProperties.setKodDeptAdminRoleId(2L);
@@ -98,7 +103,7 @@ public class KodSsoServiceImplTest extends BaseDbUnitTest {
         try (MockedStatic<HttpUtils> mockedHttpUtils = mockStatic(HttpUtils.class, CALLS_REAL_METHODS)) {
             mockedHttpUtils.when(() -> HttpUtils.get(eq("https://kod.example.com/?user/sso/apiCheckToken&accessToken=kod-token&appName=oa-lite"),
                     eq(Collections.emptyMap())))
-                    .thenReturn("{\"id\":\"u-1\",\"name\":\"koduser\",\"nickName\":\"可道云用户\"}");
+                    .thenReturn("{\"userID\":\"u-1\",\"name\":\"koduser\",\"nickName\":\"可道云用户\"}");
 
             String redirectUrl = kodSsoService.buildClientRedirectUrl("kod-token", "http://127.0.0.1:3000/callback");
             assertTrue(redirectUrl.contains("kodSsoCode="));
@@ -121,7 +126,7 @@ public class KodSsoServiceImplTest extends BaseDbUnitTest {
         try (MockedStatic<HttpUtils> mockedHttpUtils = mockStatic(HttpUtils.class, CALLS_REAL_METHODS)) {
             mockedHttpUtils.when(() -> HttpUtils.get(eq("https://kod.example.com/?user/sso/apiCheckToken&accessToken=kod-token-hash&appName=oa-lite"),
                     eq(Collections.emptyMap())))
-                    .thenReturn("{\"id\":\"u-1\",\"name\":\"koduser\",\"nickName\":\"可道云用户\"}");
+                    .thenReturn("{\"userID\":\"u-1\",\"name\":\"koduser\",\"nickName\":\"可道云用户\"}");
 
             String redirectUrl = kodSsoService.buildClientRedirectUrl("kod-token-hash",
                     "http://192.168.1.100:5666/#/auth/kod-sso-login?tenantId=1&entry=party-file");
@@ -159,7 +164,7 @@ public class KodSsoServiceImplTest extends BaseDbUnitTest {
                     .thenReturn(request);
             mockedHttpUtils.when(() -> HttpUtils.get(eq("https://kod.example.com/?user/sso/apiCheckToken&accessToken=kod-token-context&appName=oa-lite"),
                     eq(Collections.emptyMap())))
-                    .thenReturn("{\"id\":\"u-4\",\"name\":\"zhanghua\",\"nickName\":\"张华\"}");
+                    .thenReturn("{\"userID\":\"u-4\",\"name\":\"zhanghua\",\"nickName\":\"张华\"}");
 
             String redirectUrl = kodSsoService.buildClientRedirectUrl("kod-token-context", "http://127.0.0.1:3000/callback");
             String exchangeCode = redirectUrl.substring(redirectUrl.indexOf("kodSsoCode=") + "kodSsoCode=".length());
@@ -193,6 +198,7 @@ public class KodSsoServiceImplTest extends BaseDbUnitTest {
 
     @Test
     public void testLoginByKodToken_matchExistingUserAndCreateBind() {
+        kodSsoProperties.getUserRoleMappings().put("u-2", 2L);
         when(kodSsoUserBindMapper.selectByKodUsername(eq("alice"))).thenReturn(null);
         when(adminUserService.getUserByUsername(eq("alice"))).thenReturn(new AdminUserDO()
                 .setId(22L).setUsername("alice").setNickname("旧 Alice").setEmail("old@example.com"));
@@ -206,7 +212,7 @@ public class KodSsoServiceImplTest extends BaseDbUnitTest {
         try (MockedStatic<HttpUtils> mockedHttpUtils = mockStatic(HttpUtils.class, CALLS_REAL_METHODS)) {
             mockedHttpUtils.when(() -> HttpUtils.get(eq("https://kod.example.com/?user/sso/apiCheckToken&accessToken=kod-token-2&appName=oa-lite"),
                     eq(Collections.emptyMap())))
-                    .thenReturn("{\"id\":\"u-2\",\"name\":\"alice\",\"nickName\":\"Alice\",\"email\":\"alice@example.com\",\"roleID\":1,"
+                    .thenReturn("{\"userID\":\"u-2\",\"name\":\"alice\",\"nickName\":\"Alice\",\"email\":\"alice@example.com\","
                             + "\"groupInfo\":[{\"groupID\":\"2\",\"groupName\":\"销售部\"}]}");
 
             AuthLoginRespVO result = kodSsoService.loginByKodToken("kod-token-2");
@@ -248,7 +254,7 @@ public class KodSsoServiceImplTest extends BaseDbUnitTest {
         try (MockedStatic<HttpUtils> mockedHttpUtils = mockStatic(HttpUtils.class, CALLS_REAL_METHODS)) {
             mockedHttpUtils.when(() -> HttpUtils.get(eq("https://kod.example.com/?user/sso/apiCheckToken&accessToken=kod-token-3&appName=oa-lite"),
                     eq(Collections.emptyMap())))
-                    .thenReturn("{\"id\":\"u-3\",\"name\":\"bob\",\"nickName\":\"Bob\",\"roleID\":2,\"isRoot\":0,"
+                    .thenReturn("{\"userID\":\"u-3\",\"name\":\"bob\",\"nickName\":\"Bob\","
                             + "\"groupInfo\":[{\"groupID\":\"1\",\"groupName\":\"总公司\"},{\"groupID\":\"3\",\"groupName\":\"项目部\"}]}");
 
             AuthLoginRespVO result = kodSsoService.loginByKodToken("kod-token-3");
@@ -267,6 +273,7 @@ public class KodSsoServiceImplTest extends BaseDbUnitTest {
 
     @Test
     public void testLoginByKodToken_noBindAndNoMatchedUser_autoCreateUserAndDept() {
+        kodSsoProperties.getUserRoleMappings().put("u-4", 1L);
         when(kodSsoUserBindMapper.selectByKodUsername(eq("root"))).thenReturn(null);
         when(adminUserService.getUserByUsername(eq("root"))).thenReturn(null);
         when(kodSsoUserBindMapper.selectByKodUserId(eq("u-4"))).thenReturn(null);
@@ -294,7 +301,7 @@ public class KodSsoServiceImplTest extends BaseDbUnitTest {
         try (MockedStatic<HttpUtils> mockedHttpUtils = mockStatic(HttpUtils.class, CALLS_REAL_METHODS)) {
             mockedHttpUtils.when(() -> HttpUtils.get(eq("https://kod.example.com/?user/sso/apiCheckToken&accessToken=kod-token-4&appName=oa-lite"),
                     eq(Collections.emptyMap())))
-                    .thenReturn("{\"id\":\"u-4\",\"name\":\"root\",\"nickName\":\"Root\",\"roleID\":3,\"isRoot\":1,"
+                    .thenReturn("{\"userID\":\"u-4\",\"name\":\"root\",\"nickName\":\"Root\","
                             + "\"groupInfo\":[{\"groupID\":\"1\",\"groupName\":\"总公司\"},{\"groupID\":\"3\",\"groupName\":\"项目部\"}]}");
 
             AuthLoginRespVO result = kodSsoService.loginByKodToken("kod-token-4");
@@ -335,7 +342,7 @@ public class KodSsoServiceImplTest extends BaseDbUnitTest {
         try (MockedStatic<HttpUtils> mockedHttpUtils = mockStatic(HttpUtils.class, CALLS_REAL_METHODS)) {
             mockedHttpUtils.when(() -> HttpUtils.get(eq("https://kod.example.com/?user/sso/apiCheckToken&accessToken=kod-token-7&appName=oa-lite"),
                     eq(Collections.emptyMap())))
-                    .thenReturn("{\"id\":\"2\",\"name\":\"shenzhihua\",\"nickName\":\"沈志华\",\"email\":\"shen@example.com\"}");
+                    .thenReturn("{\"userID\":\"2\",\"name\":\"shenzhihua\",\"nickName\":\"沈志华\",\"email\":\"shen@example.com\"}");
 
             AuthLoginRespVO result = kodSsoService.loginByKodToken("kod-token-7");
             assertPojoEquals(loginRespVO, result);

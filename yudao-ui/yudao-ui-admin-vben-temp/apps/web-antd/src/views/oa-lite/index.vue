@@ -297,7 +297,7 @@ function buildApprovalEntryQuery() {
 }
 
 function shouldForceCreateMode() {
-  return isForceCreateEntry(route.query);
+  return route.path === OA_LITE_CREATE_PATH && isForceCreateEntry(route.query);
 }
 
 function isImageIcon(icon?: string) {

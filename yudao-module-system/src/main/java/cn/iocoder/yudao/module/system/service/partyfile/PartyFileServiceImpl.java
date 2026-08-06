@@ -26,9 +26,12 @@ import org.springframework.validation.annotation.Validated;
 
 import javax.annotation.Resource;
 import java.time.LocalDateTime;
+import java.time.Duration;
 import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+
+import cn.iocoder.yudao.framework.mybatis.core.query.LambdaQueryWrapperX;
 
 import static cn.iocoder.yudao.framework.common.exception.util.ServiceExceptionUtil.exception;
 import static cn.iocoder.yudao.module.system.enums.ErrorCodeConstants.*;
@@ -116,6 +119,110 @@ public class PartyFileServiceImpl implements PartyFileService {
                 .filter(item -> Objects.equals(item.getReadStatus(), reqVO.getReadStatus()))
                 .collect(Collectors.toList());
         return new PageResult<PartyFileRespVO>(filtered, (long) filtered.size());
+    }
+
+    @Override
+    public Map<String, Object> executeMyPartyFileMetadataPlan(Long userId, Map<String, Object> plan) {
+        if (plan == null || !"party_file".equals(String.valueOf(plan.get("entity")))
+                || !"metadata_query".equals(String.valueOf(plan.get("operation")))) {
+            throw exception(PARTY_FILE_NOT_FOUND);
+        }
+        Set<Long> visibleFileIds = getVisibleFileIds(userId);
+        if (visibleFileIds.isEmpty()) {
+            return new LinkedHashMap<String, Object>() {{
+                put("status", "NO_MATCH"); put("totalScanned", 0); put("totalMatched", 0); put("matches", Collections.emptyList()); put("plan", plan);
+            }};
+        }
+        List<PartyFileDO> documents = partyFileMapper.selectList(new LambdaQueryWrapperX<PartyFileDO>()
+                .in(PartyFileDO::getId, visibleFileIds)
+                .eq(PartyFileDO::getStatus, 0));
+        List<PartyFileRespVO> visible = buildPageResult(new PageResult<>(documents, (long) documents.size()), userId).getList();
+        List<Map<String, Object>> filtered = visible.stream()
+                .filter(item -> metadataMatches(item, plan.get("filters")))
+                .map(this::metadataMap)
+                .collect(Collectors.toList());
+        Map<String, Object> rank = plan.get("rank") instanceof Map ? (Map<String, Object>) plan.get("rank") : Collections.emptyMap();
+        String field = String.valueOf(rank.getOrDefault("field", ""));
+        String mode = String.valueOf(rank.getOrDefault("mode", ""));
+        if ("publishTime".equals(field) && "nearest".equals(mode)) {
+            LocalDateTime target = parsePlanDate(rank.get("target"));
+            filtered.removeIf(item -> item.get("publishTime") == null);
+            filtered.sort(Comparator.<Map<String, Object>>comparingLong(item -> Math.abs(Duration.between(target, (LocalDateTime) item.get("publishTime")).toSeconds()))
+                    .thenComparing(item -> ((LocalDateTime) item.get("publishTime")), Comparator.reverseOrder())
+                    .thenComparing(item -> ((Number) item.get("id")).longValue()));
+        } else if ("publishTime".equals(field)) {
+            Comparator<Map<String, Object>> comparator = Comparator.comparing(item -> (LocalDateTime) item.get("publishTime"), Comparator.nullsLast(Comparator.naturalOrder()));
+            filtered.sort("desc".equals(mode) ? comparator.reversed() : comparator);
+        } else if ("title".equals(field)) {
+            filtered.sort(Comparator.<Map<String, Object>, String>comparing(item -> String.valueOf(item.getOrDefault("title", ""))));
+            if ("desc".equals(mode)) Collections.reverse(filtered);
+        } else if ("id".equals(field) && "desc".equals(mode)) {
+            filtered.sort(Comparator.comparing(item -> ((Number) item.get("id")).longValue(), Comparator.reverseOrder()));
+        } else {
+            filtered.sort(Comparator.comparing(item -> ((Number) item.get("id")).longValue()));
+        }
+        int limit = 20;
+        try { limit = Math.max(1, Math.min(Integer.parseInt(String.valueOf(plan.getOrDefault("limit", 20))), 50)); } catch (Exception ignored) { }
+        List<Map<String, Object>> matches = filtered.subList(0, Math.min(limit, filtered.size()));
+        return new LinkedHashMap<String, Object>() {{
+            put("status", matches.isEmpty() ? "NO_MATCH" : "READY");
+            put("totalScanned", documents.size());
+            put("totalMatched", filtered.size());
+            put("matches", matches);
+            put("plan", plan);
+        }};
+    }
+
+    @SuppressWarnings("unchecked")
+    private boolean metadataMatches(PartyFileRespVO item, Object rawFilters) {
+        if (!(rawFilters instanceof List)) return true;
+        for (Object raw : (List<?>) rawFilters) {
+            if (!(raw instanceof Map)) continue;
+            Map<String, Object> condition = (Map<String, Object>) raw;
+            String field = String.valueOf(condition.getOrDefault("field", ""));
+            String operator = String.valueOf(condition.getOrDefault("operator", "EQ")).toUpperCase(Locale.ROOT);
+            Object expected = condition.get("value");
+            Object actual = metadataValue(item, field);
+            if ("NOT_NULL".equals(operator)) { if (actual == null) return false; continue; }
+            if (actual == null || expected == null) return false;
+            int comparison = actual instanceof LocalDateTime
+                    ? ((LocalDateTime) actual).compareTo(parsePlanDate(expected))
+                    : String.valueOf(actual).compareToIgnoreCase(String.valueOf(expected));
+            boolean matches;
+            if ("EQ".equals(operator)) matches = comparison == 0;
+            else if ("CONTAINS".equals(operator)) matches = String.valueOf(actual).toLowerCase(Locale.ROOT).contains(String.valueOf(expected).toLowerCase(Locale.ROOT));
+            else if ("GTE".equals(operator)) matches = comparison >= 0;
+            else if ("GT".equals(operator)) matches = comparison > 0;
+            else if ("LTE".equals(operator)) matches = comparison <= 0;
+            else if ("LT".equals(operator)) matches = comparison < 0;
+            else matches = false;
+            if (!matches) return false;
+        }
+        return true;
+    }
+
+    private Object metadataValue(PartyFileRespVO item, String field) {
+        if ("id".equals(field)) return item.getId();
+        if ("title".equals(field)) return item.getTitle();
+        if ("categoryId".equals(field)) return item.getCategoryId();
+        if ("categoryName".equals(field)) return item.getCategoryName();
+        if ("publishTime".equals(field)) return item.getPublishTime();
+        if ("readStatus".equals(field)) return item.getReadStatus();
+        return null;
+    }
+
+    private Map<String, Object> metadataMap(PartyFileRespVO item) {
+        Map<String, Object> value = new LinkedHashMap<>();
+        value.put("id", item.getId()); value.put("title", item.getTitle()); value.put("categoryId", item.getCategoryId());
+        value.put("categoryName", item.getCategoryName()); value.put("summary", item.getSummary());
+        value.put("publishTime", item.getPublishTime()); value.put("readStatus", item.getReadStatus());
+        return value;
+    }
+
+    private LocalDateTime parsePlanDate(Object value) {
+        String text = String.valueOf(value == null ? "" : value).trim();
+        if (text.length() == 10) text += "T00:00:00";
+        return LocalDateTime.parse(text.replace(" ", "T"));
     }
 
     @Override

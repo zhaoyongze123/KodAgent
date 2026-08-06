@@ -2,14 +2,46 @@ server:
   port: 48080
 
 yudao:
+  agent:
+    events:
+      postgres:
+        enabled: ${AGENT_EVENT_POSTGRES_ENABLED:true}
+        url: ${AGENT_EVENT_POSTGRES_URL:}
+        username: ${AGENT_EVENT_POSTGRES_USERNAME:}
+        password: ${AGENT_EVENT_POSTGRES_PASSWORD:}
+        driver-class-name: org.postgresql.Driver
+    auth:
+      enabled: ${OA_AGENT_AUTH_ENABLED:true}
+      # Local development still requires an explicitly injected key.
+      api-key: ${OA_AGENT_API_KEY:}
+      username: ${OA_AGENT_USERNAME:}
+      password: ${OA_AGENT_PASSWORD:}
+      tenant-id: ${OA_AGENT_TENANT_ID:1}
+      refresh-ahead-seconds: ${OA_AGENT_REFRESH_AHEAD_SECONDS:60}
+      header-name: X-Agent-Key
+      principal-header: ${OA_AGENT_PRINCIPAL_HEADER:X-Agent-User-Id}
+    identity:
+      secret: ${OA_AGENT_IDENTITY_SECRET:}
+      ttl-seconds: ${OA_AGENT_IDENTITY_TTL_SECONDS:7200}
+      header-name: X-Agent-Identity
+      # 仅 local profile 默认开启固定用户联调；其他 profile 仍默认关闭。
+      legacy-principal-enabled: ${OA_AGENT_LEGACY_PRINCIPAL_ENABLED:false}
   security:
     permit-all-urls:
+      - /agent/tools/**
+      - /agent/drafts/**
+      - /agent/runs/**
+      - /agent/threads/**
       - /admin-api/system/auth/kod-sso/start
       - /admin-api/system/auth/kod-sso/callback
       - /admin-api/system/auth/kod-sso/direct-login
       - /admin-api/system/auth/kod-sso/exchange
   tenant:
     ignore-urls:
+      - /agent/tools/**
+      - /agent/drafts/**
+      - /agent/runs/**
+      - /agent/threads/**
       - /admin-api/system/auth/kod-sso/start
       - /admin-api/system/auth/kod-sso/callback
       - /admin-api/system/auth/kod-sso/direct-login
@@ -17,14 +49,19 @@ yudao:
   kod-sso:
     enabled: true
     # 本地联调：指向当前可访问的 kodbox 实例
-    base-url: ${KOD_SSO_BASE_URL:http://192.168.1.107:8001/}
+    # 本地 KodBox 容器：script/kodbox/docker-compose.local.yml
+    base-url: ${KOD_SSO_BASE_URL:http://127.0.0.1:8001/}
     app-name: user:all
     # 本地联调：前端开发地址
-    redirect-uri: ${KOD_SSO_REDIRECT_URI:http://192.168.1.100:5666/#/auth/kod-sso-login?tenantId=1}
+    redirect-uri: ${KOD_SSO_REDIRECT_URI:http://127.0.0.1:5666/#/auth/kod-sso-login?tenantId=1}
     # 本地联调：后端对外地址，固定生成可道云回调地址
-    callback-base-url: ${KOD_SSO_CALLBACK_BASE_URL:http://192.168.1.100:48080}
+    callback-base-url: ${KOD_SSO_CALLBACK_BASE_URL:http://127.0.0.1:48080}
     tenant-id: 1
     auto-create-user: false
+    # 本地 KodBox 初始化账号可能不返回可识别的 roleID；仅本地开发回退为管理员角色。
+    # 生产环境不应使用该回退，应配置明确的 KodBox -> OA 角色映射。
+    default-role-ids:
+      - 1
 
 --- #################### 数据库相关配置 ####################
 spring:
@@ -73,7 +110,7 @@ spring:
       primary: master
       datasource:
         master:
-          url: jdbc:mysql://127.0.0.1:3306/ruoyi-vue-pro?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true&rewriteBatchedStatements=true # MySQL Connector/J 8.X 连接的示例
+          url: jdbc:mysql://${OA_MYSQL_HOST:127.0.0.1}:${OA_MYSQL_PORT:13306}/ruoyi-vue-pro?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true&rewriteBatchedStatements=true # 与本地 Docker Compose 默认端口保持一致
           #          url: jdbc:mysql://127.0.0.1:3306/ruoyi-vue-pro?useSSL=true&allowPublicKeyRetrieval=true&useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai&rewriteBatchedStatements=true # MySQL Connector/J 5.X 连接的示例
           #          url: jdbc:postgresql://127.0.0.1:5432/ruoyi-vue-pro # PostgreSQL 连接的示例
           #          url: jdbc:oracle:thin:@127.0.0.1:1521:xe # Oracle 连接的示例
@@ -81,8 +118,8 @@ spring:
           #          url: jdbc:dm://127.0.0.1:5236?schema=RUOYI_VUE_PRO # DM 连接的示例
           #          url: jdbc:kingbase8://127.0.0.1:54321/test  # 人大金仓 KingbaseES 连接的示例
           #          url: jdbc:postgresql://127.0.0.1:5432/postgres # OpenGauss 连接的示例
-          username: root
-          password: 123456
+          username: ${MASTER_DATASOURCE_USERNAME:root}
+          password: ${MASTER_DATASOURCE_PASSWORD:}
           #          username: sa # SQL Server 连接的示例
           #          password: Yudao@2024 # SQL Server 连接的示例
           #          username: SYSDBA # DM 连接的示例
@@ -91,9 +128,9 @@ spring:
           #          password: Yudao@2024 # OpenGauss 连接的示例
         slave: # 模拟从库，可根据自己需要修改
           lazy: true # 开启懒加载，保证启动速度
-          url: jdbc:mysql://127.0.0.1:3306/ruoyi-vue-pro?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true&nullCatalogMeansCurrent=true
-          username: root
-          password: 123456
+          url: jdbc:mysql://${OA_MYSQL_HOST:127.0.0.1}:${OA_MYSQL_PORT:13306}/ruoyi-vue-pro?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true&nullCatalogMeansCurrent=true
+          username: ${SLAVE_DATASOURCE_USERNAME:${MASTER_DATASOURCE_USERNAME:root}}
+          password: ${SLAVE_DATASOURCE_PASSWORD:${MASTER_DATASOURCE_PASSWORD:}}
 #        tdengine: # IoT 数据库（需要 IoT 物联网再开启噢！）
 #          lazy: true # 开启懒加载，保证启动速度
 #          url: jdbc:TAOS-WS://127.0.0.1:6041/ruoyi_vue_pro?varcharAsString=true
@@ -105,8 +142,8 @@ spring:
 
   # Redis 配置。Redisson 默认的配置足够使用，一般不需要进行调优
   redis:
-    host: 127.0.0.1 # 地址
-    port: 6379 # 端口
+    host: ${OA_REDIS_HOST:127.0.0.1} # 地址
+    port: ${OA_REDIS_PORT:16379} # 与本地 Docker Compose 默认端口保持一致
     database: 0 # 数据库索引
 #    password: dev # 密码，建议生产环境开启
 

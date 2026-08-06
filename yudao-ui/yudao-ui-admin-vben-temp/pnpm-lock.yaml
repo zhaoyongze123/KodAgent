@@ -776,7 +776,7 @@ importers:
         version: 14.2.1(vue@3.5.32(typescript@6.0.2))
       '@vueuse/integrations':
         specifier: 'catalog:'
-        version: 14.2.1(async-validator@4.2.5)(axios@1.15.0)(change-case@5.4.4)(focus-trap@8.0.1)(nprogress@0.2.0)(qrcode@1.5.4)(sortablejs@1.15.7)(vue@3.5.32(typescript@6.0.2))
+        version: 14.2.1(async-validator@4.2.5)(axios@1.15.0)(change-case@5.4.4)(focus-trap@8.0.1)(idb-keyval@6.3.0)(nprogress@0.2.0)(qrcode@1.5.4)(sortablejs@1.15.7)(vue@3.5.32(typescript@6.0.2))
       ant-design-vue:
         specifier: 'catalog:'
         version: 4.2.6(vue@3.5.32(typescript@6.0.2))
@@ -875,7 +875,7 @@ importers:
         version: 3.5.0
       zustand:
         specifier: ^5.0.8
-        version: 5.0.14(@types/react@19.2.17)(react@19.2.7)
+        version: 5.0.14(@types/react@19.2.17)(immer@11.1.4)(react@19.2.7)(use-sync-external-store@1.6.0(react@19.2.7))
     devDependencies:
       '@tailwindcss/vite':
         specifier: 'catalog:'
@@ -937,7 +937,7 @@ importers:
     devDependencies:
       '@nolebase/vitepress-plugin-git-changelog':
         specifier: 'catalog:'
-        version: 2.18.2(vitepress@1.6.4(@algolia/client-search@5.50.1)(@types/node@25.6.0)(async-validator@4.2.5)(axios@1.15.0)(change-case@5.4.4)(less@4.6.4)(lightningcss@1.32.0)(nprogress@0.2.0)(postcss@8.5.9)(qrcode@1.5.4)(sass-embedded@1.99.0)(sass@1.99.0)(search-insights@2.17.3)(sortablejs@1.15.7)(terser@5.46.1)(typescript@6.0.2))(vue@3.5.32(typescript@6.0.2))
+        version: 2.18.2(vitepress@1.6.4(@algolia/client-search@5.50.1)(@types/node@25.6.0)(async-validator@4.2.5)(axios@1.15.0)(change-case@5.4.4)(idb-keyval@6.3.0)(less@4.6.4)(lightningcss@1.32.0)(nprogress@0.2.0)(postcss@8.5.9)(qrcode@1.5.4)(sass-embedded@1.99.0)(sass@1.99.0)(search-insights@2.17.3)(sortablejs@1.15.7)(terser@5.46.1)(typescript@6.0.2))(vue@3.5.32(typescript@6.0.2))
       '@tailwindcss/vite':
         specifier: 'catalog:'
         version: 4.2.2(vite@8.0.8(@types/node@25.6.0)(esbuild@0.27.7)(jiti@2.6.1)(less@4.6.4)(sass-embedded@1.99.0)(sass@1.99.0)(terser@5.46.1)(yaml@2.8.3))
@@ -952,7 +952,7 @@ importers:
         version: 1.1.0(vite-plugin-pwa@1.2.0(vite@8.0.8(@types/node@25.6.0)(esbuild@0.27.7)(jiti@2.6.1)(less@4.6.4)(sass-embedded@1.99.0)(sass@1.99.0)(terser@5.46.1)(yaml@2.8.3))(workbox-build@7.4.0(@types/babel__core@7.20.5))(workbox-window@7.4.0))
       vitepress:
         specifier: 'catalog:'
-        version: 1.6.4(@algolia/client-search@5.50.1)(@types/node@25.6.0)(async-validator@4.2.5)(axios@1.15.0)(change-case@5.4.4)(less@4.6.4)(lightningcss@1.32.0)(nprogress@0.2.0)(postcss@8.5.9)(qrcode@1.5.4)(sass-embedded@1.99.0)(sass@1.99.0)(search-insights@2.17.3)(sortablejs@1.15.7)(terser@5.46.1)(typescript@6.0.2)
+        version: 1.6.4(@algolia/client-search@5.50.1)(@types/node@25.6.0)(async-validator@4.2.5)(axios@1.15.0)(change-case@5.4.4)(idb-keyval@6.3.0)(less@4.6.4)(lightningcss@1.32.0)(nprogress@0.2.0)(postcss@8.5.9)(qrcode@1.5.4)(sass-embedded@1.99.0)(sass@1.99.0)(search-insights@2.17.3)(sortablejs@1.15.7)(terser@5.46.1)(typescript@6.0.2)
       vue:
         specifier: ^3.5.32
         version: 3.5.32(typescript@6.0.2)
@@ -1175,7 +1175,7 @@ importers:
         version: 7.2.0
       nitropack:
         specifier: 'catalog:'
-        version: 2.13.3(rolldown@1.0.0-rc.15)
+        version: 2.13.3(idb-keyval@6.3.0)(rolldown@1.0.0-rc.15)
       resolve.exports:
         specifier: 'catalog:'
         version: 2.0.3
@@ -1609,7 +1609,7 @@ importers:
         version: 14.2.1(vue@3.5.32(typescript@6.0.2))
       '@vueuse/integrations':
         specifier: 'catalog:'
-        version: 14.2.1(async-validator@4.2.5)(axios@1.15.0)(change-case@5.4.4)(focus-trap@8.0.1)(nprogress@0.2.0)(qrcode@1.5.4)(sortablejs@1.15.7)(vue@3.5.32(typescript@6.0.2))
+        version: 14.2.1(async-validator@4.2.5)(axios@1.15.0)(change-case@5.4.4)(focus-trap@8.0.1)(idb-keyval@6.3.0)(nprogress@0.2.0)(qrcode@1.5.4)(sortablejs@1.15.7)(vue@3.5.32(typescript@6.0.2))
       json-bigint:
         specifier: 'catalog:'
         version: 1.0.0
@@ -1772,7 +1772,7 @@ importers:
         version: 3.22.3
       '@tiptap/vue-3':
         specifier: 'catalog:'
-        version: 3.22.3(@floating-ui/dom@1.7.6)(@tiptap/core@3.22.3(@tiptap/pm@3.22.3))(@tiptap/pm@3.22.3)(vue@3.5.32(typescript@6.0.2))
+        version: 3.22.3(@floating-ui/dom@1.8.0)(@tiptap/core@3.22.3(@tiptap/pm@3.22.3))(@tiptap/pm@3.22.3)(vue@3.5.32(typescript@6.0.2))
       '@vben-core/design':
         specifier: workspace:*
         version: link:../../@core/base/design
@@ -3781,11 +3781,20 @@ packages:
   '@floating-ui/core@1.7.5':
     resolution: {integrity: sha512-1Ih4WTWyw0+lKyFMcBHGbb5U5FtuHJuujoyyr5zTaWS5EYMeT6Jb2AuDeftsCsEuchO+mM2ij5+q9crhydzLhQ==}
 
+  '@floating-ui/core@1.8.0':
+    resolution: {integrity: sha512-0CIZ5itps/8x7BG8dEIhs53BvCUH2PCoogtakwRTut+Arm58sJooJ0AuZhLw2HJYIR5cMLNPBSS728sPho2khQ==}
+
   '@floating-ui/dom@1.7.6':
     resolution: {integrity: sha512-9gZSAI5XM36880PPMm//9dfiEngYoC6Am2izES1FF406YFsjvyBMmeJ2g4SAju3xWwtuynNRFL2s9hgxpLI5SQ==}
 
+  '@floating-ui/dom@1.8.0':
+    resolution: {integrity: sha512-yXSrzeHZBTZadLOlfyhCkJHNeLJnHRnRInwdZ40L7ZiaAtrBwoYlsDrX3v5zB1Utk7CLfzcOVnVVWoXEky7Ceg==}
+
   '@floating-ui/utils@0.2.11':
     resolution: {integrity: sha512-RiB/yIh78pcIxl6lLMG0CgBXAZ2Y0eVHqMPYugu+9U0AeT6YBeiJpf7lbdJNIugFP5SIjwNRgo4DhR1Qxi26Gg==}
+
+  '@floating-ui/utils@0.2.12':
+    resolution: {integrity: sha512-HpCo8tmWzLVad5s2d19EhAz5zqrrQ6s69qd6moPMQvkOuSwDT1YgRfWSVuc4ennqrgv3OHppiOGMQ7oC13yIww==}
 
   '@floating-ui/vue@1.1.11':
     resolution: {integrity: sha512-HzHKCNVxnGS35r9fCHBc3+uCnjw9IWIlCPL683cGgM9Kgj2BiAl8x1mS7vtvP6F9S/e/q4O6MApwSHj8hNLGfw==}
@@ -8225,6 +8234,9 @@ packages:
     resolution: {integrity: sha512-im9DjEDQ55s9fL4EYzOAv0yMqmMBSZp6G0VvFyTMPKWxiSBHUj9NW/qqLmXUwXrrM7AvqSlTCfvqRb0cM8yYqw==}
     engines: {node: '>=0.10.0'}
 
+  idb-keyval@6.3.0:
+    resolution: {integrity: sha512-um+2dgAWmYsu615EXpWVwSmapJhON0G43t3Ka/EVaohzPQXSMqKEqeDK/oIW3Ow+BXaF2PvSc+oBTFp793A5Ow==}
+
   idb@7.1.1:
     resolution: {integrity: sha512-gchesWBzyvGHRO9W8tzUWFDycow5gwjvFKfyV9FF32Y7F50yZMp7mP+T2mJIWFx49zicqyC4uefHM17o6xKIVQ==}
 
@@ -8250,6 +8262,9 @@ packages:
     resolution: {integrity: sha512-6TDAlDPZxUFCv+fuOkIoXT/V/f3Qbq8e37p+YOiYrUv3v9cc3/6x78VdfPgFVaB9dZYeLUfKgHRebpkm/oP2VQ==}
     engines: {node: '>=0.10.0'}
     hasBin: true
+
+  immer@11.1.4:
+    resolution: {integrity: sha512-XREFCPo6ksxVzP4E0ekD5aMdf8WMwmdNaz6vuvxgI40UaEiu6q3p8X52aU6GdyvLY3XXX/8R7JOTXStz/nBbRw==}
 
   immutable@5.1.5:
     resolution: {integrity: sha512-t7xcm2siw+hlUM68I+UEOK+z84RzmN59as9DZ7P1l0994DKUWV7UXBMQZVxaoMSRQ+PBZbHCOoBt7a2wxOMt+A==}
@@ -9684,6 +9699,10 @@ packages:
 
   postcss-value-parser@4.2.0:
     resolution: {integrity: sha512-1NNCs6uurfkVbeXG4S8JFT9t19m45ICnif8zWLd5oPSZ50QnwMfK+H3jv408d4jw/7Bttv5axS5IiHoLaVNHeQ==}
+
+  postcss@8.5.8:
+    resolution: {integrity: sha512-OW/rX8O/jXnm82Ey1k44pObPtdblfiuWnrd8X7GJ7emImCOstunGbXUpp7HdBrFQX6rJzn3sPT397Wp5aCwCHg==}
+    engines: {node: ^10 || ^12 || >=14}
 
   postcss@8.5.9:
     resolution: {integrity: sha512-7a70Nsot+EMX9fFU3064K/kdHWZqGVY+BADLyXc8Dfv+mTLLVl6JzJpPaCZ2kQL9gIJvKXSLMHhqdRRjwQeFtw==}
@@ -11203,6 +11222,11 @@ packages:
 
   url-toolkit@2.2.5:
     resolution: {integrity: sha512-mtN6xk+Nac+oyJ/PrI7tzfmomRVNFIWKUbG8jdYFt52hxbiReFAXIjYskvu64/dvuW71IcB7lV8l0HvZMac6Jg==}
+
+  use-sync-external-store@1.6.0:
+    resolution: {integrity: sha512-Pp6GSwGP/NrPIrxVFAIkOQeyw8lFenOHijQWkUTrDvrF4ALqylP2C/KCkeS9dpUM3KvYRQhna5vt7IL95+ZQ9w==}
+    peerDependencies:
+      react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
 
   util-deprecate@1.0.2:
     resolution: {integrity: sha512-EPD5q1uXyFxJpCrLnCc1nHnq3gOa6DZBocAIiI2TaSCA7VCJ1UJDMagCzIkXNsUYfD1daK//LTEQ8xiIbrHtcw==}
@@ -13775,12 +13799,23 @@ snapshots:
     dependencies:
       '@floating-ui/utils': 0.2.11
 
+  '@floating-ui/core@1.8.0':
+    dependencies:
+      '@floating-ui/utils': 0.2.12
+
   '@floating-ui/dom@1.7.6':
     dependencies:
       '@floating-ui/core': 1.7.5
       '@floating-ui/utils': 0.2.11
 
+  '@floating-ui/dom@1.8.0':
+    dependencies:
+      '@floating-ui/core': 1.8.0
+      '@floating-ui/utils': 0.2.12
+
   '@floating-ui/utils@0.2.11': {}
+
+  '@floating-ui/utils@0.2.12': {}
 
   '@floating-ui/vue@1.1.11(vue@3.5.32(typescript@6.0.2))':
     dependencies:
@@ -14167,17 +14202,17 @@ snapshots:
       '@nodelib/fs.scandir': 2.1.5
       fastq: 1.20.1
 
-  '@nolebase/ui@2.18.2(vitepress@1.6.4(@algolia/client-search@5.50.1)(@types/node@25.6.0)(async-validator@4.2.5)(axios@1.15.0)(change-case@5.4.4)(less@4.6.4)(lightningcss@1.32.0)(nprogress@0.2.0)(postcss@8.5.9)(qrcode@1.5.4)(sass-embedded@1.99.0)(sass@1.99.0)(search-insights@2.17.3)(sortablejs@1.15.7)(terser@5.46.1)(typescript@6.0.2))(vue@3.5.32(typescript@6.0.2))':
+  '@nolebase/ui@2.18.2(vitepress@1.6.4(@algolia/client-search@5.50.1)(@types/node@25.6.0)(async-validator@4.2.5)(axios@1.15.0)(change-case@5.4.4)(idb-keyval@6.3.0)(less@4.6.4)(lightningcss@1.32.0)(nprogress@0.2.0)(postcss@8.5.9)(qrcode@1.5.4)(sass-embedded@1.99.0)(sass@1.99.0)(search-insights@2.17.3)(sortablejs@1.15.7)(terser@5.46.1)(typescript@6.0.2))(vue@3.5.32(typescript@6.0.2))':
     dependencies:
       '@iconify-json/octicon': 1.2.22
       less: 4.6.4
-      vitepress: 1.6.4(@algolia/client-search@5.50.1)(@types/node@25.6.0)(async-validator@4.2.5)(axios@1.15.0)(change-case@5.4.4)(less@4.6.4)(lightningcss@1.32.0)(nprogress@0.2.0)(postcss@8.5.9)(qrcode@1.5.4)(sass-embedded@1.99.0)(sass@1.99.0)(search-insights@2.17.3)(sortablejs@1.15.7)(terser@5.46.1)(typescript@6.0.2)
+      vitepress: 1.6.4(@algolia/client-search@5.50.1)(@types/node@25.6.0)(async-validator@4.2.5)(axios@1.15.0)(change-case@5.4.4)(idb-keyval@6.3.0)(less@4.6.4)(lightningcss@1.32.0)(nprogress@0.2.0)(postcss@8.5.9)(qrcode@1.5.4)(sass-embedded@1.99.0)(sass@1.99.0)(search-insights@2.17.3)(sortablejs@1.15.7)(terser@5.46.1)(typescript@6.0.2)
       vue: 3.5.32(typescript@6.0.2)
 
-  '@nolebase/vitepress-plugin-git-changelog@2.18.2(vitepress@1.6.4(@algolia/client-search@5.50.1)(@types/node@25.6.0)(async-validator@4.2.5)(axios@1.15.0)(change-case@5.4.4)(less@4.6.4)(lightningcss@1.32.0)(nprogress@0.2.0)(postcss@8.5.9)(qrcode@1.5.4)(sass-embedded@1.99.0)(sass@1.99.0)(search-insights@2.17.3)(sortablejs@1.15.7)(terser@5.46.1)(typescript@6.0.2))(vue@3.5.32(typescript@6.0.2))':
+  '@nolebase/vitepress-plugin-git-changelog@2.18.2(vitepress@1.6.4(@algolia/client-search@5.50.1)(@types/node@25.6.0)(async-validator@4.2.5)(axios@1.15.0)(change-case@5.4.4)(idb-keyval@6.3.0)(less@4.6.4)(lightningcss@1.32.0)(nprogress@0.2.0)(postcss@8.5.9)(qrcode@1.5.4)(sass-embedded@1.99.0)(sass@1.99.0)(search-insights@2.17.3)(sortablejs@1.15.7)(terser@5.46.1)(typescript@6.0.2))(vue@3.5.32(typescript@6.0.2))':
     dependencies:
       '@iconify-json/octicon': 1.2.22
-      '@nolebase/ui': 2.18.2(vitepress@1.6.4(@algolia/client-search@5.50.1)(@types/node@25.6.0)(async-validator@4.2.5)(axios@1.15.0)(change-case@5.4.4)(less@4.6.4)(lightningcss@1.32.0)(nprogress@0.2.0)(postcss@8.5.9)(qrcode@1.5.4)(sass-embedded@1.99.0)(sass@1.99.0)(search-insights@2.17.3)(sortablejs@1.15.7)(terser@5.46.1)(typescript@6.0.2))(vue@3.5.32(typescript@6.0.2))
+      '@nolebase/ui': 2.18.2(vitepress@1.6.4(@algolia/client-search@5.50.1)(@types/node@25.6.0)(async-validator@4.2.5)(axios@1.15.0)(change-case@5.4.4)(idb-keyval@6.3.0)(less@4.6.4)(lightningcss@1.32.0)(nprogress@0.2.0)(postcss@8.5.9)(qrcode@1.5.4)(sass-embedded@1.99.0)(sass@1.99.0)(search-insights@2.17.3)(sortablejs@1.15.7)(terser@5.46.1)(typescript@6.0.2))(vue@3.5.32(typescript@6.0.2))
       colorette: 2.0.20
       date-fns: 4.1.0
       defu: 6.1.7
@@ -14187,7 +14222,7 @@ snapshots:
       gray-matter: 4.0.3
       less: 4.6.4
       uncrypto: 0.1.3
-      vitepress: 1.6.4(@algolia/client-search@5.50.1)(@types/node@25.6.0)(async-validator@4.2.5)(axios@1.15.0)(change-case@5.4.4)(less@4.6.4)(lightningcss@1.32.0)(nprogress@0.2.0)(postcss@8.5.9)(qrcode@1.5.4)(sass-embedded@1.99.0)(sass@1.99.0)(search-insights@2.17.3)(sortablejs@1.15.7)(terser@5.46.1)(typescript@6.0.2)
+      vitepress: 1.6.4(@algolia/client-search@5.50.1)(@types/node@25.6.0)(async-validator@4.2.5)(axios@1.15.0)(change-case@5.4.4)(idb-keyval@6.3.0)(less@4.6.4)(lightningcss@1.32.0)(nprogress@0.2.0)(postcss@8.5.9)(qrcode@1.5.4)(sass-embedded@1.99.0)(sass@1.99.0)(search-insights@2.17.3)(sortablejs@1.15.7)(terser@5.46.1)(typescript@6.0.2)
     transitivePeerDependencies:
       - vue
 
@@ -15065,9 +15100,9 @@ snapshots:
     dependencies:
       '@tiptap/extensions': 3.22.3(@tiptap/core@3.22.3(@tiptap/pm@3.22.3))(@tiptap/pm@3.22.3)
 
-  '@tiptap/extension-floating-menu@3.22.3(@floating-ui/dom@1.7.6)(@tiptap/core@3.22.3(@tiptap/pm@3.22.3))(@tiptap/pm@3.22.3)':
+  '@tiptap/extension-floating-menu@3.22.3(@floating-ui/dom@1.8.0)(@tiptap/core@3.22.3(@tiptap/pm@3.22.3))(@tiptap/pm@3.22.3)':
     dependencies:
-      '@floating-ui/dom': 1.7.6
+      '@floating-ui/dom': 1.8.0
       '@tiptap/core': 3.22.3(@tiptap/pm@3.22.3)
       '@tiptap/pm': 3.22.3
     optional: true
@@ -15205,15 +15240,15 @@ snapshots:
       '@tiptap/extensions': 3.22.3(@tiptap/core@3.22.3(@tiptap/pm@3.22.3))(@tiptap/pm@3.22.3)
       '@tiptap/pm': 3.22.3
 
-  '@tiptap/vue-3@3.22.3(@floating-ui/dom@1.7.6)(@tiptap/core@3.22.3(@tiptap/pm@3.22.3))(@tiptap/pm@3.22.3)(vue@3.5.32(typescript@6.0.2))':
+  '@tiptap/vue-3@3.22.3(@floating-ui/dom@1.8.0)(@tiptap/core@3.22.3(@tiptap/pm@3.22.3))(@tiptap/pm@3.22.3)(vue@3.5.32(typescript@6.0.2))':
     dependencies:
-      '@floating-ui/dom': 1.7.6
+      '@floating-ui/dom': 1.8.0
       '@tiptap/core': 3.22.3(@tiptap/pm@3.22.3)
       '@tiptap/pm': 3.22.3
       vue: 3.5.32(typescript@6.0.2)
     optionalDependencies:
       '@tiptap/extension-bubble-menu': 3.22.3(@tiptap/core@3.22.3(@tiptap/pm@3.22.3))(@tiptap/pm@3.22.3)
-      '@tiptap/extension-floating-menu': 3.22.3(@floating-ui/dom@1.7.6)(@tiptap/core@3.22.3(@tiptap/pm@3.22.3))(@tiptap/pm@3.22.3)
+      '@tiptap/extension-floating-menu': 3.22.3(@floating-ui/dom@1.8.0)(@tiptap/core@3.22.3(@tiptap/pm@3.22.3))(@tiptap/pm@3.22.3)
 
   '@tsdown/css@0.21.7(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(jiti@2.6.1)(postcss@8.5.9)(sass-embedded@1.99.0)(sass@1.99.0)(tsdown@0.21.7)(yaml@2.8.3)':
     dependencies:
@@ -15959,7 +15994,7 @@ snapshots:
       '@vueuse/shared': 14.2.1(vue@3.5.32(typescript@6.0.2))
       vue: 3.5.32(typescript@6.0.2)
 
-  '@vueuse/integrations@12.8.2(async-validator@4.2.5)(axios@1.15.0)(change-case@5.4.4)(focus-trap@7.8.0)(nprogress@0.2.0)(qrcode@1.5.4)(sortablejs@1.15.7)(typescript@6.0.2)':
+  '@vueuse/integrations@12.8.2(async-validator@4.2.5)(axios@1.15.0)(change-case@5.4.4)(focus-trap@7.8.0)(idb-keyval@6.3.0)(nprogress@0.2.0)(qrcode@1.5.4)(sortablejs@1.15.7)(typescript@6.0.2)':
     dependencies:
       '@vueuse/core': 12.8.2(typescript@6.0.2)
       '@vueuse/shared': 12.8.2(typescript@6.0.2)
@@ -15969,13 +16004,14 @@ snapshots:
       axios: 1.15.0
       change-case: 5.4.4
       focus-trap: 7.8.0
+      idb-keyval: 6.3.0
       nprogress: 0.2.0
       qrcode: 1.5.4
       sortablejs: 1.15.7
     transitivePeerDependencies:
       - typescript
 
-  '@vueuse/integrations@14.2.1(async-validator@4.2.5)(axios@1.15.0)(change-case@5.4.4)(focus-trap@8.0.1)(nprogress@0.2.0)(qrcode@1.5.4)(sortablejs@1.15.7)(vue@3.5.32(typescript@6.0.2))':
+  '@vueuse/integrations@14.2.1(async-validator@4.2.5)(axios@1.15.0)(change-case@5.4.4)(focus-trap@8.0.1)(idb-keyval@6.3.0)(nprogress@0.2.0)(qrcode@1.5.4)(sortablejs@1.15.7)(vue@3.5.32(typescript@6.0.2))':
     dependencies:
       '@vueuse/core': 14.2.1(vue@3.5.32(typescript@6.0.2))
       '@vueuse/shared': 14.2.1(vue@3.5.32(typescript@6.0.2))
@@ -15985,6 +16021,7 @@ snapshots:
       axios: 1.15.0
       change-case: 5.4.4
       focus-trap: 8.0.1
+      idb-keyval: 6.3.0
       nprogress: 0.2.0
       qrcode: 1.5.4
       sortablejs: 1.15.7
@@ -18493,6 +18530,9 @@ snapshots:
     dependencies:
       safer-buffer: 2.1.2
 
+  idb-keyval@6.3.0:
+    optional: true
+
   idb@7.1.1: {}
 
   ids@1.0.5: {}
@@ -18506,6 +18546,9 @@ snapshots:
   ignore@7.0.5: {}
 
   image-size@0.5.5:
+    optional: true
+
+  immer@11.1.4:
     optional: true
 
   immutable@5.1.5: {}
@@ -19411,7 +19454,7 @@ snapshots:
       sax: 1.6.0
     optional: true
 
-  nitropack@2.13.3(rolldown@1.0.0-rc.15):
+  nitropack@2.13.3(idb-keyval@6.3.0)(rolldown@1.0.0-rc.15):
     dependencies:
       '@cloudflare/kv-asset-handler': 0.4.2
       '@rollup/plugin-alias': 6.0.0(rollup@4.60.1)
@@ -19478,7 +19521,7 @@ snapshots:
       unenv: 2.0.0-rc.24
       unimport: 6.1.0
       unplugin-utils: 0.3.1
-      unstorage: 1.17.5(db0@0.3.4)(ioredis@5.10.1)
+      unstorage: 1.17.5(db0@0.3.4)(idb-keyval@6.3.0)(ioredis@5.10.1)
       untyped: 2.0.0
       unwasm: 0.5.3
       youch: 4.1.1
@@ -19960,6 +20003,12 @@ snapshots:
       postcss: 8.5.9
 
   postcss-value-parser@4.2.0: {}
+
+  postcss@8.5.8:
+    dependencies:
+      nanoid: 3.3.11
+      picocolors: 1.1.1
+      source-map-js: 1.2.1
 
   postcss@8.5.9:
     dependencies:
@@ -21558,7 +21607,7 @@ snapshots:
       - '@emnapi/core'
       - '@emnapi/runtime'
 
-  unstorage@1.17.5(db0@0.3.4)(ioredis@5.10.1):
+  unstorage@1.17.5(db0@0.3.4)(idb-keyval@6.3.0)(ioredis@5.10.1):
     dependencies:
       anymatch: 3.1.3
       chokidar: 5.0.0
@@ -21570,6 +21619,7 @@ snapshots:
       ufo: 1.6.3
     optionalDependencies:
       db0: 0.3.4
+      idb-keyval: 6.3.0
       ioredis: 5.10.1
 
   untun@0.1.3:
@@ -21623,6 +21673,11 @@ snapshots:
       punycode: 2.3.1
 
   url-toolkit@2.2.5: {}
+
+  use-sync-external-store@1.6.0(react@19.2.7):
+    dependencies:
+      react: 19.2.7
+    optional: true
 
   util-deprecate@1.0.2: {}
 
@@ -21769,7 +21824,7 @@ snapshots:
     dependencies:
       lightningcss: 1.32.0
       picomatch: 4.0.4
-      postcss: 8.5.9
+      postcss: 8.5.8
       rolldown: 1.0.0-rc.15
       tinyglobby: 0.2.16
     optionalDependencies:
@@ -21791,7 +21846,7 @@ snapshots:
     optionalDependencies:
       vite: 8.0.8(@types/node@25.6.0)(esbuild@0.27.7)(jiti@2.6.1)(less@4.6.4)(sass-embedded@1.99.0)(sass@1.99.0)(terser@5.46.1)(yaml@2.8.3)
 
-  vitepress@1.6.4(@algolia/client-search@5.50.1)(@types/node@25.6.0)(async-validator@4.2.5)(axios@1.15.0)(change-case@5.4.4)(less@4.6.4)(lightningcss@1.32.0)(nprogress@0.2.0)(postcss@8.5.9)(qrcode@1.5.4)(sass-embedded@1.99.0)(sass@1.99.0)(search-insights@2.17.3)(sortablejs@1.15.7)(terser@5.46.1)(typescript@6.0.2):
+  vitepress@1.6.4(@algolia/client-search@5.50.1)(@types/node@25.6.0)(async-validator@4.2.5)(axios@1.15.0)(change-case@5.4.4)(idb-keyval@6.3.0)(less@4.6.4)(lightningcss@1.32.0)(nprogress@0.2.0)(postcss@8.5.9)(qrcode@1.5.4)(sass-embedded@1.99.0)(sass@1.99.0)(search-insights@2.17.3)(sortablejs@1.15.7)(terser@5.46.1)(typescript@6.0.2):
     dependencies:
       '@docsearch/css': 3.8.2
       '@docsearch/js': 3.8.2(@algolia/client-search@5.50.1)(search-insights@2.17.3)
@@ -21804,7 +21859,7 @@ snapshots:
       '@vue/devtools-api': 7.7.9
       '@vue/shared': 3.5.32
       '@vueuse/core': 12.8.2(typescript@6.0.2)
-      '@vueuse/integrations': 12.8.2(async-validator@4.2.5)(axios@1.15.0)(change-case@5.4.4)(focus-trap@7.8.0)(nprogress@0.2.0)(qrcode@1.5.4)(sortablejs@1.15.7)(typescript@6.0.2)
+      '@vueuse/integrations': 12.8.2(async-validator@4.2.5)(axios@1.15.0)(change-case@5.4.4)(focus-trap@7.8.0)(idb-keyval@6.3.0)(nprogress@0.2.0)(qrcode@1.5.4)(sortablejs@1.15.7)(typescript@6.0.2)
       focus-trap: 7.8.0
       mark.js: 8.11.1
       minisearch: 7.2.0
@@ -22369,10 +22424,12 @@ snapshots:
     dependencies:
       tslib: 2.3.0
 
-  zustand@5.0.14(@types/react@19.2.17)(react@19.2.7):
+  zustand@5.0.14(@types/react@19.2.17)(immer@11.1.4)(react@19.2.7)(use-sync-external-store@1.6.0(react@19.2.7)):
     optionalDependencies:
       '@types/react': 19.2.17
+      immer: 11.1.4
       react: 19.2.7
+      use-sync-external-store: 1.6.0(react@19.2.7)
 
   zwitch@2.0.4: {}
 

@@ -3,6 +3,8 @@ package cn.iocoder.yudao.module.system.controller.admin.notice.vo;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 
+import java.util.List;
+
 import javax.validation.constraints.NotBlank;
 import javax.validation.constraints.NotNull;
 import javax.validation.constraints.Size;
@@ -29,6 +31,9 @@ public class NoticeSaveReqVO {
     @Schema(description = "发布对象", example = "全体后台用户")
     @Size(max = 255, message = "发布对象不能超过255个字符")
     private String publishTarget;
+
+    @Schema(description = "结构化分发对象")
+    private List<NoticeTargetReqVO> targets;
 
     @Schema(description = "是否置顶", example = "false")
     private Boolean pinned;

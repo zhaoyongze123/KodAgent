@@ -82,6 +82,9 @@ public interface ErrorCodeConstants {
 
     // ========== 通知公告 1-002-008-000 ==========
     ErrorCode NOTICE_NOT_FOUND = new ErrorCode(1_002_008_001, "当前通知公告不存在");
+    ErrorCode NOTICE_TARGET_ID_REQUIRED = new ErrorCode(1_002_008_002, "公告发布对象编号不能为空");
+    ErrorCode NOTICE_TARGET_TYPE_INVALID = new ErrorCode(1_002_008_003, "公告发布对象类型不合法");
+    ErrorCode NOTICE_TARGET_ALL_CONFLICT = new ErrorCode(1_002_008_004, "选择全员发布时不能再追加其他发布对象");
 
     // ========== 党务文件 1-002-009-000 ==========
     ErrorCode PARTY_FILE_CATEGORY_NOT_FOUND = new ErrorCode(1_002_009_001, "党务文件分类不存在");
@@ -111,11 +114,12 @@ public interface ErrorCodeConstants {
     // ========== 会议室预定 1-002-010-000 ==========
     ErrorCode MEETING_BOOKING_NOT_EXISTS = new ErrorCode(1_002_010_000, "会议室预定不存在");
     ErrorCode MEETING_BOOKING_TIME_INVALID = new ErrorCode(1_002_010_001, "会议时间不合法");
-    ErrorCode MEETING_BOOKING_TIME_SLOT_INVALID = new ErrorCode(1_002_010_002, "当前仅支持整点开始的固定两小时预定");
+    ErrorCode MEETING_BOOKING_TIME_SLOT_INVALID = new ErrorCode(1_002_010_002, "会议时长必须为 15 分钟至 8 小时，且按 15 分钟递增");
     ErrorCode MEETING_BOOKING_CONFLICT_EXISTS = new ErrorCode(1_002_010_003, "当前时段存在冲突预定，请确认后重试");
     ErrorCode MEETING_BOOKING_NOT_OWNER = new ErrorCode(1_002_010_004, "只能操作自己的会议室预定");
     ErrorCode MEETING_BOOKING_STARTED_CANNOT_OPERATE = new ErrorCode(1_002_010_005, "会议已开始，无法继续修改或取消");
     ErrorCode MEETING_BOOKING_CROSS_DAY_NOT_SUPPORTED = new ErrorCode(1_002_010_006, "暂不支持跨天预定");
+    ErrorCode MEETING_BOOKING_ALREADY_CANCELLED = new ErrorCode(1_002_010_007, "会议室预定已取消，无法再次修改或取消");
 
     // ========== 个人日程 1-002-017-000 ==========
     ErrorCode PERSONAL_SCHEDULE_NOT_EXISTS = new ErrorCode(1_002_017_000, "个人日程不存在");

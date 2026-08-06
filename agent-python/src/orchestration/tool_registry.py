@@ -1,0 +1,215 @@
+"""Tool collections used when assembling the OA parent graph."""
+
+from ..tools.approval.templates import list_startable_approval_types, preview_approval_request
+from ..tools.approval.requests import (
+    create_approval_request_draft,
+    create_generic_approval_request_draft,
+    create_approval_withdraw_draft,
+    confirm_approval_request_action,
+    confirm_approval_withdraw_action,
+)
+from ..tools.approval.history import (
+    list_my_approval_applications,
+    get_my_approval_application,
+    list_my_approval_history,
+)
+from ..tools.approval.pending import (
+    analyze_my_pending_approvals,
+    list_my_pending_approvals,
+    run_approval_query_plan,
+    search_my_pending_approvals,
+)
+from ..tools.approval.actions import (
+    confirm_approval_batch_action,
+    get_approval_task_detail,
+    preview_approval_batch_action,
+    preview_approval_task_action,
+    confirm_approval_task_action,
+)
+from ..tools.meeting.attendees import (
+    get_current_meeting_user,
+    get_meeting_attendees_calendar,
+    search_meeting_attendees,
+)
+from ..tools.meeting.booking import confirm_meeting_booking
+from ..tools.meeting.conflicts import (
+    check_meeting_availability,
+    check_meeting_availability_batch,
+    check_meeting_room_conflict,
+)
+from ..tools.meeting.drafts import create_meeting_booking_draft
+from ..tools.meeting.prepare import prepare_meeting_booking_request
+from ..tools.meeting.rooms import list_available_meeting_rooms
+from ..tools.meeting.manage import create_meeting_booking_cancellation_draft, get_my_meeting_booking, list_my_meeting_bookings
+from ..tools.party_files.query import (
+    get_party_file_attachments,
+    get_party_file_attachment,
+    get_party_file_detail,
+    list_party_file_categories,
+    search_party_files,
+)
+from ..tools.party_files.metadata import execute_party_file_metadata_plan
+from ..tools.party_files.knowledge import check_party_knowledge_health, search_party_knowledge
+from ..tools.party_files.manage import create_party_file_draft, update_party_file_draft, delete_party_file_draft, get_manage_party_file, confirm_create_party_file, confirm_update_party_file, confirm_delete_party_file
+from ..tools.reports import approval_report, meeting_report, party_file_report, schedule_report
+from ..tools.workflows.party_files import check_approval_against_party_file, run_party_file_compare, run_party_file_understanding
+from ..tools.schedule.drafts import (
+    confirm_personal_schedule,
+    create_personal_schedule_draft,
+    get_personal_schedule,
+)
+from ..tools.schedule.query import find_calendar_conflicts, get_my_calendar
+from ..tools.common import (
+    report_progress,
+    route_conversation,
+)
+from ..tools.workflows.meeting_booking import run_meeting_booking_workflow
+from ..tools.workflows.personal_schedule import run_personal_schedule_workflow
+from ..workflows.registry import workflow_registry
+
+
+def meeting_workflow_enabled() -> bool:
+    """Return whether the deterministic meeting workflow is the parent path.
+
+    The default stays on the existing ReAct path until Java/approval/frontend
+    integration has passed in a real environment. Enable V2 explicitly for
+    local and staged rollout; setting it to ``false`` remains the rollback
+    switch after rollout.
+    """
+    return workflow_registry.enabled("meeting_booking")
+
+
+def personal_schedule_workflow_enabled() -> bool:
+    return workflow_registry.enabled("personal_schedule")
+
+
+def party_knowledge_workflow_enabled() -> bool:
+    return workflow_registry.enabled("party_file_understanding")
+
+
+def party_compare_workflow_enabled() -> bool:
+    return workflow_registry.enabled("party_file_compare")
+
+
+def party_approval_check_enabled() -> bool:
+    return workflow_registry.enabled("party_file_approval_check")
+
+
+def business_tools() -> list:
+    """Return every tool whose contract must be registered at graph startup."""
+    return [
+        report_progress,
+        route_conversation,
+        prepare_meeting_booking_request,
+        list_my_meeting_bookings,
+        get_my_meeting_booking,
+        create_meeting_booking_cancellation_draft,
+        list_available_meeting_rooms,
+        search_meeting_attendees,
+        get_current_meeting_user,
+        get_meeting_attendees_calendar,
+        check_meeting_room_conflict,
+        check_meeting_availability,
+        check_meeting_availability_batch,
+        create_meeting_booking_draft,
+        confirm_meeting_booking,
+        list_startable_approval_types,
+        preview_approval_request,
+        create_approval_request_draft,
+        create_generic_approval_request_draft,
+        create_approval_withdraw_draft,
+        confirm_approval_request_action,
+        confirm_approval_withdraw_action,
+        list_my_pending_approvals,
+        search_my_pending_approvals,
+        analyze_my_pending_approvals,
+        run_approval_query_plan,
+        preview_approval_batch_action,
+        confirm_approval_batch_action,
+        confirm_approval_task_action,
+        list_my_approval_applications,
+        get_my_approval_application,
+        list_my_approval_history,
+        get_approval_task_detail,
+        preview_approval_task_action,
+        get_my_calendar,
+        find_calendar_conflicts,
+        get_personal_schedule,
+        create_personal_schedule_draft,
+        confirm_personal_schedule,
+        search_party_files,
+        get_manage_party_file,
+        create_party_file_draft,
+        update_party_file_draft,
+        delete_party_file_draft,
+        confirm_create_party_file,
+        confirm_update_party_file,
+        confirm_delete_party_file,
+        get_party_file_detail,
+        get_party_file_attachments,
+        get_party_file_attachment,
+        execute_party_file_metadata_plan,
+        list_party_file_categories,
+        search_party_knowledge,
+        check_party_knowledge_health,
+        run_party_file_understanding,
+        run_party_file_compare,
+        check_approval_against_party_file,
+        run_meeting_booking_workflow,
+        run_personal_schedule_workflow,
+        meeting_report,
+        schedule_report,
+        party_file_report,
+        approval_report,
+    ]
+
+
+def main_tools() -> list:
+    """Tools exposed directly on the parent graph; domains stay in children."""
+    tools = [
+        report_progress,
+        route_conversation,
+        list_my_meeting_bookings,
+        get_my_meeting_booking,
+        create_meeting_booking_cancellation_draft,
+        confirm_meeting_booking,
+        confirm_personal_schedule,
+        create_party_file_draft,
+        update_party_file_draft,
+        delete_party_file_draft,
+        confirm_create_party_file,
+        confirm_update_party_file,
+        confirm_delete_party_file,
+        confirm_approval_batch_action,
+        confirm_approval_task_action,
+        # Simple, read-only approval queries stay on the parent path. This
+        # prevents a single structured filter from depending on delegation.
+        list_my_pending_approvals,
+        search_my_pending_approvals,
+        analyze_my_pending_approvals,
+        run_approval_query_plan,
+        list_my_approval_applications,
+        get_my_approval_application,
+        list_my_approval_history,
+        # Calendar reads have a typed metadata plan and therefore remain on
+        # the parent graph; complex coordination still delegates to the
+        # schedules_agent.
+        get_my_calendar,
+        get_party_file_attachments,
+        execute_party_file_metadata_plan,
+        meeting_report,
+        schedule_report,
+        party_file_report,
+        approval_report,
+    ]
+    if meeting_workflow_enabled():
+        tools.append(run_meeting_booking_workflow)
+    if personal_schedule_workflow_enabled():
+        tools.append(run_personal_schedule_workflow)
+    if party_knowledge_workflow_enabled():
+        tools.append(run_party_file_understanding)
+    if party_compare_workflow_enabled():
+        tools.append(run_party_file_compare)
+    if party_approval_check_enabled():
+        tools.append(check_approval_against_party_file)
+    return tools

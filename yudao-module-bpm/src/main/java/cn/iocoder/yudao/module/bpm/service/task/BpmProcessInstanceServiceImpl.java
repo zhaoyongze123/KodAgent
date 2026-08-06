@@ -222,7 +222,15 @@ public class BpmProcessInstanceServiceImpl implements BpmProcessInstanceService 
         }
 
         // 3.1 计算当前登录用户的待办任务
-        BpmTaskRespVO todoTask = taskService.getTodoTask(loginUserId, reqVO.getTaskId(), reqVO.getProcessInstanceId());
+        // A process-definition-only request is a pre-start preview.  It has
+        // no task id yet, so asking the task service to validate a null task
+        // is both semantically wrong and causes Flowable to throw
+        // TaskQuery.taskId(null).  Keep task lookup for an actual instance or
+        // task, and let the model simulation below produce the initial chain.
+        BpmTaskRespVO todoTask = null;
+        if (StrUtil.isNotBlank(reqVO.getTaskId()) || StrUtil.isNotBlank(reqVO.getProcessInstanceId())) {
+            todoTask = taskService.getTodoTask(loginUserId, reqVO.getTaskId(), reqVO.getProcessInstanceId());
+        }
 
         // 3.2 获取由于退回操作，需要预测的节点。从流程变量中获取，回退操作会设置这些变量
         Set<String> needSimulateTaskDefKeysByReturn = new HashSet<>();
@@ -755,12 +763,18 @@ public class BpmProcessInstanceServiceImpl implements BpmProcessInstanceService 
     @Transactional(rollbackFor = Exception.class)
     @DataPermission(enable = false) // 关闭数据权限，避免查询不到用户数据。相关案例：https://gitee.com/zhijiantianya/yudao-cloud/issues/ID1UYA
     public String createProcessInstance(Long userId, @Valid BpmProcessInstanceCreateReqVO createReqVO) {
-        // 获得流程定义
-        ProcessDefinition definition = processDefinitionService
-                .getProcessDefinition(createReqVO.getProcessDefinitionId());
-        // 发起流程
-        return createProcessInstance0(userId, definition, createReqVO.getVariables(), null,
-                createReqVO.getStartUserSelectAssignees());
+        // VO 入口与 DTO 入口必须使用相同的 Flowable 认证上下文。
+        // Agent Facade 也通过这个入口创建流程；如果只把 userId 作为业务参数
+        // 传入，而不设置 authenticatedUserId，Flowable 的 START_USER 节点会读取
+        // 到 null，并在候选人计算时以 NumberFormatException 失败。
+        return FlowableUtils.executeAuthenticatedUserId(userId, () -> {
+            // 获得流程定义
+            ProcessDefinition definition = processDefinitionService
+                    .getProcessDefinition(createReqVO.getProcessDefinitionId());
+            // 发起流程
+            return createProcessInstance0(userId, definition, createReqVO.getVariables(), null,
+                    createReqVO.getStartUserSelectAssignees());
+        });
     }
 
     @Override

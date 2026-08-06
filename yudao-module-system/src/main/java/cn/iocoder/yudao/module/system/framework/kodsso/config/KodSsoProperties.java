@@ -5,7 +5,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -52,6 +54,11 @@ public class KodSsoProperties {
      * 自动创建用户时附加的默认角色
      */
     private Set<Long> defaultRoleIds = new HashSet<>();
+    /**
+     * 明确的 KodBox 用户到若伊角色映射。key 可以是 KodBox userID 或 name。
+     * KodBox 的 apiCheckToken 不返回 OA 角色，不能根据不存在的 roleID 推断权限。
+     */
+    private Map<String, Long> userRoleMappings = new HashMap<>();
     /**
      * 可道云普通用户角色 ID
      */

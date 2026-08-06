@@ -6,6 +6,8 @@ import cn.iocoder.yudao.module.system.controller.admin.partyfile.vo.file.PartyFi
 import cn.iocoder.yudao.module.system.controller.admin.partyfile.vo.file.PartyFileSaveReqVO;
 import cn.iocoder.yudao.module.system.controller.admin.partyfile.vo.file.PartyFilePageReqVO;
 
+import java.util.Map;
+
 public interface PartyFileService {
 
     Long createPartyFile(PartyFileSaveReqVO reqVO);
@@ -19,6 +21,8 @@ public interface PartyFileService {
     PartyFileRespVO getPartyFileDetail(Long id);
 
     PageResult<PartyFileRespVO> getMyPartyFilePage(Long userId, PartyFileMyPageReqVO reqVO);
+
+    Map<String, Object> executeMyPartyFileMetadataPlan(Long userId, Map<String, Object> plan);
 
     PartyFileRespVO getMyPartyFileDetail(Long id, Long userId, String userNickname);
 

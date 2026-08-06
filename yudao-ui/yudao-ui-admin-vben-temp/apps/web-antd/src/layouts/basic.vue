@@ -28,7 +28,6 @@ import { useWebSocket } from '@vueuse/core';
 import { Modal, message } from 'ant-design-vue';
 
 import {
-  extractNoticeId,
   getUnreadNotifyMessageCount,
   getUnreadNotifyMessageList,
   updateAllNotifyMessageRead,
@@ -48,6 +47,7 @@ import {
 } from '#/utils/kod-entry';
 import { isAdminUser } from '#/utils/oa-user';
 import LoginForm from '#/views/_core/authentication/login.vue';
+import { resolveNotificationPreview as presentNotificationPreview } from '#/views/oa-lite/notification-presenter';
 import NotifyMessageDetail from '#/views/system/notify/my/modules/detail.vue';
 
 defineOptions({ name: 'UnifiedOALiteLayout' });
@@ -74,8 +74,6 @@ const BPM_MANAGEMENT_MENU_PATHS = new Set([
   '/bpm/manager/definition',
   '/bpm/process-instance/manager',
   '/bpm/group',
-  '/bpm/process-expression',
-  '/bpm/process-listener',
 ]);
 
 const BPM_MANAGEMENT_MENU_ITEMS: MenuRecordRaw[] = [
@@ -106,14 +104,6 @@ const BPM_MANAGEMENT_MENU_ITEMS: MenuRecordRaw[] = [
   {
     name: '用户组',
     path: '/bpm/group',
-  },
-  {
-    name: '流程表达式',
-    path: '/bpm/process-expression',
-  },
-  {
-    name: '流程监听器',
-    path: '/bpm/process-listener',
   },
 ];
 
@@ -173,35 +163,13 @@ const SYSTEM_MANAGEMENT_MENU_ITEMS: MenuRecordRaw[] = [
   },
 ];
 
-function stripHtmlContent(value?: string) {
-  if (!value) {
-    return '';
-  }
-  return value
-    .replace(/<style[\s\S]*?>[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
 function resolveNotificationPreview(
   item: Pick<
     SystemNotifyMessageApi.NotifyMessage,
     'templateCode' | 'templateContent' | 'templateParams'
   >,
 ) {
-  const noticeId = extractNoticeId(item);
-  if (!noticeId) {
-    return stripHtmlContent(item.templateContent) || '点击查看详情';
-  }
-  const content =
-    typeof item.templateParams?.content === 'string' ? item.templateParams.content : '';
-  return stripHtmlContent(content || item.templateContent) || '点击查看公告详情';
+  return presentNotificationPreview(item);
 }
 
 function flattenMenus(
@@ -339,11 +307,18 @@ const isOaLiteReturnRoute = computed(() => {
   return returnTo === 'oa-lite';
 });
 const isOARequestRoute = computed(() => route.path.startsWith('/bpm/oa/'));
+const isOaLiteProcessInstanceCreateRoute = computed(
+  () =>
+    route.name === 'BpmProcessInstanceCreate' &&
+    (isOaLiteReturnRoute.value ||
+      isApprovalEntryQuery(route.query) ||
+      currentActivePath.value === '/oa-lite'),
+);
 const isWorkbenchCreateRoute = computed(
   () =>
     route.path === '/oa-lite' ||
     isOARequestRoute.value ||
-    (route.path === '/bpm/process-instance/create' && isOaLiteReturnRoute.value),
+    isOaLiteProcessInstanceCreateRoute.value,
 );
 const isWorkbenchNotificationRoute = computed(
   () => route.path.startsWith('/oa-lite/notifications'),
@@ -355,7 +330,7 @@ const isWorkbenchRoute = computed(
   () =>
     isWorkbenchCreateRoute.value ||
     isWorkbenchCenterRoute.value ||
-    isWorkbenchNotificationRoute.value,
+    isWorkbenchNotificationRoute.value
 );
 
 const currentMatchedMenu = computed(() => {
@@ -405,7 +380,7 @@ const currentRootMenuPath = computed(() => {
   if (isOARequestRoute.value) {
     return '';
   }
-  if (route.path === '/bpm/process-instance/create' && isOaLiteReturnRoute.value) {
+  if (isOaLiteProcessInstanceCreateRoute.value) {
     return '';
   }
   if (route.path === '/bpm' || route.path.startsWith('/bpm/')) {
@@ -582,9 +557,13 @@ function handleTopNavSelect(path: string) {
   }
   const shouldKeepApprovalEntry =
     isApprovalEntryMode.value && path.startsWith('/oa-lite');
+  const nextQuery = shouldKeepApprovalEntry ? { ...route.query, entry: KOD_ENTRY_APPROVAL } : {};
+  if (path !== '/oa-lite' && 'forceCreate' in nextQuery) {
+    delete nextQuery.forceCreate;
+  }
   router.push({
     path,
-    query: shouldKeepApprovalEntry ? { ...route.query, entry: KOD_ENTRY_APPROVAL } : {},
+    query: nextQuery,
   });
 }
 

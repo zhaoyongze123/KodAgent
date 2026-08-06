@@ -1,0 +1,11 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "oa_agent": "./src/langgraph_app.py:graph"
+  },
+  "env": "./.env",
+  "auth": {
+    "path": "./src/auth.py:auth",
+    "disable_studio_auth": true
+  }
+}

@@ -3,7 +3,6 @@ package cn.iocoder.yudao.module.system.service.auth;
 import cn.hutool.core.lang.UUID;
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.IdUtil;
-import cn.hutool.core.util.ObjectUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.iocoder.yudao.framework.common.enums.CommonStatusEnum;
 import cn.iocoder.yudao.framework.common.enums.UserTypeEnum;
@@ -160,9 +159,14 @@ public class KodSsoServiceImpl implements KodSsoService {
         String kodNickname = firstNonBlank(payload, "nickName", "nickname", "displayName", "name");
         String email = firstNonBlank(payload, "email");
         String mobile = firstNonBlank(payload, "mobile", "phone", "tel");
-        Long kodRoleId = firstLong(payload, "roleID", "roleId");
+        // apiCheckToken 的最小返回只包含用户身份资料，但不同的 KodBox
+        // 版本/部署会附带 groupInfo。部门不是权限来源，能够安全地作为
+        // 组织同步的可选输入；缺失时保持空路径，不得据此清空已有部门。
+        // 角色仍必须通过明确的 userRoleMappings/defaultRoleIds 配置或本地
+        // 绑定决定，不能根据可道云返回的 roleID/isRoot 推断本地权限。
+        Long kodRoleId = null;
         List<KodDeptNode> deptPath = extractDeptPath(payload);
-        boolean isRoot = firstBoolean(payload, "isRoot", "root");
+        boolean isRoot = false;
         if (StrUtil.isAllBlank(kodUserId, kodUsername)) {
             throw exception(AUTH_KOD_SSO_TOKEN_INVALID, "可道云返回缺少用户唯一标识");
         }
@@ -511,7 +515,10 @@ public class KodSsoServiceImpl implements KodSsoService {
             log.warn("可道云用户 {} 未匹配到角色映射，回退使用默认角色 {}", profile.getKodUserId(),
                     kodSsoProperties.getDefaultRoleIds());
         } else {
-            log.warn("可道云用户 {} 未匹配到角色映射，且未配置默认角色，登录后可能看不到任何菜单", profile.getKodUserId());
+            // 可道云返回的角色字段缺失或出现新角色时，不能把本地已有角色清空。
+            // 否则一次 SSO 登录就会造成权限降级，且用户只能看到“没有该操作权限”。
+            log.warn("可道云用户 {} 未匹配到角色映射，且未配置默认角色，保留现有本地角色", profile.getKodUserId());
+            return;
         }
 
         if (!Objects.equals(targetRoleIds, currentRoleIds)) {
@@ -531,16 +538,15 @@ public class KodSsoServiceImpl implements KodSsoService {
     }
 
     private Long resolveLocalRoleId(KodUserProfile profile) {
-        if (profile.isRoot() || ObjectUtil.equal(profile.getKodRoleId(), kodSsoProperties.getKodSuperAdminRoleId())) {
-            return kodSsoProperties.getLocalSuperAdminRoleId();
+        Map<String, Long> mappings = kodSsoProperties.getUserRoleMappings();
+        if (mappings == null || mappings.isEmpty()) {
+            return null;
         }
-        if (ObjectUtil.equal(profile.getKodRoleId(), kodSsoProperties.getKodDeptAdminRoleId())) {
-            return kodSsoProperties.getLocalDeptAdminRoleId();
+        Long roleId = mappings.get(profile.getKodUserId());
+        if (roleId == null) {
+            roleId = mappings.get(profile.getKodUsername());
         }
-        if (ObjectUtil.equal(profile.getKodRoleId(), kodSsoProperties.getKodCommonRoleId())) {
-            return kodSsoProperties.getLocalCommonRoleId();
-        }
-        return null;
+        return roleId;
     }
 
     private void addRoleId(Set<Long> roleIds, Long roleId) {

@@ -38,14 +38,6 @@ export function useFormSchema(): VbenFormSchema[] {
       rules: 'required',
     },
     {
-      fieldName: 'publishTarget',
-      label: '发布对象',
-      component: 'Input',
-      componentProps: {
-        placeholder: '请输入发布对象',
-      },
-    },
-    {
       fieldName: 'pinned',
       label: '置顶状态',
       component: 'Switch',
@@ -78,6 +70,13 @@ export function useFormSchema(): VbenFormSchema[] {
         optionType: 'button',
       },
       rules: z.number().default(CommonStatusEnum.ENABLE),
+    },
+    {
+      fieldName: 'targets',
+      label: '发布对象',
+      component: 'Input',
+      formItemClass: 'col-span-2',
+      renderComponentContent: () => ({}),
     },
   ];
 }

@@ -2,6 +2,7 @@ package cn.iocoder.yudao.module.system.dal.dataobject.meetingroom;
 
 import cn.iocoder.yudao.framework.tenant.core.db.TenantBaseDO;
 import com.baomidou.mybatisplus.annotation.KeySequence;
+import com.baomidou.mybatisplus.annotation.TableField;
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
@@ -29,21 +30,25 @@ public class MeetingBookingDO extends TenantBaseDO {
     /**
      * 会议室编号
      */
+    @TableField("meeting_room_id")
     private Long meetingRoomId;
 
     /**
      * 开始时间
      */
+    @TableField("start_time")
     private LocalDateTime startTime;
 
     /**
      * 结束时间
      */
+    @TableField("end_time")
     private LocalDateTime endTime;
 
     /**
      * 申请人编号
      */
+    @TableField("applicant_user_id")
     private Long applicantUserId;
 
     /**
@@ -59,16 +64,19 @@ public class MeetingBookingDO extends TenantBaseDO {
     /**
      * 是否忽略冲突提醒保存
      */
+    @TableField("force_conflict")
     private Boolean forceConflict;
 
     /**
      * 取消原因
      */
+    @TableField("cancel_reason")
     private String cancelReason;
 
     /**
      * 取消类型
      */
+    @TableField("cancel_type")
     private Integer cancelType;
 
 }

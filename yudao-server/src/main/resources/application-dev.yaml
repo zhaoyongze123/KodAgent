@@ -2,6 +2,12 @@ server:
   port: 48080
 
 yudao:
+  security:
+    permit-all-urls:
+      - /agent/tools/**
+  tenant:
+    ignore-urls:
+      - /agent/tools/**
   kod-sso:
     # 部署环境与本地隔离：默认关闭，由部署环境单独注入
     enabled: ${KOD_SSO_ENABLED:false}
@@ -58,21 +64,21 @@ spring:
       primary: master
       datasource:
         master:
-          url: jdbc:mysql://127.0.0.1:3306/ruoyi-vue-pro?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true&rewriteBatchedStatements=true # MySQL Connector/J 8.X 连接的示例
-          username: root
-          password: 123456
+          url: jdbc:mysql://${OA_MYSQL_HOST:127.0.0.1}:${OA_MYSQL_PORT:3306}/ruoyi-vue-pro?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true&rewriteBatchedStatements=true # MySQL Connector/J 8.X 连接的示例
+          username: ${MASTER_DATASOURCE_USERNAME:root}
+          password: ${MASTER_DATASOURCE_PASSWORD:}
         slave: # 模拟从库，可根据自己需要修改 # 模拟从库，可根据自己需要修改
           lazy: true # 开启懒加载，保证启动速度
-          url: jdbc:mysql://127.0.0.1:3306/ruoyi-vue-pro?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true&rewriteBatchedStatements=true # MySQL Connector/J 8.X 连接的示例
-          username: root
-          password: 123456
+          url: jdbc:mysql://${OA_MYSQL_HOST:127.0.0.1}:${OA_MYSQL_PORT:3306}/ruoyi-vue-pro?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true&rewriteBatchedStatements=true # MySQL Connector/J 8.X 连接的示例
+          username: ${SLAVE_DATASOURCE_USERNAME:${MASTER_DATASOURCE_USERNAME:root}}
+          password: ${SLAVE_DATASOURCE_PASSWORD:${MASTER_DATASOURCE_PASSWORD:}}
 
   # Redis 配置。Redisson 默认的配置足够使用，一般不需要进行调优
   redis:
     host: 400-infra.server.iocoder.cn # 地址
     port: 6379 # 端口
     database: 1 # 数据库索引
-#    password: 123456 # 密码，建议生产环境开启
+#    password: ${OA_REDIS_PASSWORD:} # 通过环境变量注入
 
 --- #################### 定时任务相关配置 ####################
 

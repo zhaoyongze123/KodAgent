@@ -41,10 +41,6 @@ nbdist/
 *.xml.versionsBackup
 *.swp
 
-!*/build/*.java
-!*/build/*.html
-!*/build/*.xml
-
 ### JRebel ###
 rebel.xml
 
@@ -60,3 +56,54 @@ application-my.yaml
 /script/docker/env/stage.env
 /script/docker/env/prod.env
 /script/docker/env/.stage.ci.env
+
+# Local Agent credentials (including LangSmith and model API keys)
+/agent-python/.env
+/agent-python/.data/
+/.playwright-cli/
+
+# Unified Python and Agent runtime artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.venv/
+venv/
+.tmp-venv*/
+*.egg-info/
+*.whl
+*.sqlite*
+*.pckl
+**/.langgraph_api/
+**/.data/
+
+# Unified frontend build and development artifacts
+node_modules/
+dist-ssr/
+.next/
+.next-*/
+next-env.d.ts
+*.tsbuildinfo
+coverage/
+.cache/
+.turbo/
+.vite/
+.output/
+.nitro/
+.temp/
+.eslintcache
+.stylelintcache
+logs/
+*.local
+.env
+.vscode/
+
+# Local temporary files and package-manager caches
+/tmp/
+/.pnpm-store/
+
+# Local database files
+*.db
