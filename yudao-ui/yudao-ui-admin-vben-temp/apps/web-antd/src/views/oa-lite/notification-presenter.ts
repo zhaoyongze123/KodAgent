@@ -33,6 +33,10 @@ const BPM_TASK_ASSIGNED_CODE = 'bpm_task_assigned';
 const BPM_PROCESS_APPROVE_CODE = 'bpm_process_instance_approve';
 const BPM_PROCESS_REJECT_CODE = 'bpm_process_instance_reject';
 
+function resolveWorkbenchDetailSection(templateCode?: string) {
+  return templateCode === BPM_TASK_ASSIGNED_CODE ? 'pending' : 'initiated';
+}
+
 function stripHtmlContent(value?: string) {
   if (!value) {
     return '';
@@ -84,12 +88,13 @@ function resolveProcessDetailRoute(
     return undefined;
   }
   return {
-    name: 'BpmProcessInstanceDetail',
+    path: '/oa-lite/center',
     query: {
-      id: processId,
-      ...(resolvedTaskId ? { taskId: resolvedTaskId } : {}),
+      view: 'center',
+      detailSection: resolveWorkbenchDetailSection(message.templateCode),
+      detailProcessInstanceId: processId,
+      ...(resolvedTaskId ? { detailTaskId: resolvedTaskId } : {}),
       entry: 'approval',
-      returnTo: 'oa-lite',
     },
   } satisfies RouteLocationRaw;
 }

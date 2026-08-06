@@ -32,4 +32,7 @@ public interface PartyFileAttachmentService {
     FileDO getFile(Long fileId);
 
     byte[] getAttachmentContent(Long fileId) throws Exception;
+
+    /** 获取用于在线预览的内容，Office 文档会先转换为 PDF。 */
+    byte[] getAttachmentPreviewContent(Long fileId) throws Exception;
 }

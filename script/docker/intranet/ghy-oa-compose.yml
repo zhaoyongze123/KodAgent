@@ -1,0 +1,77 @@
+services:
+  mysql:
+    image: docker.m.daocloud.io/library/mysql:8
+    container_name: ruoyi-mysql
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      TZ: Asia/Shanghai
+    volumes:
+      - /data/ghy-oa/mysql:/var/lib/mysql
+      - /data/ghy-oa/init/ruoyi-vue-pro.sql:/docker-entrypoint-initdb.d/01-ruoyi.sql:ro
+    networks:
+      - ghy-intranet
+
+  redis:
+    image: docker.m.daocloud.io/library/redis:6-alpine
+    container_name: ruoyi-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - /data/ghy-oa/redis:/data
+    networks:
+      - ghy-intranet
+
+  server:
+    image: ghy-oa-server:20260731
+    container_name: ruoyi-server
+    restart: unless-stopped
+    depends_on:
+      - mysql
+      - redis
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      JAVA_OPTS: ${JAVA_OPTS}
+      ARGS: >-
+        --spring.datasource.dynamic.datasource.master.url=jdbc:mysql://mysql:3306/${MYSQL_DATABASE}?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true&rewriteBatchedStatements=true
+        --spring.datasource.dynamic.datasource.master.username=root
+        --spring.datasource.dynamic.datasource.master.password=${MYSQL_ROOT_PASSWORD}
+        --spring.datasource.dynamic.datasource.slave.url=jdbc:mysql://mysql:3306/${MYSQL_DATABASE}?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true&rewriteBatchedStatements=true
+        --spring.datasource.dynamic.datasource.slave.username=root
+        --spring.datasource.dynamic.datasource.slave.password=${MYSQL_ROOT_PASSWORD}
+        --spring.redis.host=redis
+        --yudao.kod-sso.enabled=true
+        --yudao.kod-sso.base-url=http://${INTRANET_HOST}:18081/
+        --yudao.kod-sso.server-base-url=http://kodbox/
+        --yudao.kod-sso.app-name=user:all
+        --yudao.kod-sso.redirect-uri=http://${INTRANET_HOST}:18080/#/auth/kod-sso-login?tenantId=1
+        --yudao.kod-sso.callback-base-url=http://${INTRANET_HOST}:18080
+        --yudao.kod-sso.tenant-id=1
+        --yudao.kod-sso.auto-create-user=true
+        --yudao.kod-sso.organization-sync-enabled=false
+        --yudao.kod-sso.organization-sync-cron=-
+        --yudao.captcha.enable=true
+    ports:
+      - "127.0.0.1:48080:48080"
+    networks:
+      - ghy-intranet
+
+  admin:
+    image: ghy-oa-admin:20260731
+    container_name: ruoyi-admin
+    restart: unless-stopped
+    depends_on:
+      - server
+    ports:
+      - "${INTRANET_HOST}:18080:80"
+    networks:
+      - ghy-intranet
+
+networks:
+  ghy-intranet:
+    external: true
+    name: ghy-intranet

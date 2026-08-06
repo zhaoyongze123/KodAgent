@@ -1,4 +1,4 @@
-import type { Router } from 'vue-router';
+import type { RouteLocationNormalized, Router } from 'vue-router';
 
 import { LOGIN_PATH } from '@vben/constants';
 import { $t } from '@vben/locales';
@@ -55,6 +55,50 @@ function buildLoginRedirect(fullPath: string) {
   };
 }
 
+function isOaWorkbenchPath(path: string) {
+  return path === '/oa-lite' || path.startsWith('/oa-lite/');
+}
+
+function resolveQueryValue(value: unknown) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function redirectWorkbenchProcessDetail(
+  to: RouteLocationNormalized,
+  from: RouteLocationNormalized,
+) {
+  if (
+    to.name !== 'BpmProcessInstanceDetail' ||
+    !isOaWorkbenchPath(from.path)
+  ) {
+    return undefined;
+  }
+  const processInstanceId = resolveQueryValue(to.query?.id);
+  if (!processInstanceId) {
+    return undefined;
+  }
+  const taskId = resolveQueryValue(to.query?.taskId);
+  const activityId = resolveQueryValue(to.query?.activityId);
+  const managementEntry =
+    resolveQueryValue(from.query?.manage) === 'bpm' &&
+    resolveQueryValue(from.query?.page) === 'process';
+  return {
+    path: '/oa-lite/center',
+    query: {
+      view: 'center',
+      detailSection: managementEntry ? 'manager' : taskId ? 'pending' : 'initiated',
+      detailProcessInstanceId: String(processInstanceId),
+      ...(taskId ? { detailTaskId: String(taskId) } : {}),
+      ...(activityId ? { detailActivityId: String(activityId) } : {}),
+      ...(managementEntry ? { manage: 'bpm', page: 'process' } : {}),
+      ...(resolveQueryValue(from.query?.entry) === 'approval'
+        ? { entry: 'approval' }
+        : {}),
+    },
+    replace: true,
+  };
+}
+
 /**
  * 通用守卫配置
  * @param router
@@ -95,6 +139,11 @@ function setupAccessGuard(router: Router) {
     const userStore = useUserStore();
     const authStore = useAuthStore();
     const dictStore = useDictStore();
+
+    const workbenchDetailRedirect = redirectWorkbenchProcessDetail(to, from);
+    if (workbenchDetailRedirect) {
+      return workbenchDetailRedirect;
+    }
 
     if (isBlockedMenuPath(to.path)) {
       return {

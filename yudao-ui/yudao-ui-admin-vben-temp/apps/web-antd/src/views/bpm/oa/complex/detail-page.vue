@@ -14,7 +14,7 @@ import { IconifyIcon } from '@vben/icons';
 import { getDictOptions } from '@vben/hooks';
 import { DICT_TYPE } from '@vben/constants';
 
-import { normalizeOaAssetUrl } from '#/utils';
+import { getOaFilePreviewUrl, normalizeOaAssetUrl } from '#/utils';
 import { getComplexModuleViewConfig, parseJsonArray } from './config';
 
 defineOptions({ name: 'OAComplexDetailPage' });
@@ -162,11 +162,7 @@ function getFileIcon(name: string) {
 }
 
 function getPreviewUrl(file: { name: string; url: string }) {
-  const extension = getFileExtension(file.name);
-  if (['DOC', 'DOCX', 'XLS', 'XLSX', 'PPT', 'PPTX'].includes(extension)) {
-    return `https://view.officeapps.live.com/op/view.aspx?src=${encodeURIComponent(file.url)}`;
-  }
-  return file.url;
+  return getOaFilePreviewUrl(file.url, file.name);
 }
 
 function openFilePreview(file: { name: string; url: string }) {
@@ -176,6 +172,26 @@ function openFilePreview(file: { name: string; url: string }) {
 function openFileInNewWindow() {
   if (previewFile.value && typeof window !== 'undefined') {
     window.open(previewFile.value.url, '_blank', 'noopener,noreferrer');
+  }
+}
+
+function downloadFile(file: { name: string; url: string }) {
+  if (typeof document === 'undefined') {
+    return;
+  }
+  const link = document.createElement('a');
+  link.href = file.url;
+  link.download = file.name;
+  link.rel = 'noopener';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+function handleAttachmentKeydown(event: KeyboardEvent, file: { name: string; url: string }) {
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    openFilePreview(file);
   }
 }
 
@@ -217,13 +233,15 @@ onMounted(() => {
           <div class="oa-detail-field-value">
             <template v-if="field.type === 'files'">
             <div class="oa-detail-attachment-list">
-              <a
+              <div
                 v-for="file in getDetailFiles(field)"
                 :key="file.url"
                 class="oa-detail-attachment-item"
-                :href="file.url"
                 :title="`在线预览：${file.name}`"
-                @click.prevent="openFilePreview(file)"
+                role="button"
+                tabindex="0"
+                @click="openFilePreview(file)"
+                @keydown="handleAttachmentKeydown($event, file)"
               >
                 <span class="oa-detail-attachment-icon">
                   <IconifyIcon :icon="getFileIcon(file.name)" />
@@ -245,7 +263,15 @@ onMounted(() => {
                 >
                   预览
                 </Button>
-              </a>
+                <Button
+                  type="link"
+                  size="small"
+                  class="oa-detail-attachment-download"
+                  @click.stop.prevent="downloadFile(file)"
+                >
+                  下载
+                </Button>
+              </div>
             </div>
             </template>
             <span v-else class="oa-detail-text-value">
@@ -266,6 +292,16 @@ onMounted(() => {
     @cancel="previewFile = null"
   >
     <div v-if="previewFile" class="oa-detail-preview-shell">
+      <div class="oa-detail-preview-toolbar">
+        <span class="oa-detail-preview-filename">{{ previewFile.name }}</span>
+        <Button
+          type="primary"
+          size="small"
+          @click="downloadFile(previewFile)"
+        >
+          下载文件
+        </Button>
+      </div>
       <iframe
         :src="previewFile.previewUrl"
         :title="`预览 ${previewFile.name}`"
@@ -414,11 +450,32 @@ onMounted(() => {
   color: var(--oa-accent, #2674d9);
 }
 
+.oa-detail-attachment-download {
+  flex: none;
+  color: var(--oa-accent, #2674d9);
+}
+
 .oa-detail-preview-shell {
   display: flex;
   min-height: 620px;
   flex-direction: column;
   gap: 8px;
+}
+
+.oa-detail-preview-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.oa-detail-preview-filename {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--oa-ink, #17202d);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .oa-detail-preview-frame {

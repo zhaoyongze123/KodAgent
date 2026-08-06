@@ -5,7 +5,7 @@ import { computed, ref } from 'vue';
 
 import { useVbenModal } from '@vben/common-ui';
 import { downloadFileFromBlobPart, formatDateTime } from '@vben/utils';
-import { Button, Empty, Tag } from 'ant-design-vue';
+import { Button, Empty, Modal as AntModal, Tag } from 'ant-design-vue';
 
 import {
   downloadMyPartyFileAttachment,
@@ -16,9 +16,14 @@ import {
   previewMyPartyFileAttachment,
   previewPartyFileAttachment,
 } from '#/api/system/party-file';
+import PdfPreview from '#/components/pdf-preview/pdf-preview.vue';
 
 const detail = ref<SystemPartyFileApi.PartyFile>();
 const isMine = ref(false);
+const previewOpen = ref(false);
+const previewLoading = ref(false);
+const previewSource = ref<BlobPart>();
+const previewTitle = ref('附件预览');
 
 const [Modal, modalApi] = useVbenModal({
   async onOpenChange(isOpen: boolean) {
@@ -113,15 +118,6 @@ function markAttachmentAction(fileId: number, action: 'download' | 'preview' = '
   }
 }
 
-function openBlobPreview(data: BlobPart, type?: string) {
-  const blob = data instanceof Blob ? data : new Blob([data], { type });
-  const objectUrl = window.URL.createObjectURL(blob);
-  window.open(objectUrl, '_blank', 'noopener,noreferrer');
-  window.setTimeout(() => {
-    window.URL.revokeObjectURL(objectUrl);
-  }, 60_000);
-}
-
 async function handleDownload(fileId: number) {
   if (!detail.value?.id) {
     return;
@@ -134,18 +130,25 @@ async function handleDownload(fileId: number) {
   downloadFileFromBlobPart({ fileName, source: data });
 }
 
-async function handlePreview(fileId: number, type?: string) {
+async function handlePreview(fileId: number) {
   if (!detail.value?.id) {
     return;
   }
-  if (isMine.value) {
-    const res = await previewMyPartyFileAttachment(detail.value.id, fileId);
-    openBlobPreview(res, type);
-    return;
+  const attachment = detail.value.attachments?.find((item) => item.id === fileId);
+  previewTitle.value = attachment?.name || '附件预览';
+  previewOpen.value = true;
+  previewLoading.value = true;
+  previewSource.value = undefined;
+  try {
+    if (isMine.value) {
+      previewSource.value = await previewMyPartyFileAttachment(detail.value.id, fileId);
+    } else {
+      markAttachmentAction(fileId, 'preview');
+      previewSource.value = await previewPartyFileAttachment(detail.value.id, fileId);
+    }
+  } finally {
+    previewLoading.value = false;
   }
-  markAttachmentAction(fileId, 'preview');
-  const res = await previewPartyFileAttachment(detail.value.id, fileId);
-  openBlobPreview(res, type);
 }
 </script>
 
@@ -229,7 +232,7 @@ async function handlePreview(fileId: number, type?: string) {
                 </div>
               </div>
               <div class="party-file-detail__attachment-actions">
-                <Button type="link" size="small" @click="handlePreview(item.id, item.type)">
+                <Button type="link" size="small" @click="handlePreview(item.id)">
                   预览
                 </Button>
                 <Button type="link" size="small" @click="handleDownload(item.id)">
@@ -309,6 +312,17 @@ async function handlePreview(fileId: number, type?: string) {
       </aside>
     </div>
   </Modal>
+
+  <AntModal
+    v-model:open="previewOpen"
+    :footer="null"
+    :title="previewTitle"
+    width="900px"
+    destroy-on-close
+  >
+    <div v-if="previewLoading" class="party-file-preview-loading">正在加载预览...</div>
+    <PdfPreview v-else :source="previewSource" />
+  </AntModal>
 </template>
 
 <style scoped>
@@ -538,6 +552,13 @@ async function handlePreview(fileId: number, type?: string) {
 
 .party-file-detail__unread-item {
   align-items: center;
+}
+
+.party-file-preview-loading {
+  display: grid;
+  min-height: 420px;
+  place-items: center;
+  color: #64748b;
 }
 
 @media (max-width: 960px) {

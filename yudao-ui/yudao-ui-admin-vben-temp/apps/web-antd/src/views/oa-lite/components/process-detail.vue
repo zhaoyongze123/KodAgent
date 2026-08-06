@@ -13,12 +13,14 @@ import {
   BpmProcessInstanceStatus,
 } from '@vben/constants';
 import { IconifyIcon } from '@vben/icons';
+import { useUserStore } from '@vben/stores';
 import { formatDateTime } from '@vben/utils';
 import { useI18n } from '@vben/locales';
 
 import { Button, Empty, message, Spin, Tag, Textarea } from 'ant-design-vue';
 
 import {
+  cancelProcessInstanceByAdmin,
   cancelProcessInstanceByStartUser,
   getApprovalDetail,
   getProcessInstanceBpmnModelView,
@@ -26,7 +28,12 @@ import {
 import { withdrawTask } from '#/api/bpm/task';
 import { getSimpleUserList } from '#/api/system/user';
 import { setConfAndFields2 } from '#/components/form-create';
-import { normalizeOaAssetUrl, registerComponent } from '#/utils';
+import {
+  getOaFilePreviewUrl,
+  normalizeOaAssetUrl,
+  registerComponent,
+} from '#/utils';
+import { isAdminUser } from '#/utils/oa-user';
 import ProcessInstanceBpmnViewer from '#/views/bpm/processInstance/detail/modules/bpm-viewer.vue';
 import ProcessInstanceOperationButton from '#/views/bpm/processInstance/detail/modules/operation-button.vue';
 import ProcessInstanceSimpleViewer from '#/views/bpm/processInstance/detail/modules/simple-bpm-viewer.vue';
@@ -38,6 +45,7 @@ defineOptions({ name: 'OaLiteProcessDetail' });
 export type OaLiteDetailSection =
   | 'copied'
   | 'initiated'
+  | 'manager'
   | 'pending'
   | 'processed';
 
@@ -63,6 +71,7 @@ const emit = defineEmits<{
   refresh: [];
 }>();
 const { t } = useI18n();
+const userStore = useUserStore();
 
 const loading = ref(false);
 const activeTab = ref<'diagram' | 'form' | 'record'>('form');
@@ -99,7 +108,8 @@ const todoTask = computed(() => approvalDetail.value?.todoTask);
 
 const canCancelProcess = computed(
   () =>
-    props.section === 'initiated' &&
+    (props.section === 'initiated' ||
+      (props.section === 'manager' && isAdminUser(userStore.userRoles))) &&
     processInstance.value?.status === BpmProcessInstanceStatus.RUNNING,
 );
 const canRecreateProcess = computed(
@@ -124,6 +134,26 @@ const businessKeyIsValid = computed(() => {
 const hasEditableNormalForm = computed(
   () => props.section === 'pending' && writableFields.value.length > 0,
 );
+const canViewDiagram = computed(() => isAdminUser(userStore.userRoles));
+
+watch(
+  canViewDiagram,
+  (visible) => {
+    if (!visible && activeTab.value === 'diagram') {
+      activeTab.value = 'form';
+    }
+  },
+  { immediate: true },
+);
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs = 15_000) {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      window.setTimeout(() => reject(new Error('审批详情加载超时')), timeoutMs);
+    }),
+  ]);
+}
 
 interface OaLiteAttachment {
   extension: string;
@@ -267,6 +297,10 @@ function formatFileSize(size?: number) {
     return `${(size / 1024).toFixed(1)} KB`;
   }
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function getAttachmentPreviewUrl(file: OaLiteAttachment) {
+  return getOaFilePreviewUrl(file.url, file.name);
 }
 
 function flattenNormalRules(rules: any[], fields: any[] = []) {
@@ -422,11 +456,11 @@ async function loadDetail() {
   }
   loading.value = true;
   try {
-    const data = await getApprovalDetail({
+    const data = await withTimeout(getApprovalDetail({
       activityId: props.request.activityId,
       processInstanceId: props.request.processInstanceId,
       taskId: props.request.taskId,
-    });
+    }));
     approvalDetail.value = data;
 
     if (!data?.processDefinition || !data?.processInstance) {
@@ -469,13 +503,19 @@ async function loadDetail() {
           : null);
     }
 
-    processModelView.value = await getProcessInstanceBpmnModelView(
-      props.request.processInstanceId,
-    );
+    if (canViewDiagram.value) {
+      processModelView.value = await withTimeout(getProcessInstanceBpmnModelView(
+        props.request.processInstanceId,
+      ));
+    }
 
     await ensureUserOptions();
     await nextTick();
     operationButtonRef.value?.loadTodoTask(data.todoTask);
+  } catch (error: any) {
+    console.error('审批详情加载失败', error);
+    resetNormalForm();
+    message.error(error?.message || '审批详情加载失败，请稍后重试');
   } finally {
     loading.value = false;
   }
@@ -508,7 +548,11 @@ function handleCancelProcess() {
     if (!reason) {
       return;
     }
-    await cancelProcessInstanceByStartUser(processInstance.value!.id, reason);
+    if (props.section === 'manager') {
+      await cancelProcessInstanceByAdmin(processInstance.value!.id, reason);
+    } else {
+      await cancelProcessInstanceByStartUser(processInstance.value!.id, reason);
+    }
     message.success(t('page.oaLite.messages.cancelSuccess'));
     emit('refresh');
   });
@@ -634,6 +678,7 @@ watch(
                 {{ t('page.oaLite.processDetail.tabs.detail') }}
               </button>
               <button
+                v-if="canViewDiagram"
                 class="oa-lite-process-tab"
                 :class="{ active: activeTab === 'diagram' }"
                 @click="activeTab = 'diagram'"
@@ -692,14 +737,11 @@ watch(
                       v-if="field.attachments.length > 0"
                       class="oa-lite-normal-attachment-list"
                     >
-                      <a
+                      <div
                         v-for="file in field.attachments"
                         :key="file.url"
                         class="oa-lite-normal-attachment"
-                        :href="file.url"
                         :title="file.name"
-                        target="_blank"
-                        rel="noopener noreferrer"
                       >
                         <span class="oa-lite-normal-attachment-icon">
                           <IconifyIcon :icon="getFileIcon(file.name)" />
@@ -713,10 +755,24 @@ watch(
                             </template>
                           </span>
                         </span>
-                        <span class="oa-lite-normal-attachment-action">
-                          查看
+                        <span class="oa-lite-normal-attachment-actions">
+                          <a
+                            class="oa-lite-normal-attachment-action"
+                            :href="getAttachmentPreviewUrl(file)"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            预览
+                          </a>
+                          <a
+                            class="oa-lite-normal-attachment-action"
+                            :download="file.name"
+                            :href="file.url"
+                          >
+                            下载
+                          </a>
                         </span>
-                      </a>
+                      </div>
                     </div>
                     <span v-else class="oa-lite-normal-form-text">
                       {{ field.displayValue }}
@@ -739,7 +795,10 @@ watch(
             </aside>
           </div>
 
-          <div v-else-if="activeTab === 'diagram'" class="oa-lite-detail-card">
+          <div
+            v-else-if="activeTab === 'diagram' && canViewDiagram"
+            class="oa-lite-detail-card"
+          >
             <ProcessInstanceSimpleViewer
               v-if="processDefinition.modelType === BpmModelType.SIMPLE"
               :loading="loading"
@@ -1166,6 +1225,13 @@ watch(
   flex: none;
   color: var(--oa-accent);
   font-size: 12px;
+  text-decoration: none;
+}
+
+.oa-lite-normal-attachment-actions {
+  display: inline-flex;
+  flex: none;
+  gap: 12px;
 }
 
 .oa-lite-business-form {

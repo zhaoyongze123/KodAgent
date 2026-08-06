@@ -1,5 +1,4 @@
 <script lang="ts" setup>
-import type { BpmProcessDefinitionApi } from '#/api/bpm/definition';
 import type { BpmProcessInstanceApi } from '#/api/bpm/processInstance';
 
 import { computed, nextTick, ref, watch } from 'vue';
@@ -17,7 +16,6 @@ import { IconifyIcon } from '@vben/icons';
 import formCreate from '@form-create/ant-design-vue';
 import { Button, Col, message, Row, Space } from 'ant-design-vue';
 
-import { getProcessDefinition } from '#/api/bpm/definition';
 import {
   createProcessInstance,
   getApprovalDetail as getApprovalDetailApi,
@@ -68,7 +66,6 @@ const startUserSelectTasks = ref<UserTask[]>([]);
 const startUserSelectAssignees = ref<Record<string, string[]>>({});
 const tempStartUserSelectAssignees = ref<Record<string, string[]>>({});
 
-const timelineRef = ref<any>();
 const activityNodes = ref<BpmProcessInstanceApi.ApprovalNodeInfo[]>([]);
 const processInstanceStartLoading = ref(false);
 const initializedDefinitionId = ref<string>();
@@ -162,6 +159,36 @@ async function initProcessInfo(row: any, formVariables?: any) {
     }
 
     setConfAndFields2(detailForm, row.formConf, row.formFields, formVariables);
+
+    // 所有普通模板发起表单统一使用两列布局。这里在公共 form-create
+    // 发起入口处理，避免只对某一个 OA 自定义模板单独加样式。
+    const twoColumnCol = {
+      span: 12,
+      xs: 24,
+      sm: 24,
+      md: 12,
+      lg: 12,
+      xl: 12,
+    };
+    detailForm.value.option = {
+      ...detailForm.value.option,
+      col: {
+        ...(detailForm.value.option.col || {}),
+        ...twoColumnCol,
+      },
+      row: {
+        ...(detailForm.value.option.row || {}),
+        gutter: 16,
+        show: false,
+      },
+    };
+    detailForm.value.rule = detailForm.value.rule.map((rule: any) => ({
+      ...rule,
+      col: {
+        ...(rule.col || {}),
+        ...twoColumnCol,
+      },
+    }));
 
     // 在配置中禁用 form-create 自带的提交和重置按钮
     detailForm.value.option = {
@@ -324,6 +351,7 @@ defineExpose({ initProcessInfo });
           class="flex-1 overflow-auto"
         >
           <form-create
+            class="bpm-create-normal-form"
             :rule="detailForm.rule"
             v-model:api="fApi"
             v-model="detailForm.value"
@@ -333,7 +361,6 @@ defineExpose({ initProcessInfo });
         </Col>
         <Col :xs="24" :sm="24" :md="6" :lg="6" :xl="6">
           <ProcessInstanceTimeline
-            ref="timelineRef"
             :activity-nodes="activityNodes"
             :show-status-icon="false"
             @select-user-confirm="selectUserConfirm"
@@ -454,5 +481,9 @@ defineExpose({ initProcessInfo });
 
 .bpm-create-form-shell.is-oa-lite .bpm-create-form-actions {
   padding-top: 12px;
+}
+
+.bpm-create-normal-form {
+  width: 100%;
 }
 </style>

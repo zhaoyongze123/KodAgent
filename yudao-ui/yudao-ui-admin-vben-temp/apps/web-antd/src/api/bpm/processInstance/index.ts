@@ -49,6 +49,7 @@ export namespace BpmProcessInstanceApi {
     nickname: string;
     avatar: string;
     deptName?: string;
+    postIds?: number[];
   }
 
   /** 审批详情 */
@@ -64,7 +65,7 @@ export namespace BpmProcessInstanceApi {
   /** 审批详情的节点信息 */
   export interface ApprovalNodeInfo {
     candidateStrategy?: BpmCandidateStrategyEnum;
-    candidateUsers?: User[];
+    candidateUsers?: User[] | null;
     endTime?: Date;
     id: string;
     name: string;
@@ -72,7 +73,7 @@ export namespace BpmProcessInstanceApi {
     startTime?: Date;
     status: number;
     processInstanceId?: string;
-    tasks: ApprovalTaskInfo[];
+    tasks?: ApprovalTaskInfo[] | null;
   }
 
   /** 审批详情的节点的任务 */

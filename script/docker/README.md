@@ -8,6 +8,10 @@
 - `stage`：`124.221.4.228` 生产测试环境
 - `prod`：未来正式生产环境
 
+规划院内网 OA 另有一套与上述通用 Docker 入口隔离的目标环境配置：
+`TARGET_ENV=local|103|production`。其中 `local` 使用 Compose，`103` 和
+`production` 保持现有宿主机 JAR + 既有 Nginx 形态，不会被 `deploy.sh` 自动重建。
+
 环境变量入口统一放在：
 
 - `script/docker/env/dev.env`
@@ -55,10 +59,9 @@ DEPLOY_ENV=stage bash script/docker/deploy.sh
 2. 构建 `ruoyi-server:local` 和 `ruoyi-admin:local`
 3. `docker save` 导出镜像 tar
 4. 上传到目标环境机器
-5. 在应用重载前自动执行 `sql/mysql/system-kod-sso-token-upgrade.sql` 数据库迁移
-6. 在远端 `/root/deployments/ruoyi-release` 重载应用
-7. 自动清理本地导出包、未使用 Docker 镜像 / 构建缓存，以及服务器上的旧 dangling 镜像
-8. 校验 `http://127.0.0.1:48080/actuator/health`
+5. 在远端 `/root/deployments/ruoyi-release` 重载应用
+6. 自动清理本地导出包、未使用 Docker 镜像 / 构建缓存，以及服务器上的旧 dangling 镜像
+7. 校验 `http://127.0.0.1:48080/actuator/health`
 
 说明：
 
@@ -138,3 +141,15 @@ CLEAN_LOCAL_ARTIFACTS=false CLEAN_LOCAL_DOCKER_CACHE=false DEPLOY_ENV=stage bash
 - `stage / prod` 只提交 `.env.example` 模板，真实机密保留在部署机或 CI Secret
 - 手工部署和 CI 部署统一走 `script/docker/deploy.sh`
 - `124.221.4.228` 明确归类为本项目唯一部署服务器
+
+## 规划院三套目标环境
+
+规划院 OA 的本地、103 验证机和正式内网配置集中在 `script/docker/env/targets/`，加载器和校验器分别是：
+
+```bash
+source script/docker/env/load-target-env.sh 103
+bash script/docker/env/validate-target-env.sh 103
+```
+
+详细的 secrets、端口、预览服务和手工 JAR 更新边界见：
+`script/docker/目标环境管理说明.md`。

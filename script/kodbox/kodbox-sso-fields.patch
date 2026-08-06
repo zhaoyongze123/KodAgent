@@ -1,0 +1,96 @@
+--- /var/www/html/app/controller/user/sso.class.php
++++ /var/www/html/app/controller/user/sso.class.php
+@@ -36,6 +36,82 @@
+ 		$keys = explode(',','userID,name,email,phone,nickName,avatar,sex,avatar');
+ 		$user = array_field_key($userInfo,$keys);
++		$roleId = intval(isset($userInfo['roleID']) ? $userInfo['roleID'] : 0);
++		$user['roleID'] = $roleId;
++		$user['isRoot'] = $this->isRootRole($roleId) ? 1 : 0;
++		$user['groupInfo'] = $this->buildGroupInfo(isset($userInfo['userID']) ? intval($userInfo['userID']) : 0);
+ 		$user['accessToken'] = Action('user.index')->accessToken();
+ 		return $user;
+ 	}
++	private function buildGroupInfo($userId){
++		if(!$userId){return array();}
++		$rows = $this->queryRows(
++			"select ug.groupID, g.name, g.parentLevel from user_group ug left join `group` g on ug.groupID = g.groupID where ug.userID = ? order by ug.id asc",
++			array($userId)
++		);
++		if(!$rows){return array();}
++
++		$groupIds = array();
++		foreach ($rows as $row){
++			$pathIds = $this->parseGroupPathIds($row);
++			foreach ($pathIds as $groupId){
++				$groupIds[$groupId] = $groupId;
++			}
++		}
++		if(!$groupIds){return array();}
++
++		$placeholders = implode(',', array_fill(0, count($groupIds), '?'));
++		$groupRows = $this->queryRows(
++			"select groupID, name from `group` where groupID in ($placeholders)",
++			array_values($groupIds)
++		);
++		$nameMap = array();
++		foreach ($groupRows as $groupRow){
++			$nameMap[strval($groupRow['groupID'])] = $groupRow['name'];
++		}
++
++		$result = array();
++		$seen = array();
++		foreach ($rows as $row){
++			$pathIds = $this->parseGroupPathIds($row);
++			foreach ($pathIds as $groupId){
++				$key = strval($groupId);
++				if(isset($seen[$key]) || !isset($nameMap[$key]) || $nameMap[$key] === ''){continue;}
++				$seen[$key] = true;
++				$result[] = array(
++					'groupID' => is_numeric($groupId) ? intval($groupId) : $groupId,
++					'groupName' => $nameMap[$key],
++				);
++			}
++		}
++		return $result;
++	}
++	private function parseGroupPathIds($row){
++		$pathIds = array();
++		$parentLevel = isset($row['parentLevel']) ? trim($row['parentLevel']) : '';
++		if($parentLevel !== ''){
++			foreach (explode(',', trim($parentLevel, ',')) as $parentId){
++				$parentId = trim($parentId);
++				if($parentId === '' || $parentId === '0'){continue;}
++				$pathIds[] = $parentId;
++			}
++		}
++		$groupId = isset($row['groupID']) ? trim(strval($row['groupID'])) : '';
++		if($groupId !== '' && $groupId !== '0'){
++			$pathIds[] = $groupId;
++		}
++		return array_values(array_unique($pathIds));
++	}
++	private function isRootRole($roleId){
++		if(!$roleId){return false;}
++		$rows = $this->queryRows(
++			"select value from system_option where type = ? and `key` = ? limit 1",
++			array('System.roleList', 'ID-'.$roleId)
++		);
++		if(!$rows || !isset($rows[0]['value'])){return false;}
++		$roleInfo = json_decode($rows[0]['value'], true);
++		if(!is_array($roleInfo)){return false;}
++		return !empty($roleInfo['administrator']);
++	}
++	private function queryRows($sql, $params = array()){
++		$dbName = isset($GLOBALS['config']['database']['DB_NAME']) ? $GLOBALS['config']['database']['DB_NAME'] : '';
++		if(!$dbName){return array();}
++		try{
++			$pdo = new PDO('sqlite:'.$dbName);
++			$stmt = $pdo->prepare($sql);
++			$stmt->execute($params);
++			$rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
++			return is_array($rows) ? $rows : array();
++		}catch (Exception $e){
++			return array();
++		}
++	}
+ 	private function thisPathUrl(){

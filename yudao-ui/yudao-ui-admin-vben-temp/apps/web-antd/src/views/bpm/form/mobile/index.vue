@@ -254,6 +254,13 @@ onMounted(() => {
     return;
   }
 
+  // The pure intranet build does not support WeChat Mini Program integration.
+  // Avoid loading its public-network SDKs while retaining the regular OA form flow.
+  if (import.meta.env.VITE_INTRANET_DEPLOYMENT === 'true') {
+    initApp();
+    return;
+  }
+
   // 1. 先加载微信 JSSDK（微信小程序需要）
   const wxScript = document.createElement('script');
   wxScript.type = 'text/javascript';

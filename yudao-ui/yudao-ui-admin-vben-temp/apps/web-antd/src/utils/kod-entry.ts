@@ -9,6 +9,7 @@ const KOD_ENTRY_PARTY_FILE = 'party-file';
 const KOD_ENTRY_MEETING_ROOM = 'meeting-room';
 const KOD_ENTRY_SCHEDULE = 'schedule';
 const OA_LITE_FORCE_CREATE_QUERY_KEY = 'forceCreate';
+const OA_LITE_CENTER_PATH = '/oa-lite/center';
 
 type KodEntry =
   | typeof KOD_ENTRY_APPROVAL
@@ -113,18 +114,18 @@ function buildApprovalEntryPath(
     : '';
   if (normalizedRedirect) {
     return normalizedRedirect.startsWith('/oa-lite')
-      ? `${normalizedRedirect}${normalizedRedirect.includes('?') ? '&' : '?'}entry=${KOD_ENTRY_APPROVAL}${forceCreateQuery ? `&${forceCreateQuery}` : ''}`
+      ? `${normalizedRedirect.replace(/^\/oa-lite(?=\/|\?|$)/, OA_LITE_CENTER_PATH)}${normalizedRedirect.includes('?') ? '&' : '?'}entry=${KOD_ENTRY_APPROVAL}&view=create${forceCreateQuery ? `&${forceCreateQuery}` : ''}`
       : normalizedRedirect;
   }
   if (forceCreateQuery) {
-    return `/oa-lite?entry=${KOD_ENTRY_APPROVAL}&${forceCreateQuery}`;
+    return `${OA_LITE_CENTER_PATH}?entry=${KOD_ENTRY_APPROVAL}&view=create&${forceCreateQuery}`;
   }
   if (isAdminUser(userRoles)) {
     return resolveAdminHomePath(userHomePath);
   }
   const approvalPath = resolveUserHomePath(userHomePath, userRoles);
   return approvalPath.startsWith('/oa-lite')
-    ? `${approvalPath}${approvalPath.includes('?') ? '&' : '?'}entry=${KOD_ENTRY_APPROVAL}`
+    ? `${approvalPath.replace(/^\/oa-lite(?=\/|\?|$)/, OA_LITE_CENTER_PATH)}${approvalPath.includes('?') ? '&' : '?'}entry=${KOD_ENTRY_APPROVAL}&view=create`
     : `${approvalPath}?entry=${KOD_ENTRY_APPROVAL}`;
 }
 

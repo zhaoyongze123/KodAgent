@@ -45,6 +45,24 @@ function shouldRewriteOrigin(url: URL) {
   );
 }
 
+const OFFICE_PREVIEW_EXTENSIONS = new Set([
+  'DOC',
+  'DOCX',
+  'XLS',
+  'XLSX',
+  'PPT',
+  'PPTX',
+]);
+
+function getFileExtension(fileName?: string) {
+  const normalized = (fileName || '').split(/[?#]/, 1)[0] || '';
+  const lastPart = normalized.slice(normalized.lastIndexOf('/') + 1);
+  const extension = lastPart.includes('.')
+    ? lastPart.slice(lastPart.lastIndexOf('.') + 1)
+    : '';
+  return extension.toUpperCase();
+}
+
 export function normalizeOaAssetUrl(rawUrl?: null | string) {
   const value = (rawUrl || '').trim();
   if (!value) {
@@ -79,5 +97,40 @@ export function normalizeOaAssetUrl(rawUrl?: null | string) {
     return parsedUrl.toString();
   } catch {
     return value;
+  }
+}
+
+/**
+ * Build an offline preview URL for office documents.
+ *
+ * The preview service must fetch the file URL itself, so the backend file
+ * endpoint is intentionally kept as the Base64-encoded `url` query parameter.
+ * KKFileView 4.1.0 decodes this parameter before fetching it. The backend
+ * marks that endpoint as public (`/infra/file/{configId}/get/**`), which lets
+ * KKFileView fetch it without a browser login cookie.
+ */
+export function getOaFilePreviewUrl(fileUrl: string, fileName?: string) {
+  const normalizedFileUrl = (fileUrl || '').trim();
+  const previewEndpoint = (import.meta.env.VITE_FILE_PREVIEW_URL || '').trim();
+  if (
+    !normalizedFileUrl ||
+    !previewEndpoint ||
+    !OFFICE_PREVIEW_EXTENSIONS.has(getFileExtension(fileName))
+  ) {
+    return normalizedFileUrl;
+  }
+  try {
+    const baseUrl =
+      typeof window === 'undefined' ? 'http://localhost/' : window.location.origin;
+    const previewUrl = new URL(previewEndpoint, baseUrl);
+    const bytes = new TextEncoder().encode(normalizedFileUrl);
+    let binary = '';
+    for (const byte of bytes) {
+      binary += String.fromCharCode(byte);
+    }
+    previewUrl.searchParams.set('url', btoa(binary));
+    return previewUrl.toString();
+  } catch {
+    return normalizedFileUrl;
   }
 }

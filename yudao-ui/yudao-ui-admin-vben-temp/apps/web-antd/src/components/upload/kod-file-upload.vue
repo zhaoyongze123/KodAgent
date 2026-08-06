@@ -1,7 +1,7 @@
 <script lang="ts" setup>
 import type { FileUploadProps } from './typing';
 
-import { computed, ref, watch } from 'vue';
+import { ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 
 import { useAccessStore } from '@vben/stores';
@@ -12,7 +12,6 @@ import type { SystemPartyFileApi } from '#/api/system/party-file';
 import {
   getCurrentUserPartyFileKodFiles,
   getCurrentUserPartyFileKodFolderChildren,
-  getCurrentUserPartyFileKodFolderTree,
   getPartyFileAttachmentAccessUrl,
   selectCurrentUserPartyFileKodFiles,
 } from '#/api/system/party-file';
@@ -67,10 +66,6 @@ const kodFileColumns = [
   { title: '大小', dataIndex: 'size', key: 'size', width: 120 },
   { title: '路径', dataIndex: 'pathDisplay', key: 'pathDisplay', ellipsis: true },
 ];
-
-const isDisabled = computed(() =>
-  typeof props.disabled === 'function' ? props.disabled() : props.disabled,
-);
 
 function normalizeValue(value: FileUploadValue) {
   if (value === undefined || value === null || value === '') {
@@ -152,10 +147,6 @@ function redirectToKodSsoOnTokenInvalid(error: any) {
   return true;
 }
 
-async function loadKodFolders() {
-  kodFolderTree.value = await getCurrentUserPartyFileKodFolderTree();
-}
-
 function findKodFolderNode(
   nodes: SystemPartyFileApi.PartyFileKodFolder[],
   key: string,
@@ -210,23 +201,6 @@ async function loadKodFiles() {
     selectedKodFiles.value = [];
   } finally {
     kodFileLoading.value = false;
-  }
-}
-
-async function openKodFileModal() {
-  if (isDisabled.value) {
-    return;
-  }
-  try {
-    await loadKodFolders();
-    // 目录树只加载当前层级；先打开弹窗，再异步加载根目录文件，避免慢接口把整个选择器阻塞住。
-    kodFileModalOpen.value = true;
-    await loadKodFiles();
-  } catch (error) {
-    if (redirectToKodSsoOnTokenInvalid(error)) {
-      return;
-    }
-    message.error('可道云目录加载失败，请确认已通过可道云登录');
   }
 }
 
@@ -305,14 +279,6 @@ watch(
       :max-size="maxSize"
       :model-value="fileValue"
       :multiple="multiple"
-      :extra-actions="[
-        {
-          key: 'select-kod-file',
-          label: '从可道云选择',
-          disabled: isDisabled,
-          onClick: openKodFileModal,
-        },
-      ]"
       @update:model-value="handleFileValueChange"
     />
 

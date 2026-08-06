@@ -9,6 +9,7 @@ import cn.iocoder.yudao.module.system.dal.dataobject.auth.KodSsoUserBindDO;
 import cn.iocoder.yudao.module.system.dal.dataobject.dept.DeptDO;
 import cn.iocoder.yudao.module.system.dal.dataobject.user.AdminUserDO;
 import cn.iocoder.yudao.module.system.dal.mysql.auth.KodSsoUserBindMapper;
+import cn.iocoder.yudao.module.system.dal.mysql.auth.KodDeptSyncMapper;
 import cn.iocoder.yudao.module.system.dal.mysql.dept.DeptMapper;
 import cn.iocoder.yudao.module.system.framework.kodsso.config.KodSsoConfiguration;
 import cn.iocoder.yudao.module.system.framework.kodsso.config.KodSsoProperties;
@@ -54,6 +55,8 @@ public class KodSsoServiceImplTest extends BaseDbUnitTest {
 
     @MockBean
     private KodSsoUserBindMapper kodSsoUserBindMapper;
+    @MockBean
+    private KodDeptSyncMapper kodDeptSyncMapper;
     @MockBean
     private DeptMapper deptMapper;
     @MockBean
@@ -265,6 +268,35 @@ public class KodSsoServiceImplTest extends BaseDbUnitTest {
         verify(permissionService, never()).assignUserRole(anyLong(), anySet());
         verify(adminUserService).updateUserDept(33L, 3L);
         verify(kodSsoUserBindMapper).updateKodAccessTokenByUserId(33L, "kod-token-3");
+    }
+
+    @Test
+    public void testLoginByKodToken_missingKodRole_preservesExistingLocalRole() {
+        KodSsoUserBindDO bind = new KodSsoUserBindDO()
+                .setId(77L)
+                .setUserId(1L)
+                .setKodUserId("1")
+                .setKodUsername("admin");
+        when(kodSsoUserBindMapper.selectByKodUsername(eq("admin"))).thenReturn(bind);
+        when(adminUserService.getUser(eq(1L))).thenReturn(new AdminUserDO()
+                .setId(1L).setUsername("admin").setNickname("管理员"));
+        when(permissionService.getUserRoleIdListByUserId(1L))
+                .thenReturn(new HashSet<>(Collections.singleton(1L)));
+
+        AuthLoginRespVO loginRespVO = randomPojo(AuthLoginRespVO.class, o -> o.setUserId(1L));
+        when(adminAuthService.createLoginToken(eq(1L), eq("admin"), any())).thenReturn(loginRespVO);
+
+        try (MockedStatic<HttpUtils> mockedHttpUtils = mockStatic(HttpUtils.class, CALLS_REAL_METHODS)) {
+            mockedHttpUtils.when(() -> HttpUtils.get(eq("https://kod.example.com/?user/sso/apiCheckToken&accessToken=kod-token-admin&appName=oa-lite"),
+                    eq(Collections.emptyMap())))
+                    .thenReturn("{\"id\":\"1\",\"name\":\"admin\",\"nickName\":\"管理员\"}");
+
+            AuthLoginRespVO result = kodSsoService.loginByKodToken("kod-token-admin");
+            assertPojoEquals(loginRespVO, result);
+        }
+
+        verify(permissionService, never()).assignUserRole(anyLong(), anySet());
+        verify(kodSsoUserBindMapper).updateKodAccessTokenByUserId(1L, "kod-token-admin");
     }
 
     @Test

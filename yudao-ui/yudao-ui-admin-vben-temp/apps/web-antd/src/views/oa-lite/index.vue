@@ -4,14 +4,22 @@ import type { BpmProcessDefinitionApi } from '#/api/bpm/definition';
 import type { BpmProcessInstanceApi } from '#/api/bpm/processInstance';
 import type { BpmTaskApi } from '#/api/bpm/task';
 
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import {
+  computed,
+  defineAsyncComponent,
+  onMounted,
+  onUnmounted,
+  reactive,
+  ref,
+  watch,
+} from 'vue';
 import { useRoute } from 'vue-router';
 
 import { BpmModelFormType, BpmProcessInstanceStatus } from '@vben/constants';
 import { IconifyIcon } from '@vben/icons';
 import { useAccessStore } from '@vben/stores';
 import { useUserStore } from '@vben/stores';
-import { formatDateTime, formatPast2 } from '@vben/utils';
+import { formatDateTime } from '@vben/utils';
 import { useWebSocket } from '@vueuse/core';
 
 import {
@@ -63,7 +71,16 @@ type MainTab =
   | 'pending'
   | 'processed';
 type ListTab = Exclude<MainTab, 'create'>;
+type ManagementSection = 'bpm' | 'system';
+type WorkbenchNavKey = MainTab | ManagementSection;
 type DateRangeValue = [string, string];
+interface WorkbenchSidebarItem {
+  children?: readonly { key: string; label: string }[];
+  count?: number;
+  icon: string;
+  key: WorkbenchNavKey;
+  label: string;
+}
 type DetailPayload =
   | BpmTaskApi.Task
   | BpmProcessInstanceApi.ProcessInstance
@@ -95,6 +112,53 @@ interface ListPageState {
   total: number;
 }
 
+interface OaLiteRouteDetail {
+  request: OaLiteDetailRequest;
+  section: OaLiteDetailSection;
+}
+
+const MANAGEMENT_COMPONENTS = {
+  bpm: {
+    category: defineAsyncComponent(() => import('#/views/bpm/category/index.vue')),
+    definition: defineAsyncComponent(() => import('#/views/bpm/model/definition/index.vue')),
+    form: defineAsyncComponent(() => import('#/views/bpm/form/index.vue')),
+    group: defineAsyncComponent(() => import('#/views/bpm/group/index.vue')),
+    model: defineAsyncComponent(() => import('#/views/bpm/model/index.vue')),
+    process: defineAsyncComponent(
+      () => import('#/views/bpm/processInstance/manager/index.vue'),
+    ),
+    template: defineAsyncComponent(
+      () => import('#/views/bpm/approvalTemplate/index.vue'),
+    ),
+  },
+  system: {
+    dept: defineAsyncComponent(() => import('#/views/system/dept/index.vue')),
+    notice: defineAsyncComponent(() => import('#/views/system/notice/index.vue')),
+    post: defineAsyncComponent(() => import('#/views/system/post/index.vue')),
+    role: defineAsyncComponent(() => import('#/views/system/role/index.vue')),
+    user: defineAsyncComponent(() => import('#/views/system/user/index.vue')),
+  },
+} as const;
+
+const MANAGEMENT_NAV_ITEMS = {
+  bpm: [
+    { key: 'category', label: '流程分类' },
+    { key: 'form', label: '流程表单' },
+    { key: 'template', label: '审批模板管理' },
+    { key: 'model', label: '流程模型' },
+    { key: 'definition', label: '流程定义' },
+    { key: 'process', label: '流程实例' },
+    { key: 'group', label: '用户组' },
+  ],
+  system: [
+    { key: 'user', label: '用户管理' },
+    { key: 'role', label: '角色管理' },
+    { key: 'dept', label: '部门管理' },
+    { key: 'post', label: '岗位管理' },
+    { key: 'notice', label: '通知公告' },
+  ],
+} as const;
+
 interface OaTemplateCard {
   description: string;
   definition: BpmProcessDefinitionApi.ProcessDefinition;
@@ -111,6 +175,13 @@ interface SelectOption {
 const DEFAULT_PAGE_SIZE = 10;
 const OA_LITE_CREATE_PATH = '/oa-lite';
 const OA_LITE_CENTER_PATH = '/oa-lite/center';
+const OA_LITE_VIEW_QUERY_KEY = 'view';
+const OA_LITE_CREATE_VIEW = 'create';
+const OA_LITE_CENTER_VIEW = 'center';
+const OA_LITE_DETAIL_SECTION_QUERY_KEY = 'detailSection';
+const OA_LITE_DETAIL_PROCESS_QUERY_KEY = 'detailProcessInstanceId';
+const OA_LITE_DETAIL_TASK_QUERY_KEY = 'detailTaskId';
+const OA_LITE_DETAIL_ACTIVITY_QUERY_KEY = 'detailActivityId';
 const OA_LITE_TASK_ASSIGNED_MESSAGE_TYPE = 'task-assigned';
 const OA_LITE_TASK_ASSIGNED_TOAST_KEY = 'oa-lite-task-assigned';
 const accessStore = useAccessStore();
@@ -120,8 +191,45 @@ const route = useRoute();
 const initializing = ref(true);
 const activeTab = ref<MainTab>('create');
 const lastCenterTab = ref<ListTab>('pending');
-const selectedCreateCategoryCode = ref<string>();
+const expandedManagementSection = ref<ManagementSection | null>(null);
+
+const managementSection = computed<ManagementSection | null>(() => {
+  const value = route.query.manage;
+  const normalizedValue = Array.isArray(value) ? value[0] : value;
+  return normalizedValue === 'bpm' || normalizedValue === 'system'
+    ? normalizedValue
+    : null;
+});
+const managementPage = computed(() => {
+  const value = route.query.page;
+  return Array.isArray(value) ? value[0] : value;
+});
+const isCurrentUserAdmin = computed(() => isAdminUser(userStore.userRoles));
+const currentManagementComponent = computed(() => {
+  if (
+    !isCurrentUserAdmin.value ||
+    !managementSection.value ||
+    !managementPage.value
+  ) {
+    return null;
+  }
+  const components = MANAGEMENT_COMPONENTS[managementSection.value] as Record<
+    string,
+    unknown
+  >;
+  return components[managementPage.value] || null;
+});
+const isManagementView = computed(() => Boolean(currentManagementComponent.value));
+
+watch(
+  managementSection,
+  (section) => {
+    expandedManagementSection.value = section;
+  },
+  { immediate: true },
+);
 const selectedItem = ref<DetailPayload>(null);
+const routeDetail = ref<OaLiteRouteDetail | null>(null);
 const filtersExpanded = ref(false);
 const categories = ref<BpmCategoryApi.Category[]>([]);
 const oaTemplateDefinitions = ref<BpmProcessDefinitionApi.ProcessDefinition[]>([]);
@@ -130,8 +238,8 @@ const doneItems = ref<BpmTaskApi.Task[]>([]);
 const initiatedItems = ref<BpmProcessInstanceApi.ProcessInstance[]>([]);
 const managerProcessItems = ref<BpmProcessInstanceApi.ProcessInstance[]>([]);
 const copiedItems = ref<BpmProcessInstanceApi.ProcessInstanceCopyRespVO[]>([]);
-const createCategorySectionElements = ref<Record<string, HTMLElement | null>>({});
-const isCurrentUserAdmin = computed(() => isAdminUser(userStore.userRoles));
+const displayNumberMap = new Map<string, string>();
+const displayNumberCounters = new Map<string, number>();
 const listTabs = computed<ListTab[]>(() =>
   isCurrentUserAdmin.value
     ? ['pending', 'processed', 'initiated', 'all-process', 'copied']
@@ -297,8 +405,81 @@ function buildApprovalEntryQuery() {
     : route.query;
 }
 
+function buildWorkbenchQuery(view: string, extra: Record<string, string> = {}) {
+  const query = { ...buildApprovalEntryQuery() } as Record<string, any>;
+  delete query.manage;
+  delete query.page;
+  delete query[OA_LITE_DETAIL_SECTION_QUERY_KEY];
+  delete query[OA_LITE_DETAIL_PROCESS_QUERY_KEY];
+  delete query[OA_LITE_DETAIL_TASK_QUERY_KEY];
+  delete query[OA_LITE_DETAIL_ACTIVITY_QUERY_KEY];
+  // 这两个参数只用于可道云首次进入发起页，不能带到工作台其它视图，
+  // 否则路由监听会把待办、已办等页面再次强制切回发起审批。
+  delete query.forceCreate;
+  delete query.autoStart;
+  return {
+    ...query,
+    view,
+    ...extra,
+  };
+}
+
 function shouldForceCreateMode() {
-  return route.path === OA_LITE_CREATE_PATH && isForceCreateEntry(route.query);
+  return isForceCreateEntry(route.query) || readOaLiteView() === OA_LITE_CREATE_VIEW;
+}
+
+function readOaLiteView() {
+  const view = route.query[OA_LITE_VIEW_QUERY_KEY];
+  const normalizedView = Array.isArray(view) ? view[0] : view;
+  return normalizedView === OA_LITE_CREATE_VIEW || normalizedView === OA_LITE_CENTER_VIEW
+    ? normalizedView
+    : null;
+}
+
+function readRouteQueryValue(key: string) {
+  const value = route.query[key];
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function resolveRouteDetailFromRoute(): null | OaLiteRouteDetail {
+  const processInstanceId = readRouteQueryValue(OA_LITE_DETAIL_PROCESS_QUERY_KEY);
+  if (!processInstanceId) {
+    return null;
+  }
+  const requestedSection = readRouteQueryValue(OA_LITE_DETAIL_SECTION_QUERY_KEY);
+  const taskId = readRouteQueryValue(OA_LITE_DETAIL_TASK_QUERY_KEY);
+  const activityId = readRouteQueryValue(OA_LITE_DETAIL_ACTIVITY_QUERY_KEY);
+  // 管理端“流程实例”详情必须保留 manager，否则会被降级到“我发起的”。
+  const section: OaLiteDetailSection =
+    requestedSection === 'pending' ||
+    requestedSection === 'processed' ||
+    requestedSection === 'copied' ||
+    requestedSection === 'initiated' ||
+    requestedSection === 'manager'
+      ? requestedSection
+      : taskId
+        ? 'pending'
+        : 'initiated';
+  return {
+    request: {
+      activityId: activityId || undefined,
+      processInstanceId: String(processInstanceId),
+      taskId: taskId || undefined,
+    },
+    section,
+  };
+}
+
+function syncRouteDetailFromRoute() {
+  const nextDetail = resolveRouteDetailFromRoute();
+  routeDetail.value = nextDetail;
+  if (nextDetail) {
+    if (nextDetail.section !== 'manager') {
+      activeTab.value = nextDetail.section;
+      lastCenterTab.value = nextDetail.section;
+    }
+    selectedItem.value = null;
+  }
 }
 
 function isImageIcon(icon?: string) {
@@ -414,6 +595,34 @@ const dashboardNavItems = computed(() => {
   return items;
 });
 
+const workbenchSidebarItems = computed<WorkbenchSidebarItem[]>(() => [
+  {
+    count: undefined,
+    icon: 'solar:pen-new-square-outline',
+    key: 'create' as const,
+    label: '发起审批',
+  },
+  ...dashboardNavItems.value,
+  {
+    count: undefined,
+    icon: 'solar:checklist-outline',
+    key: 'bpm' as const,
+    label: '流程管理',
+    children: MANAGEMENT_NAV_ITEMS.bpm,
+  },
+  {
+    count: undefined,
+    icon: 'solar:settings-outline',
+    key: 'system' as const,
+    label: '系统管理',
+    children: MANAGEMENT_NAV_ITEMS.system,
+  },
+].filter((item) =>
+  isCurrentUserAdmin.value || (item.key !== 'bpm' && item.key !== 'system'),
+));
+
+const activeManagementSection = computed(() => managementSection.value);
+
 const categoryOptions = computed<SelectOption[]>(() =>
   categories.value.map((item) => ({
     label: item.name,
@@ -477,6 +686,9 @@ const currentList = computed(() => {
   return getListSource(activeTab.value);
 });
 const currentDetailSection = computed<OaLiteDetailSection>(() => {
+  if (routeDetail.value) {
+    return routeDetail.value.section;
+  }
   switch (activeTab.value) {
     case 'all-process':
       return 'initiated';
@@ -491,6 +703,9 @@ const currentDetailSection = computed<OaLiteDetailSection>(() => {
   }
 });
 const currentDetailRequest = computed<null | OaLiteDetailRequest>(() => {
+  if (routeDetail.value) {
+    return routeDetail.value.request;
+  }
   if (!selectedItem.value) {
     return null;
   }
@@ -515,9 +730,17 @@ const currentDetailRequest = computed<null | OaLiteDetailRequest>(() => {
     processInstanceId: String(selectedItem.value.id),
   };
 });
-const isCenterMode = computed(() => activeTab.value !== 'create');
+const isDetailOpen = computed(
+  () => Boolean(selectedItem.value) || Boolean(routeDetail.value),
+);
+const isCenterMode = computed(
+  () => activeTab.value !== 'create' || isManagementView.value,
+);
 
 const currentListTitle = computed(() => {
+  if (routeDetail.value?.section === 'manager') {
+    return '流程实例';
+  }
   switch (activeTab.value) {
     case 'all-process':
       return '全部流程';
@@ -598,14 +821,7 @@ function syncSelectedItem(tab: ListTab) {
   const matchedItem = currentIdentity
     ? list.find((item) => getItemIdentity(item) === currentIdentity)
     : undefined;
-  selectedItem.value = matchedItem || (tab === 'pending' ? null : list[0] || null);
-}
-
-function getSummaryText(summary?: { key: string; value: string }[]) {
-  if (!summary?.length) {
-    return '';
-  }
-  return summary.map((item) => `${item.key}：${item.value}`).join(' / ');
+  selectedItem.value = matchedItem || null;
 }
 
 function getProcessStatusText(status?: number) {
@@ -647,141 +863,179 @@ function dedupeDoneTasks(tasks: BpmTaskApi.Task[]) {
   return [...taskMap.values()];
 }
 
-function getItemStatus(item: DetailPayload) {
+function getProcessTypeLabel(item: DetailPayload) {
   if (!item) {
-    return undefined;
+    return '审批';
   }
   if (isTaskItem(item)) {
-    return item.processInstance?.status ?? item.status;
+    return (
+      item.processInstance?.categoryName ||
+      item.processInstance?.category ||
+      item.processInstance?.name ||
+      item.name ||
+      '审批'
+    );
   }
   if (isCopiedItem(item)) {
-    return undefined;
+    return item.processInstanceName || '审批';
   }
-  return item.status;
+  return item.categoryName || item.category || item.name || '审批';
 }
 
-function getItemStatusText(item: DetailPayload) {
-  const status = getItemStatus(item);
-  return status === undefined ? '' : getProcessStatusText(status);
+function getProcessTypePrefix(label: string) {
+  if (/报销/.test(label)) return 'BXSQ';
+  if (/加班/.test(label)) return 'JBSQ';
+  if (/请假|销假/.test(label)) return /销假/.test(label) ? 'XJSQ' : 'QJSQ';
+  if (/出差/.test(label)) return 'CCSQ';
+  if (/用章|印章/.test(label)) return 'YZSQ';
+  if (/补卡/.test(label)) return 'BKSQ';
+  if (/外出|外勤/.test(label)) return 'WCSQ';
+  if (/公文|文件/.test(label)) return 'GWSQ';
+  if (/项目/.test(label)) return 'XMSQ';
+  return 'SQSQ';
 }
 
-function getItemStatusTone(item: DetailPayload) {
-  const status = getItemStatus(item);
-  switch (status) {
-    case BpmProcessInstanceStatus.APPROVE:
-      return 'success';
-    case BpmProcessInstanceStatus.REJECT:
-      return 'danger';
-    case BpmProcessInstanceStatus.CANCEL:
-      return 'muted';
-    case BpmProcessInstanceStatus.RUNNING:
-      return 'warning';
-    default:
-      return 'neutral';
-  }
-}
-
-function getItemTitle(item: DetailPayload) {
-  if (!item) {
-    return '';
-  }
+function getProcessStartDate(item: DetailPayload) {
+  if (!item) return new Date();
   if (isTaskItem(item)) {
-    return item.processInstance?.name || '';
+    return item.processInstance?.startTime || item.processInstance?.createTime;
   }
   if (isCopiedItem(item)) {
-    return item.processInstanceName || '';
+    return item.processInstanceStartTime || item.createTime;
   }
-  return item.name || '';
+  return item.startTime || item.createTime;
 }
 
-function getItemSummary(item: DetailPayload) {
+function getDisplayNumberKey(item: DetailPayload) {
   if (!item) {
     return '';
   }
   if (isTaskItem(item)) {
-    return getSummaryText(item.processInstance?.summary as { key: string; value: string }[] | undefined);
+    return `process:${item.processInstanceId || item.processInstance?.id || item.id}`;
   }
   if (isCopiedItem(item)) {
-    return getSummaryText(item.summary);
+    return `process:${item.processInstanceId || item.id}`;
   }
-  return getSummaryText(item.summary);
+  return `process:${item.id}`;
 }
 
-function getItemMetaLeft(item: DetailPayload) {
+function buildDisplayNumber(item: DetailPayload) {
+  const existingNumber = isTaskItem(item)
+    ? item.processInstance?.businessKey
+    : isCopiedItem(item)
+      ? undefined
+      : item?.businessKey;
+  if (existingNumber && !/^\d+$/.test(String(existingNumber))) {
+    return String(existingNumber);
+  }
+
+  const label = getProcessTypeLabel(item);
+  const prefix = getProcessTypePrefix(label);
+  const startDate = new Date(getProcessStartDate(item) as any);
+  const date = Number.isNaN(startDate.getTime())
+    ? new Date()
+    : startDate;
+  const dateText = [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('');
+  const counterKey = `${prefix}-${dateText}`;
+  const nextNumber = (displayNumberCounters.get(counterKey) || 0) + 1;
+  displayNumberCounters.set(counterKey, nextNumber);
+  return `${prefix}-${dateText}-${String(nextNumber).padStart(2, '0')}`;
+}
+
+function getListNumber(item: DetailPayload) {
   if (!item) {
-    return '';
+    return '-';
+  }
+  const key = getDisplayNumberKey(item);
+  const cachedNumber = displayNumberMap.get(key);
+  if (cachedNumber) {
+    return cachedNumber;
+  }
+  const displayNumber = buildDisplayNumber(item);
+  displayNumberMap.set(key, displayNumber);
+  return displayNumber;
+}
+
+function getListType(item: DetailPayload) {
+  if (!item) {
+    return '-';
   }
   if (isTaskItem(item)) {
-    return `当前节点：${item.name}`;
+    return item.processInstance?.categoryName || item.processInstance?.category || '-';
   }
   if (isCopiedItem(item)) {
-    return `抄送节点：${item.activityName || '-'}`;
+    return item.processInstanceName || '-';
   }
-  if (
-    item.status === BpmProcessInstanceStatus.RUNNING &&
-    item.tasks &&
-    item.tasks.length > 0
-  ) {
-    const firstTask = item.tasks[0];
-    if (!firstTask) {
-      return getProcessStatusText(item.status);
-    }
-    if (item.tasks.length === 1) {
-      return `${firstTask.assigneeUser?.nickname || '审批人'}（${firstTask.name}）进行中`;
-    }
-    return `${firstTask.assigneeUser?.nickname || '审批人'} 等 ${item.tasks.length} 人（${firstTask.name}）进行中`;
-  }
-  return getProcessStatusText(item.status);
+  return item.categoryName || item.category || '-';
 }
 
-function getItemMetaRight(item: DetailPayload) {
+function getListProcessName(item: DetailPayload) {
   if (!item) {
-    return '';
+    return '-';
   }
   if (isTaskItem(item)) {
-    return activeTab.value === 'processed'
-      ? `处理时间：${formatDateTime(item.endTime || item.createTime)}`
-      : `任务时间：${formatDateTime(item.createTime)}`;
+    return item.processInstance?.name || item.name || '-';
   }
   if (isCopiedItem(item)) {
-    return `抄送时间：${formatDateTime(item.createTime)}`;
+    return item.processInstanceName || '-';
   }
-  return activeTab.value === 'initiated'
-    ? `发起时间：${formatDateTime(item.startTime || item.createTime)}`
-    : `结束时间：${formatDateTime(item.endTime || item.createTime)}`;
+  return item.name || '-';
 }
 
-function getCompactMetaText(item: DetailPayload) {
+function getListStarter(item: DetailPayload) {
   if (!item) {
-    return '';
-  }
-  if (isCopiedItem(item)) {
-    return [
-      `发起人：${item.startUser?.nickname || '-'}`,
-      `抄送人：${item.createUser?.nickname || '-'}`,
-    ].join(' / ');
+    return '-';
   }
   if (isTaskItem(item)) {
-    if (activeTab.value === 'processed') {
-      return [
-        `发起人：${item.processInstance?.startUser?.nickname || '-'}`,
-        item.durationInMillis ? `耗时：${formatPast2(item.durationInMillis)}` : '',
-      ]
-        .filter(Boolean)
-        .join(' / ');
-    }
-    return `发起人：${item.processInstance?.startUser?.nickname || '-'}`;
+    return item.processInstance?.startUser?.nickname || '-';
   }
-  return [
-    `流程分类：${item.categoryName || item.category || '-'}`,
-    item.businessKey ? `业务编号：${item.businessKey}` : '',
-  ]
-    .filter(Boolean)
-    .join(' / ');
+  if (isCopiedItem(item)) {
+    return item.startUser?.nickname || '-';
+  }
+  return item.startUser?.nickname || '-';
 }
 
-function getListSecondaryText(item: DetailPayload) {
-  return getItemSummary(item) || getCompactMetaText(item);
+function getListStage(item: DetailPayload) {
+  if (!item) {
+    return '-';
+  }
+  if (isTaskItem(item)) {
+    return item.name || '-';
+  }
+  if (isCopiedItem(item)) {
+    return item.activityName || '-';
+  }
+  return item.tasks?.[0]?.name || getProcessStatusText(item.status);
+}
+
+function getListStartTime(item: DetailPayload) {
+  if (!item) {
+    return '-';
+  }
+  if (isTaskItem(item)) {
+    return formatDateTime(item.processInstance?.startTime || item.processInstance?.createTime);
+  }
+  if (isCopiedItem(item)) {
+    return formatDateTime(item.processInstanceStartTime || item.createTime);
+  }
+  return formatDateTime(item.startTime || item.createTime);
+}
+
+function getListEndTime(item: DetailPayload) {
+  if (!item) {
+    return '-';
+  }
+  if (isTaskItem(item)) {
+    return formatDateTime(item.processInstance?.endTime || item.endTime);
+  }
+  if (isCopiedItem(item)) {
+    return '-';
+  }
+  return formatDateTime(item.endTime);
 }
 
 function getKeywordPlaceholder() {
@@ -1008,39 +1262,50 @@ function handleProcessRecreate(
   message.warning('当前流程尚未配置重新发起入口');
 }
 
-function setCreateCategorySectionRef(code: string, element: HTMLElement | null) {
-  if (!element) {
-    delete createCategorySectionElements.value[code];
-    return;
-  }
-  createCategorySectionElements.value[code] = element;
-}
-
-function selectCreateCategory(code: string) {
-  selectedCreateCategoryCode.value = code;
-  const target = createCategorySectionElements.value[code];
-  if (!target || typeof window === 'undefined') {
-    return;
-  }
-  const top = target.getBoundingClientRect().top + window.scrollY - 132;
-  window.scrollTo({
-    behavior: 'smooth',
-    top: Math.max(top, 0),
-  });
-}
-
 async function openTab(tab: MainTab) {
+  routeDetail.value = null;
+  selectedItem.value = null;
   if (tab !== 'create') {
     lastCenterTab.value = tab;
   }
   activeTab.value = tab;
-  const targetPath = tab === 'create' ? OA_LITE_CREATE_PATH : OA_LITE_CENTER_PATH;
-  if (route.path !== targetPath) {
-    await router.replace({
-      path: targetPath,
-      query: buildApprovalEntryQuery(),
-    });
+  await router.replace({
+    path: OA_LITE_CENTER_PATH,
+    query: buildWorkbenchQuery(
+      tab === 'create' ? OA_LITE_CREATE_VIEW : OA_LITE_CENTER_VIEW,
+    ),
+  });
+}
+
+async function handleWorkbenchSidebarSelect(
+  key: WorkbenchNavKey,
+) {
+  if (key === 'bpm' || key === 'system') {
+    if (!isCurrentUserAdmin.value) {
+      return;
+    }
+    expandedManagementSection.value =
+      expandedManagementSection.value === key ? null : key;
+    return;
   }
+  await openTab(key);
+}
+
+async function handleManagementSelect(
+  section: ManagementSection,
+  page: string,
+) {
+  if (!isCurrentUserAdmin.value) {
+    return;
+  }
+  expandedManagementSection.value = section;
+  await router.replace({
+    path: OA_LITE_CENTER_PATH,
+    query: buildWorkbenchQuery(OA_LITE_CENTER_VIEW, {
+      manage: section,
+      page,
+    }),
+  });
 }
 
 async function handleFilterSubmit() {
@@ -1070,9 +1335,25 @@ async function handlePageChange(page: number, pageSize: number) {
   await loadTabData(activeTab.value);
 }
 
+function openDetail(item: DetailPayload) {
+  routeDetail.value = null;
+  selectedItem.value = item;
+}
+
+async function closeDetail() {
+  routeDetail.value = null;
+  selectedItem.value = null;
+  const nextQuery = { ...route.query } as Record<string, any>;
+  delete nextQuery[OA_LITE_DETAIL_SECTION_QUERY_KEY];
+  delete nextQuery[OA_LITE_DETAIL_PROCESS_QUERY_KEY];
+  delete nextQuery[OA_LITE_DETAIL_TASK_QUERY_KEY];
+  delete nextQuery[OA_LITE_DETAIL_ACTIVITY_QUERY_KEY];
+  await router.replace({ path: OA_LITE_CENTER_PATH, query: nextQuery });
+}
+
 async function handleDetailRefresh() {
   await refreshAllTabs();
-  if (activeTab.value !== 'create') {
+  if (activeTab.value !== 'create' && !routeDetail.value) {
     syncSelectedItem(activeTab.value);
   }
 }
@@ -1091,12 +1372,25 @@ function parseTaskAssignedWebSocketMessage(
 }
 
 async function openPendingTaskDetail(taskId: string) {
+  routeDetail.value = null;
   activeTab.value = 'pending';
   lastCenterTab.value = 'pending';
-  if (route.path !== OA_LITE_CENTER_PATH) {
+  if (route.path !== OA_LITE_CENTER_PATH || readOaLiteView() !== OA_LITE_CENTER_VIEW) {
     await router.replace({
       path: OA_LITE_CENTER_PATH,
-      query: buildApprovalEntryQuery(),
+      query: {
+        ...buildApprovalEntryQuery(),
+        [OA_LITE_VIEW_QUERY_KEY]: OA_LITE_CENTER_VIEW,
+      },
+    });
+  } else if (
+    OA_LITE_DETAIL_PROCESS_QUERY_KEY in route.query ||
+    OA_LITE_DETAIL_TASK_QUERY_KEY in route.query ||
+    OA_LITE_DETAIL_ACTIVITY_QUERY_KEY in route.query
+  ) {
+    await router.replace({
+      path: OA_LITE_CENTER_PATH,
+      query: buildWorkbenchQuery(OA_LITE_CENTER_VIEW),
     });
   }
   if (!tabInitialized.pending) {
@@ -1131,25 +1425,6 @@ async function handleTaskAssignedWebSocketMessage(
 }
 
 watch(
-  createCategoryTabs,
-  (tabs) => {
-    const firstTab = tabs[0];
-    if (!firstTab) {
-      selectedCreateCategoryCode.value = undefined;
-      return;
-    }
-    if (
-      selectedCreateCategoryCode.value &&
-      tabs.some((item) => item.code === selectedCreateCategoryCode.value)
-    ) {
-      return;
-    }
-    selectedCreateCategoryCode.value = firstTab.code;
-  },
-  { immediate: true },
-);
-
-watch(
   () => isCurrentUserAdmin.value,
   (isAdmin) => {
     if (isAdmin) {
@@ -1168,19 +1443,28 @@ watch(
 );
 
 watch(
-  () => route.path,
-  (path) => {
-    if (shouldForceCreateMode()) {
+  () => [route.path, readOaLiteView()],
+  ([path, view]) => {
+    if (path === OA_LITE_CREATE_PATH || view === OA_LITE_CREATE_VIEW || shouldForceCreateMode()) {
       activeTab.value = 'create';
       return;
     }
-    if (path === OA_LITE_CREATE_PATH) {
-      activeTab.value = 'create';
-      return;
-    }
-    if (path === OA_LITE_CENTER_PATH && activeTab.value === 'create') {
+    if (path === OA_LITE_CENTER_PATH && view !== OA_LITE_CREATE_VIEW && activeTab.value === 'create') {
       activeTab.value = lastCenterTab.value;
     }
+  },
+  { immediate: true },
+);
+
+watch(
+  () => [
+    readRouteQueryValue(OA_LITE_DETAIL_SECTION_QUERY_KEY),
+    readRouteQueryValue(OA_LITE_DETAIL_PROCESS_QUERY_KEY),
+    readRouteQueryValue(OA_LITE_DETAIL_TASK_QUERY_KEY),
+    readRouteQueryValue(OA_LITE_DETAIL_ACTIVITY_QUERY_KEY),
+  ],
+  () => {
+    syncRouteDetailFromRoute();
   },
   { immediate: true },
 );
@@ -1261,65 +1545,85 @@ onUnmounted(() => {
         :class="{ 'is-center-mode': isCenterMode }"
       >
         <Spin :spinning="initializing">
+          <div class="oa-lite-workbench-layout">
+            <aside class="oa-lite-workbench-sidebar">
+              <template v-for="item in workbenchSidebarItems" :key="item.key">
+                <button
+                  class="oa-lite-center-nav-item"
+                  :class="{
+                    active:
+                      item.key === 'create'
+                        ? activeTab === 'create' && !isManagementView
+                        : item.key === activeTab || activeManagementSection === item.key,
+                    'has-children': Boolean(item.children),
+                  }"
+                  @click="handleWorkbenchSidebarSelect(item.key)"
+                >
+                  <span class="oa-lite-center-nav-main">
+                    <span class="oa-lite-center-nav-icon">
+                      <IconifyIcon :icon="item.icon" />
+                    </span>
+                    <span class="oa-lite-center-nav-text">{{ item.label }}</span>
+                  </span>
+                  <span class="oa-lite-center-nav-trailing">
+                    <Tag v-if="item.count !== undefined" class="oa-lite-center-nav-count">
+                      {{ item.count }}
+                    </Tag>
+                    <IconifyIcon
+                      v-if="item.children"
+                      :icon="
+                        expandedManagementSection === item.key
+                          ? 'solar:alt-arrow-up-outline'
+                          : 'solar:alt-arrow-down-outline'
+                      "
+                      class="oa-lite-center-nav-chevron"
+                    />
+                  </span>
+                </button>
+                <div
+                  v-if="item.children && expandedManagementSection === item.key"
+                  class="oa-lite-center-nav-children"
+                >
+                  <button
+                    v-for="child in item.children"
+                    :key="child.key"
+                    class="oa-lite-center-nav-child"
+                    :class="{
+                      active:
+                        activeManagementSection === item.key && managementPage === child.key,
+                    }"
+                    @click.stop="handleManagementSelect(item.key as ManagementSection, child.key)"
+                  >
+                    {{ child.label }}
+                  </button>
+                </div>
+              </template>
+            </aside>
+
+            <div class="oa-lite-workbench-content">
           <div class="oa-lite-home-shell" :class="{ 'is-center-mode': isCenterMode }">
-            <template v-if="activeTab === 'create'">
+            <template v-if="isManagementView && !isDetailOpen">
+              <div class="oa-lite-management-view">
+                <component :is="currentManagementComponent" />
+              </div>
+            </template>
+
+            <template v-else-if="activeTab === 'create' && !isDetailOpen">
               <section class="oa-lite-section-header">
                 <div>
                   <div class="oa-lite-section-title">发起审批</div>
                 </div>
               </section>
 
-              <section class="oa-lite-stat-pillar">
-                <button
-                  v-for="item in dashboardNavItems"
-                  :key="item.key"
-                  class="oa-lite-stat-item"
-                  @click="openTab(item.key)"
-                >
-                  <span class="oa-lite-stat-count">{{ item.count }}</span>
-                  <IconifyIcon :icon="item.icon" class="oa-lite-stat-icon" />
-                  <span class="oa-lite-stat-label">{{ item.label }}</span>
-                  <IconifyIcon
-                    icon="solar:alt-arrow-right-outline"
-                    class="oa-lite-stat-arrow"
-                  />
-                </button>
-              </section>
-
               <section class="oa-lite-create-shell">
-                <div v-if="createCategoryTabs.length > 0" class="oa-lite-create-toolbar">
-                  <div class="oa-lite-category-tabs">
-                      <button
-                        v-for="item in createCategoryTabs"
-                        :key="item.code"
-                        class="oa-lite-category-tab"
-                        :class="{ active: selectedCreateCategoryCode === item.code }"
-                        @click="selectCreateCategory(item.code)"
-                      >
-                        {{ item.name }}
-                      </button>
-                  </div>
-                </div>
-
                 <div v-if="createCategorySections.length > 0" class="oa-lite-create-sections">
                   <section
                     v-for="section in createCategorySections"
                     :key="section.code"
-                    :ref="
-                      (element) =>
-                        setCreateCategorySectionRef(
-                          section.code,
-                          element as HTMLElement | null,
-                        )
-                    "
                     class="oa-lite-template-section"
                   >
                     <div class="oa-lite-template-section-head">
                       <span class="oa-lite-template-section-title">{{ section.name }}</span>
-                      <IconifyIcon
-                        icon="solar:alt-arrow-right-line-duotone"
-                        class="oa-lite-template-section-arrow"
-                      />
                     </div>
 
                     <div class="oa-lite-template-grid">
@@ -1359,26 +1663,11 @@ onUnmounted(() => {
 
             <template v-else>
               <section class="oa-lite-center-shell">
-                <aside class="oa-lite-center-nav">
-                  <button
-                    v-for="item in dashboardNavItems"
-                    :key="item.key"
-                    class="oa-lite-center-nav-item"
-                    :class="{ active: activeTab === item.key }"
-                    @click="openTab(item.key)"
-                  >
-                    <span class="oa-lite-center-nav-main">
-                      <span class="oa-lite-center-nav-icon">
-                        <IconifyIcon :icon="item.icon" />
-                      </span>
-                      <span class="oa-lite-center-nav-text">{{ item.label }}</span>
-                    </span>
-                    <Tag class="oa-lite-center-nav-count">{{ item.count }}</Tag>
-                  </button>
-                </aside>
-
-                <div class="oa-lite-center-content">
-                  <div class="oa-lite-list-panel">
+                <div
+                  class="oa-lite-center-content"
+                  :class="{ 'is-detail-mode': isDetailOpen }"
+                >
+                  <div v-if="!isDetailOpen" class="oa-lite-list-panel">
                     <div class="oa-lite-list-headline">
                       <span class="oa-lite-list-total">
                         {{ currentPageState?.total || currentList.length }} 条记录
@@ -1474,35 +1763,32 @@ onUnmounted(() => {
                     <div class="oa-lite-list-scroll-region">
                       <Spin :spinning="currentListLoading" class="oa-lite-list-spin">
                         <div v-if="currentList.length > 0" class="oa-lite-list-scroll-body">
-                          <div class="oa-lite-list">
+                          <div class="oa-lite-approval-table">
+                            <div class="oa-lite-approval-table-row oa-lite-approval-table-head">
+                              <span>编号</span>
+                              <span>流程名称</span>
+                              <span>类型</span>
+                              <span>发起人</span>
+                              <span>当前阶段</span>
+                              <span>发起时间</span>
+                              <span>结束时间</span>
+                              <span>操作</span>
+                            </div>
                             <button
                               v-for="item in currentList"
                               :key="getItemIdentity(item)"
-                              class="oa-lite-list-item"
+                              class="oa-lite-approval-table-row oa-lite-approval-table-item"
                               :class="{ active: selectedItem === item }"
-                              @click="selectedItem = item"
+                              @click="openDetail(item)"
                             >
-                              <div class="oa-lite-list-main">
-                                <div class="oa-lite-list-head">
-                                  <div class="oa-lite-list-title-wrap">
-                                    <div class="oa-lite-list-title">{{ getItemTitle(item) }}</div>
-                                    <div class="oa-lite-list-primary-meta">{{ getItemMetaLeft(item) }}</div>
-                                  </div>
-                                  <span class="oa-lite-list-date">{{ getItemMetaRight(item) }}</span>
-                                </div>
-                                <div v-if="getListSecondaryText(item)" class="oa-lite-list-summary">
-                                  {{ getListSecondaryText(item) }}
-                                </div>
-                              </div>
-                              <div class="oa-lite-list-side">
-                                <Tag
-                                  v-if="getItemStatus(item) !== undefined"
-                                  class="oa-lite-list-status-tag"
-                                  :class="`tone-${getItemStatusTone(item)}`"
-                                >
-                                  {{ getItemStatusText(item) }}
-                                </Tag>
-                              </div>
+                              <span>{{ getListNumber(item) }}</span>
+                              <span>{{ getListProcessName(item) }}</span>
+                              <span>{{ getListType(item) }}</span>
+                              <span>{{ getListStarter(item) }}</span>
+                              <span>{{ getListStage(item) }}</span>
+                              <span>{{ getListStartTime(item) }}</span>
+                              <span>{{ getListEndTime(item) }}</span>
+                              <span class="oa-lite-approval-table-action">详情</span>
                             </button>
                           </div>
                         </div>
@@ -1527,7 +1813,14 @@ onUnmounted(() => {
                     </div>
                   </div>
 
-                  <div class="oa-lite-detail-panel">
+                  <div v-else class="oa-lite-detail-panel oa-lite-detail-panel--full">
+                    <div class="oa-lite-detail-header">
+                      <Button type="link" class="oa-lite-detail-back" @click="closeDetail">
+                        <IconifyIcon icon="solar:arrow-left-outline" />
+                        返回列表
+                      </Button>
+                      <span class="oa-lite-detail-title">{{ currentListTitle }}详情</span>
+                    </div>
                     <div v-if="currentDetailRequest" class="oa-lite-detail-scroll-region">
                       <ProcessDetail
                         :request="currentDetailRequest"
@@ -1547,6 +1840,8 @@ onUnmounted(() => {
                 </div>
               </section>
             </template>
+          </div>
+            </div>
           </div>
         </Spin>
       </main>
@@ -1800,8 +2095,9 @@ onUnmounted(() => {
   padding: 20px 24px 32px;
 }
 
-.oa-lite-main-embedded {
-  padding-top: 6px;
+.oa-lite-main.oa-lite-main-embedded {
+  width: 100%;
+  padding: 6px 0 32px !important;
 }
 
 .oa-lite-main.is-center-mode {
@@ -1825,11 +2121,43 @@ onUnmounted(() => {
 }
 
 .oa-lite-home-shell {
-  max-width: 1260px;
-  margin: 0 auto;
+  width: 100%;
+  max-width: none !important;
+  margin: 0 !important;
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.oa-lite-workbench-layout {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 176px minmax(0, 1fr);
+  gap: 16px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.oa-lite-workbench-layout:has(.oa-lite-home-shell.is-center-mode) {
+  height: 100%;
+}
+
+.oa-lite-workbench-sidebar {
+  min-width: 0;
+  padding: 16px 0 18px;
+}
+
+.oa-lite-workbench-content {
+  min-width: 0;
+  min-height: 0;
+}
+
+.oa-lite-management-view {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 0 18px;
 }
 
 .oa-lite-home-shell.is-center-mode {
@@ -2186,18 +2514,23 @@ onUnmounted(() => {
   font-size: 12px;
   color: var(--oa-ink-soft);
   line-height: 1.5;
+  min-height: 36px;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
 }
 
 .oa-lite-center-shell {
   --oa-lite-center-panel-height: 100%;
   display: grid;
-  grid-template-columns: 176px minmax(0, 1fr);
-  gap: 16px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
   align-items: stretch;
   height: 100%;
   min-height: 0;
   min-width: 0;
-  padding: 16px 20px 18px;
+  padding: 16px 0 18px;
   background: var(--oa-shell-bg);
 }
 
@@ -2243,6 +2576,48 @@ onUnmounted(() => {
   display: none;
 }
 
+.oa-lite-center-nav-item.has-children {
+  margin-bottom: 2px;
+}
+
+.oa-lite-center-nav-trailing {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--oa-ink-faint);
+}
+
+.oa-lite-center-nav-chevron {
+  font-size: 14px;
+}
+
+.oa-lite-center-nav-children {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 0 8px 28px;
+  padding-left: 12px;
+  border-left: 1px solid var(--oa-shell-border);
+}
+
+.oa-lite-center-nav-child {
+  min-height: 32px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--oa-ink-soft);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.oa-lite-center-nav-child:hover,
+.oa-lite-center-nav-child.active {
+  background: var(--oa-shell-surface);
+  color: var(--oa-accent);
+}
+
 .oa-lite-center-nav-main {
   display: inline-flex;
   align-items: center;
@@ -2284,8 +2659,8 @@ onUnmounted(() => {
 
 .oa-lite-center-content {
   display: grid;
-  grid-template-columns: minmax(380px, 420px) minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0;
   border: 0;
   border-radius: 0;
   background: transparent;
@@ -2315,6 +2690,29 @@ onUnmounted(() => {
 
 .oa-lite-detail-panel {
   padding: 0;
+}
+
+.oa-lite-detail-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+  min-height: 52px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--oa-shell-border);
+}
+
+.oa-lite-detail-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding-inline: 0;
+}
+
+.oa-lite-detail-title {
+  color: var(--oa-ink);
+  font-size: 15px;
+  font-weight: 600;
 }
 
 .oa-lite-section-header {
@@ -2513,6 +2911,58 @@ onUnmounted(() => {
   min-width: 0;
   width: 100%;
   overflow: visible;
+}
+
+.oa-lite-approval-table {
+  min-width: 1120px;
+  overflow: hidden;
+  border: 1px solid var(--oa-shell-border);
+  border-radius: 10px;
+  background: var(--oa-shell-surface);
+}
+
+.oa-lite-approval-table-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.2fr) minmax(180px, 1.4fr) minmax(120px, 1fr) minmax(100px, .8fr) minmax(110px, .9fr) minmax(150px, 1fr) minmax(150px, 1fr) 64px;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 16px;
+  text-align: left;
+}
+
+.oa-lite-approval-table-head {
+  color: var(--oa-ink-soft);
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--oa-shell-surface-muted);
+}
+
+.oa-lite-approval-table-item {
+  border: 0;
+  border-top: 1px solid var(--oa-shell-border);
+  color: var(--oa-ink);
+  cursor: pointer;
+  font-size: 13px;
+  background: transparent;
+  transition: background-color .2s ease;
+}
+
+.oa-lite-approval-table-item:hover,
+.oa-lite-approval-table-item.active {
+  background: color-mix(in srgb, var(--oa-accent) 8%, transparent);
+}
+
+.oa-lite-approval-table-item > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.oa-lite-approval-table-action {
+  color: var(--oa-accent);
+  font-weight: 600;
 }
 
 .oa-lite-list {
@@ -3139,9 +3589,17 @@ onUnmounted(() => {
     justify-content: flex-start;
   }
 
+  .oa-lite-workbench-layout,
   .oa-lite-center-shell,
   .oa-lite-center-content {
     grid-template-columns: 1fr;
+  }
+
+  .oa-lite-workbench-sidebar {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px;
+    padding: 0;
   }
 
   .oa-lite-center-shell {
@@ -3210,6 +3668,10 @@ onUnmounted(() => {
   }
 
   .oa-lite-center-nav {
+    grid-template-columns: 1fr;
+  }
+
+  .oa-lite-workbench-sidebar {
     grid-template-columns: 1fr;
   }
 

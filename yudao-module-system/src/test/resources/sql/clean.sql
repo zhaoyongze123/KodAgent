@@ -27,6 +27,7 @@ DELETE FROM "system_social_client";
 DELETE FROM "system_social_user";
 DELETE FROM "system_social_user_bind";
 DELETE FROM "system_kod_sso_user_bind";
+DELETE FROM "system_kod_dept_sync";
 DELETE FROM "system_tenant";
 DELETE FROM "system_tenant_package";
 DELETE FROM "system_oauth2_client";

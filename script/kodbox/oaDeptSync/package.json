@@ -1,0 +1,26 @@
+{
+	"id":"oaDeptSync",
+	"name":"OA department sync",
+	"title":"OA department sync",
+	"version":"1.0",
+	"category":"tools",
+	"hidden":1,
+	"source":{
+		"className":"font-icon ri-node-tree"
+	},
+	"description":"Synchronize the OA organization tree with Kodbox department spaces.",
+	"auther":{
+		"copyright":"OA",
+		"homePage":""
+	},
+	"configItem":{
+		"pluginAuth":{
+			"type":"userSelect",
+			"value":{"all":1},
+			"className":"hidden",
+			"display":"{{LNG['admin.plugin.auth']}}",
+			"desc":"{{LNG['admin.plugin.authDesc']}}",
+			"require":1
+		}
+	}
+}

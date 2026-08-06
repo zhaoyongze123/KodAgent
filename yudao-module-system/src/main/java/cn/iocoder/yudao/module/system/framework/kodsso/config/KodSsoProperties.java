@@ -86,4 +86,44 @@ public class KodSsoProperties {
      */
     private Duration exchangeCodeExpire = Duration.ofMinutes(5);
 
+    /**
+     * 是否启用可道云组织与部门空间同步。
+     */
+    private Boolean organizationSyncEnabled = false;
+
+    /**
+     * 可道云组织管理员账号。该账号只用于组织同步，不能使用普通用户令牌代替。
+     */
+    private String organizationSyncUsername;
+
+    /**
+     * 可道云组织管理员密码，建议通过环境变量注入。
+     */
+    private String organizationSyncPassword;
+
+    /**
+     * 可道云组织同步管理员令牌。配置后优先使用令牌，不需要每次用密码登录。
+     */
+    private String organizationSyncAccessToken;
+
+    /**
+     * 可道云同步插件地址。为空时使用 baseUrl/index.php?plugin/oaDeptSync/sync。
+     */
+    private String organizationSyncEndpoint;
+
+    /**
+     * 组织同步请求超时时间，单位毫秒。
+     */
+    private Integer organizationSyncTimeout = 15000;
+
+    /**
+     * 可道云根部门编号。
+     */
+    private String organizationSyncRootGroupId = "1";
+
+    /**
+     * 部门空间同步 cron。默认关闭，避免生产环境未配置管理员账号时反复请求。
+     */
+    private String organizationSyncCron = "-";
+
 }

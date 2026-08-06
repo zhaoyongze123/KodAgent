@@ -6,7 +6,6 @@ SERVER_TAR="${SERVER_TAR:-ruoyi-server-local.tar}"
 ADMIN_TAR="${ADMIN_TAR:-ruoyi-admin-local.tar}"
 HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:48080/actuator/health}"
 REMOTE_ENV_FILE="${REMOTE_ENV_FILE:-}"
-DB_MIGRATION_FILE="${DB_MIGRATION_FILE:-/tmp/system-kod-sso-token-upgrade.sql}"
 REMOTE_DB_CONTAINER="${REMOTE_DB_CONTAINER:-ruoyi-mysql}"
 
 if [ -n "${REMOTE_ENV_FILE}" ] && [ -f "${REMOTE_ENV_FILE}" ]; then
@@ -39,9 +38,6 @@ for i in $(seq 1 60); do
     exit 1
   fi
 done
-if [ -f "${DB_MIGRATION_FILE}" ]; then
-  docker exec -i "${REMOTE_DB_CONTAINER}" mysql -uroot -p"${MYSQL_ROOT_PASSWORD}" "${MYSQL_DATABASE}" < "${DB_MIGRATION_FILE}"
-fi
 docker compose stop server admin || true
 docker compose rm -sf server admin || true
 
@@ -61,7 +57,7 @@ for i in $(seq 1 60); do
   fi
 done
 
-rm -f "/tmp/${SERVER_TAR}" "/tmp/${ADMIN_TAR}" "${DB_MIGRATION_FILE}" "${REMOTE_ENV_FILE}"
+rm -f "/tmp/${SERVER_TAR}" "/tmp/${ADMIN_TAR}" "${REMOTE_ENV_FILE}"
 docker image prune -f >/dev/null 2>&1 || true
 
 docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' | grep 'ruoyi-'

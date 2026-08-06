@@ -277,10 +277,14 @@ onMounted(async () => {
               返回
             </Button>
           </header>
-          <Form layout="vertical">
+          <Form layout="vertical" class="oa-bpm-complex-form-grid">
             <Form.Item
               v-for="field in config.createFields"
               :key="field.field"
+              class="oa-bpm-complex-form-field"
+              :class="{
+                'is-full': field.type === 'textarea' || field.type === 'files',
+              }"
               :label="field.label"
               :required="field.required"
             >
@@ -371,6 +375,20 @@ onMounted(async () => {
   padding-top: 18px;
 }
 
+.oa-bpm-complex-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 20px;
+}
+
+.oa-bpm-complex-form-field {
+  min-width: 0;
+}
+
+.oa-bpm-complex-form-field.is-full {
+  grid-column: 1 / -1;
+}
+
 .oa-bpm-complex-panel-head {
   display: flex;
   align-items: flex-start;
@@ -400,5 +418,17 @@ onMounted(async () => {
   margin-top: 18px;
   padding-top: 16px;
   border-top: 1px solid var(--oa-shell-border);
+}
+
+@media (max-width: 1100px) {
+  .oa-bpm-complex-create-shell {
+    :deep(.ant-col) {
+      width: 100%;
+    }
+  }
+
+  .oa-bpm-complex-form-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

@@ -43,7 +43,7 @@ const coreRoutes: RouteRecordRaw[] = [
         component: () => import('#/views/bpm/processInstance/create/index.vue'),
         meta: {
           title: '发起流程',
-          activePath: '/oa-lite',
+          activePath: '/oa-lite/center',
           hideInMenu: true,
           hideInTab: true,
           keepAlive: false,

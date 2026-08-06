@@ -1,41 +1,21 @@
 <script lang="ts" setup>
 import type { CSSProperties } from 'vue';
 import type { MenuRecordRaw } from '@vben/types';
-import type { NotificationItem } from '@vben/layouts';
-
-import type { SystemTenantApi } from '#/api/system/tenant';
-import type { SystemNotifyMessageApi } from '#/api/system/notify/message';
-
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { RouterView, useRoute } from 'vue-router';
 
 import { useAccess } from '@vben/access';
-import { AuthenticationLoginExpiredModal, useVbenModal } from '@vben/common-ui';
-import { isTenantEnable, useTabs, useWatermark } from '@vben/hooks';
+import { AuthenticationLoginExpiredModal } from '@vben/common-ui';
+import { useWatermark } from '@vben/hooks';
 import { IconifyIcon } from '@vben/icons';
-import {
-  LayoutMenu,
-  LockScreen,
-  Notification,
-  TenantDropdown,
-  UserDropdown,
-} from '@vben/layouts';
-import { preferences, updatePreferences } from '@vben/preferences';
+import { LayoutMenu } from '@vben/layouts';
+import { preferences } from '@vben/preferences';
 import { useAccessStore, useUserStore } from '@vben/stores';
-import { formatDateTime } from '@vben/utils';
 import { useWebSocket } from '@vueuse/core';
 
 import { message } from 'ant-design-vue';
 
-import {
-  getUnreadNotifyMessageCount,
-  getUnreadNotifyMessageList,
-  updateAllNotifyMessageRead,
-  updateNotifyMessageRead,
-} from '#/api/system/notify/message';
-import { getSimpleTenantList } from '#/api/system/tenant';
 import { router } from '#/router';
-import { useAuthStore } from '#/store';
 import {
   getStandaloneCenterMenuItems,
   getStandaloneCenterMenuPathSet,
@@ -47,24 +27,14 @@ import {
 } from '#/utils/kod-entry';
 import { isAdminUser } from '#/utils/oa-user';
 import LoginForm from '#/views/_core/authentication/login.vue';
-import { resolveNotificationPreview as presentNotificationPreview } from '#/views/oa-lite/notification-presenter';
-import NotifyMessageDetail from '#/views/system/notify/my/modules/detail.vue';
 
 defineOptions({ name: 'UnifiedOALiteLayout' });
 
-const OA_LITE_THEME_STORAGE_KEY = 'oa-lite-theme-mode';
-const OA_LITE_THEME_EVENT = 'oa-lite-theme-change';
 const OA_LITE_NOTICE_PUSH_EVENT = 'oa-lite-notice-push';
 const OA_LITE_SIDEBAR_WIDTH_STORAGE_KEY = 'oa-lite-unified-sidebar-width-v2';
 const OA_LITE_SIDEBAR_MIN_WIDTH = 140;
 const OA_LITE_SIDEBAR_MAX_WIDTH = 320;
 const OA_LITE_SIDEBAR_DEFAULT_WIDTH = 140;
-
-interface LocalTopNavItem {
-  key: string;
-  label: string;
-  path: string;
-}
 
 const BPM_MANAGEMENT_MENU_PATHS = new Set([
   '/bpm/category',
@@ -138,15 +108,6 @@ const SYSTEM_MANAGEMENT_MENU_ITEMS: MenuRecordRaw[] = [
   },
 ];
 
-function resolveNotificationPreview(
-  item: Pick<
-    SystemNotifyMessageApi.NotifyMessage,
-    'templateCode' | 'templateContent' | 'templateParams'
-  >,
-) {
-  return presentNotificationPreview(item);
-}
-
 function flattenMenus(
   menus: MenuRecordRaw[] = [],
   result: MenuRecordRaw[] = [],
@@ -162,20 +123,10 @@ function flattenMenus(
 
 const route = useRoute();
 const userStore = useUserStore();
-const authStore = useAuthStore();
 const accessStore = useAccessStore();
 const { hasAccessByCodes } = useAccess();
 const { destroyWatermark, updateWatermark } = useWatermark();
-const { closeOtherTabs, refreshTab } = useTabs();
 
-const notifications = ref<NotificationItem[]>([]);
-const notificationMessageMap = ref<
-  Record<string, SystemNotifyMessageApi.NotifyMessage>
->({});
-const unreadCount = ref(0);
-const tenants = ref<SystemTenantApi.Tenant[]>([]);
-const notificationTimer = ref<null | ReturnType<typeof setInterval>>(null);
-const themeMode = ref<'dark' | 'light'>('light');
 const webSocketServer = ref('');
 const sidebarWidth = ref(OA_LITE_SIDEBAR_DEFAULT_WIDTH);
 const isSidebarResizing = ref(false);
@@ -190,35 +141,9 @@ const {
   immediate: false,
 });
 
-const showNotificationDot = computed(() => unreadCount.value > 0);
 const avatar = computed(
   () => userStore.userInfo?.avatar ?? preferences.app.defaultAvatar,
 );
-const tenantEnable = computed(
-  () => hasAccessByCodes(['system:tenant:visit']) && isTenantEnable(),
-);
-
-const [NotifyMessageDetailModal, notifyMessageDetailModalApi] = useVbenModal({
-  connectedComponent: NotifyMessageDetail,
-  destroyOnClose: true,
-});
-
-const themeToggleLabel = computed(() =>
-  themeMode.value === 'dark' ? '切换浅色模式' : '切换暗色模式',
-);
-
-const fixedTopNavItems = computed<LocalTopNavItem[]>(() => [
-  {
-    key: 'oa-create',
-    label: '发起审批',
-    path: '/oa-lite',
-  },
-  {
-    key: 'oa-center',
-    label: '审批中心',
-    path: '/oa-lite/center',
-  },
-]);
 
 const accessRootMenus = computed<MenuRecordRaw[]>(() => accessStore.accessMenus);
 const accessFlatMenus = computed<MenuRecordRaw[]>(() =>
@@ -251,26 +176,6 @@ const systemRootMenu = computed(
         menu.name === '系统管理',
     ) || null,
 );
-const managementTopNavItems = computed<LocalTopNavItem[]>(() =>
-  isAdminWorkbenchUser.value
-    ? [
-        (bpmRootMenu.value || isAdminWorkbenchUser.value)
-          ? {
-              key: '/bpm',
-              label: '流程管理',
-              path: '/bpm/manager/model',
-            }
-          : null,
-        (systemRootMenu.value || isAdminWorkbenchUser.value)
-          ? {
-              key: '/system',
-              label: '系统管理',
-              path: '/system/user',
-            }
-          : null,
-      ].filter((item): item is LocalTopNavItem => Boolean(item))
-    : [],
-);
 const currentActivePath = computed(() =>
   String(route.meta.activePath || route.path),
 );
@@ -286,10 +191,11 @@ const isOaLiteProcessInstanceCreateRoute = computed(
     route.name === 'BpmProcessInstanceCreate' &&
     (isOaLiteReturnRoute.value ||
       isApprovalEntryQuery(route.query) ||
-      currentActivePath.value === '/oa-lite'),
+      currentActivePath.value === '/oa-lite/center'),
 );
 const isWorkbenchCreateRoute = computed(
   () =>
+    (route.path === '/oa-lite/center' && route.query.view === 'create') ||
     route.path === '/oa-lite' ||
     isOARequestRoute.value ||
     isOaLiteProcessInstanceCreateRoute.value,
@@ -298,13 +204,18 @@ const isWorkbenchNotificationRoute = computed(
   () => route.path.startsWith('/oa-lite/notifications'),
 );
 const isWorkbenchCenterRoute = computed(
-  () => route.path === '/oa-lite/center',
+  () => route.path === '/oa-lite/center' && route.query.view !== 'create',
 );
 const isWorkbenchRoute = computed(
   () =>
     isWorkbenchCreateRoute.value ||
     isWorkbenchCenterRoute.value ||
     isWorkbenchNotificationRoute.value,
+);
+// 发起审批和审批中心共用同一个工作台视口，避免外层 main 在 create
+// 视图下回落到普通页面的左右 padding。
+const isWorkbenchViewportRoute = computed(
+  () => isWorkbenchCreateRoute.value || isWorkbenchCenterRoute.value,
 );
 const isManagementRoute = computed(
   () => route.path.startsWith('/bpm') || route.path.startsWith('/system'),
@@ -498,31 +409,6 @@ const sidebarStyle = computed<CSSProperties>(() => ({
   width: `${sidebarWidth.value}px`,
 }) as CSSProperties);
 
-const activeTopNavKey = computed(() => {
-  if (isWorkbenchCreateRoute.value) {
-    return 'oa-create';
-  }
-  if (isWorkbenchNotificationRoute.value) {
-    return '';
-  }
-  if (isWorkbenchCenterRoute.value) {
-    return 'oa-center';
-  }
-  if (route.path === '/system' || route.path.startsWith('/system/')) {
-    return '/system';
-  }
-  if (route.path === '/meeting-room' || route.path.startsWith('/meeting-room/')) {
-    return resolveStandaloneRootMenuPath(route.path);
-  }
-  const standaloneRootMenuPath = resolveStandaloneRootMenuPath(route.path);
-  if (standaloneRootMenuPath) {
-    return standaloneRootMenuPath;
-  }
-  if (route.path === '/bpm' || route.path.startsWith('/bpm/')) {
-    return '/bpm';
-  }
-  return currentRootMenuPath.value;
-});
 const contentStyle = computed<CSSProperties>(() => ({
   '--vben-content-height': isMeetingOrScheduleEntryMode.value
     ? '100vh'
@@ -534,14 +420,16 @@ const contentStyle = computed<CSSProperties>(() => ({
     : 'calc(100vw - 80px)',
 }) as CSSProperties);
 
-function handleTopNavSelect(path: string) {
-  if (path === route.path) {
+function handleTopNavSelect(path: string, query: Record<string, string> = {}) {
+  if (path === route.path && Object.keys(query).every((key) => route.query[key] === query[key])) {
     return;
   }
   const shouldKeepApprovalEntry =
     isApprovalEntryMode.value && path.startsWith('/oa-lite');
-  const nextQuery = shouldKeepApprovalEntry ? { ...route.query, entry: KOD_ENTRY_APPROVAL } : {};
-  if (path !== '/oa-lite' && 'forceCreate' in nextQuery) {
+  const nextQuery = shouldKeepApprovalEntry
+    ? { ...route.query, ...query, entry: KOD_ENTRY_APPROVAL }
+    : query;
+  if (path !== '/oa-lite/center' && 'forceCreate' in nextQuery) {
     delete nextQuery.forceCreate;
   }
   router.push({
@@ -592,10 +480,6 @@ async function handleNoticePushBroadcast(rawMessage: string) {
   if (!notice) {
     return;
   }
-  await Promise.all([
-    handleNotificationGetUnreadCount(),
-    handleNotificationGetList(),
-  ]);
   message.info(`收到公告：${notice.title}`);
   if (typeof window !== 'undefined') {
     window.dispatchEvent(
@@ -664,118 +548,6 @@ function handleSidebarResizeStart(event: MouseEvent) {
   };
 }
 
-function handleRefresh() {
-  router.go(0);
-}
-
-function handleThemeToggle() {
-  themeMode.value = themeMode.value === 'dark' ? 'light' : 'dark';
-  if (typeof window !== 'undefined') {
-    window.localStorage.setItem(OA_LITE_THEME_STORAGE_KEY, themeMode.value);
-    window.dispatchEvent(
-      new CustomEvent(OA_LITE_THEME_EVENT, {
-        detail: themeMode.value,
-      }),
-    );
-  }
-  updatePreferences({
-    theme: {
-      mode: themeMode.value,
-      semiDarkHeader: false,
-      semiDarkSidebar: false,
-      semiDarkSidebarSub: false,
-    },
-  });
-}
-
-async function handleLogout() {
-  await authStore.logout(false);
-}
-
-async function handleNotificationGetUnreadCount() {
-  unreadCount.value = await getUnreadNotifyMessageCount();
-}
-
-async function handleNotificationGetList() {
-  const list = await getUnreadNotifyMessageList();
-  notificationMessageMap.value = Object.fromEntries(
-    list.map((item) => [String(item.id), item]),
-  );
-  notifications.value = list.map((item) => ({
-    avatar: preferences.app.defaultAvatar,
-    date: formatDateTime(item.createTime) as string,
-    id: item.id,
-    isRead: false,
-    message: resolveNotificationPreview(item),
-    title: item.templateNickname,
-  }));
-}
-
-function handleNotificationViewAll() {
-  router.push('/oa-lite/notifications');
-}
-
-async function handleNotificationMakeAll() {
-  await updateAllNotifyMessageRead();
-  unreadCount.value = 0;
-  notifications.value = [];
-}
-
-async function handleNotificationClear() {
-  await handleNotificationMakeAll();
-}
-
-async function handleNotificationRead(item: NotificationItem) {
-  if (!item.id) {
-    return;
-  }
-  await updateNotifyMessageRead([item.id]);
-  await handleNotificationGetUnreadCount();
-  notifications.value = notifications.value.filter((n) => n.id !== item.id);
-}
-
-async function handleNotificationItemClick(item: NotificationItem) {
-  const messageItem = notificationMessageMap.value[String(item.id)];
-  if (!messageItem) {
-    return;
-  }
-  if (!messageItem.readStatus) {
-    await updateNotifyMessageRead([messageItem.id]);
-    await handleNotificationGetUnreadCount();
-    await handleNotificationGetList();
-  }
-  notifyMessageDetailModalApi.setData({
-    ...messageItem,
-    readStatus: true,
-    readTime: messageItem.readTime || new Date(),
-  }).open();
-}
-
-function handleNotificationOpen(open: boolean) {
-  if (!open) {
-    return;
-  }
-  handleNotificationGetList();
-  handleNotificationGetUnreadCount();
-}
-
-async function handleGetTenantList() {
-  if (tenantEnable.value) {
-    tenants.value = await getSimpleTenantList();
-  }
-}
-
-async function handleTenantChange(tenant: SystemTenantApi.Tenant) {
-  if (!tenant?.id) {
-    message.error('切换租户失败');
-    return;
-  }
-  accessStore.setVisitTenantId(tenant.id as number);
-  await closeOtherTabs();
-  await refreshTab();
-  message.success(`切换当前租户为: ${tenant.name}`);
-}
-
 watch(
   () => ({
     enable: preferences.app.watermark,
@@ -797,24 +569,8 @@ watch(
   },
 );
 
-watch(
-  tenantEnable,
-  (enable) => {
-    if (enable) {
-      handleGetTenantList();
-    }
-  },
-  {
-    immediate: true,
-  },
-);
-
 onMounted(() => {
   if (typeof window !== 'undefined') {
-    themeMode.value =
-      window.localStorage.getItem(OA_LITE_THEME_STORAGE_KEY) === 'dark'
-        ? 'dark'
-        : 'light';
     const savedSidebarWidth = Number.parseInt(
       window.localStorage.getItem(OA_LITE_SIDEBAR_WIDTH_STORAGE_KEY) || '',
       10,
@@ -824,21 +580,11 @@ onMounted(() => {
     }
   }
   connectNoticeWebSocket();
-  handleNotificationGetUnreadCount();
-  notificationTimer.value = setInterval(() => {
-    if (userStore.userInfo) {
-      handleNotificationGetUnreadCount();
-    }
-  }, 1000 * 60 * 2);
 });
 
 onBeforeUnmount(() => {
   closeWebSocket();
   stopSidebarResize();
-  if (notificationTimer.value) {
-    clearInterval(notificationTimer.value);
-    notificationTimer.value = null;
-  }
 });
 
 watch(
@@ -862,7 +608,10 @@ watch(
     <div class="oa-lite-unified-bg"></div>
 
     <header v-if="!isMeetingOrScheduleEntryMode" class="oa-lite-unified-topbar">
-      <button class="oa-lite-unified-brand" @click="handleTopNavSelect('/oa-lite')">
+      <button
+        class="oa-lite-unified-brand"
+        @click="handleTopNavSelect('/oa-lite/center', { view: 'create' })"
+      >
         <span class="oa-lite-unified-brand-icon">
           <IconifyIcon icon="carbon:task-asset-view" />
         </span>
@@ -872,78 +621,13 @@ watch(
       </button>
 
       <nav class="oa-lite-unified-topnav">
-        <button
-          v-for="item in fixedTopNavItems"
-          :key="item.key"
-          class="oa-lite-unified-topnav-item"
-          :class="{ active: activeTopNavKey === item.key }"
-          @click="handleTopNavSelect(item.path)"
-        >
-          {{ item.label }}
-        </button>
-        <button
-          v-for="item in managementTopNavItems"
-          :key="item.key"
-          class="oa-lite-unified-topnav-item oa-lite-unified-topnav-menu"
-          :class="{ active: activeTopNavKey === item.key }"
-          @click="handleTopNavSelect(item.path)"
-        >
-          {{ item.label }}
-        </button>
       </nav>
 
       <div class="oa-lite-unified-actions">
-        <div
-          v-if="tenantEnable"
-          class="oa-lite-unified-action-card oa-lite-unified-tenant"
-        >
-          <TenantDropdown
-            :tenant-list="tenants"
-            :visit-tenant-id="accessStore.visitTenantId"
-            @success="handleTenantChange"
-          />
-        </div>
-
         <div class="oa-lite-unified-action-card">
-          <button
-            class="oa-lite-unified-icon-button"
-            aria-label="刷新页面"
-            @click="handleRefresh"
-          >
-            <IconifyIcon icon="solar:refresh-outline" />
-          </button>
-          <button
-            class="oa-lite-unified-icon-button"
-            :aria-label="themeToggleLabel"
-            @click="handleThemeToggle"
-          >
-            <IconifyIcon
-              :icon="
-                themeMode === 'dark'
-                  ? 'solar:sun-2-outline'
-                  : 'solar:moon-stars-outline'
-              "
-            />
-          </button>
-          <NotifyMessageDetailModal />
-          <Notification
-            :dot="showNotificationDot"
-            :notifications="notifications"
-            @clear="handleNotificationClear"
-            @item-click="handleNotificationItemClick"
-            @make-all="handleNotificationMakeAll"
-            @open="handleNotificationOpen"
-            @read="handleNotificationRead"
-            @view-all="handleNotificationViewAll"
-          />
-          <UserDropdown
-            :avatar="avatar"
-            :description="userStore.userInfo?.email"
-            :show-logout="false"
-            :tag-text="userStore.userInfo?.username"
-            :text="userStore.userInfo?.nickname"
-            @logout="handleLogout"
-          />
+          <span class="oa-lite-unified-user-name">
+            {{ userStore.userInfo?.nickname || userStore.userInfo?.username || '-' }}
+          </span>
         </div>
       </div>
     </header>
@@ -953,7 +637,7 @@ watch(
       :class="{
         'is-standalone-entry': isMeetingOrScheduleEntryMode,
         'is-workbench': isWorkbenchRoute,
-        'is-workbench-center': isWorkbenchCenterRoute,
+        'is-workbench-center': isWorkbenchViewportRoute,
         'is-management': isManagementRoute,
       }"
     >
@@ -1019,11 +703,6 @@ watch(
       <LoginForm />
     </AuthenticationLoginExpiredModal>
 
-    <LockScreen
-      v-if="accessStore.isLockScreen"
-      :avatar="avatar"
-      @to-login="handleLogout"
-    />
   </div>
 </template>
 
@@ -1171,6 +850,13 @@ watch(
   border-radius: 0;
   border: 0;
   background: transparent;
+}
+
+.oa-lite-unified-user-name {
+  color: var(--oa-ink);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
 }
 
 .oa-lite-unified-icon-button {

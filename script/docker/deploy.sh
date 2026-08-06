@@ -3,6 +3,14 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DEPLOY_ENV="${DEPLOY_ENV:-stage}"
+TARGET_ENV="${TARGET_ENV:-}"
+TARGET_PROFILE_MODE=false
+if [[ -z "${TARGET_ENV}" && "${DEPLOY_ENV}" =~ ^(local|103|production)$ ]]; then
+  TARGET_ENV="${DEPLOY_ENV}"
+fi
+if [[ -n "${TARGET_ENV}" ]]; then
+  TARGET_PROFILE_MODE=true
+fi
 ENV_FILE="${DEPLOY_ENV_FILE:-${ROOT_DIR}/script/docker/env/${DEPLOY_ENV}.env}"
 ENV_EXAMPLE_FILE="${DEPLOY_ENV_EXAMPLE_FILE:-${ROOT_DIR}/script/docker/env/${DEPLOY_ENV}.env.example}"
 SERVER_IMAGE="${SERVER_IMAGE:-ruoyi-server:local}"
@@ -17,12 +25,12 @@ LOCAL_DB_USER="${LOCAL_DB_USER:-root}"
 LOCAL_DB_PASSWORD="${LOCAL_DB_PASSWORD:-123456}"
 REMOTE_DB_CONTAINER="${REMOTE_DB_CONTAINER:-ruoyi-mysql}"
 DB_DUMP_GZ="${DB_DUMP_GZ:-ruoyi-vue-pro.sql.gz}"
-DB_MIGRATION_FILE="${DB_MIGRATION_FILE:-sql/mysql/system-kod-sso-token-upgrade.sql}"
-DB_MIGRATION_NAME="${DB_MIGRATION_NAME:-system-kod-sso-token-upgrade.sql}"
 IMPORT_DATABASE="${IMPORT_DATABASE:-false}"
 REMOTE_ENV_BASENAME="${REMOTE_ENV_BASENAME:-ruoyi-deploy.env}"
 CLEAN_LOCAL_ARTIFACTS="${CLEAN_LOCAL_ARTIFACTS:-true}"
 CLEAN_LOCAL_DOCKER_CACHE="${CLEAN_LOCAL_DOCKER_CACHE:-true}"
+TARGET_LOADER="${ROOT_DIR}/script/docker/env/load-target-env.sh"
+TARGET_VALIDATOR="${ROOT_DIR}/script/docker/env/validate-target-env.sh"
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -78,6 +86,25 @@ cleanup_local() {
 }
 
 load_env_file() {
+  if [ "${TARGET_PROFILE_MODE}" = "true" ]; then
+    if [ ! -f "${TARGET_LOADER}" ]; then
+      echo "[错误] 目标环境加载器不存在: ${TARGET_LOADER}" >&2
+      exit 1
+    fi
+    # shellcheck disable=SC1090
+    source "${TARGET_LOADER}" "${TARGET_ENV}"
+    DEPLOY_ENV="${TARGET_ENV}"
+    ENV_FILE="${TARGET_ENV_FILE}"
+    DB_NAME="${MYSQL_DATABASE:-${DB_NAME}}"
+    REMOTE_DB_CONTAINER="${MYSQL_CONTAINER:-${REMOTE_DB_CONTAINER}}"
+    FRONTEND_ENV_FILE="${FRONTEND_ENV_FILE:?目标环境未设置 FRONTEND_ENV_FILE}"
+    INTRANET_APP_ORIGIN="${INTRANET_APP_ORIGIN:?目标环境未设置 INTRANET_APP_ORIGIN}"
+    HEALTH_URL="${HEALTH_URL:?目标环境未设置 HEALTH_URL}"
+    SERVER_PORT="${SERVER_PORT:?目标环境未设置 SERVER_PORT}"
+    ADMIN_PORT="${ADMIN_PORT:?目标环境未设置 ADMIN_PORT}"
+    return 0
+  fi
+
   if [ ! -f "${ENV_FILE}" ]; then
     if [ -f "${ENV_EXAMPLE_FILE}" ]; then
       echo "[提示] 未找到环境文件，回退到示例文件: ${ENV_EXAMPLE_FILE}"
@@ -91,6 +118,77 @@ load_env_file() {
   # shellcheck disable=SC1090
   source "${ENV_FILE}"
   set +a
+}
+
+validate_target_profile() {
+  if [ ! -x "${TARGET_VALIDATOR}" ]; then
+    echo "[错误] 目标环境校验器不存在或不可执行: ${TARGET_VALIDATOR}" >&2
+    exit 1
+  fi
+  bash "${TARGET_VALIDATOR}" "${TARGET_ENV}" >/dev/null
+}
+
+require_target_secrets() {
+  if [ "${TARGET_SECRETS_LOADED:-false}" != "true" ]; then
+    echo "[错误] 未找到目标环境机密文件: ${TARGET_SECRETS_PATH}" >&2
+    echo "请先复制对应的 .secrets.env.example 并填写真实值。" >&2
+    exit 1
+  fi
+  local name value
+  for name in MYSQL_ROOT_PASSWORD MASTER_DATASOURCE_PASSWORD SLAVE_DATASOURCE_PASSWORD REDIS_PASSWORD; do
+    value="${!name:-}"
+    if [ -z "${value}" ] || [[ "${value}" == CHANGE_ME* || "${value}" == REPLACE_ME* ]]; then
+      echo "[错误] ${name} 未配置完成: ${TARGET_SECRETS_PATH}" >&2
+      exit 1
+    fi
+  done
+}
+
+target_compose() {
+  if docker compose version >/dev/null 2>&1; then
+    COMPOSE=(docker compose)
+  elif command -v docker-compose >/dev/null 2>&1; then
+    COMPOSE=(docker-compose)
+  else
+    echo "[错误] 缺少 docker compose 或 docker-compose。" >&2
+    exit 1
+  fi
+  # Secrets are exported by load-target-env.sh; use one --env-file for compatibility
+  # with older docker-compose releases that accept only a single env file.
+  COMPOSE_ENV_ARGS=(--env-file "${TARGET_ENV_FILE}")
+}
+
+deploy_target_local() {
+  require_target_secrets
+  require_cmd docker
+  require_cmd curl
+  target_compose
+
+  echo "[步骤] 构建后端 jar（目标环境: ${TARGET_ENV}）"
+  (cd "${ROOT_DIR}" && mvn -pl yudao-server -am -DskipTests package)
+  echo "[步骤] 启动本地目标环境 Compose"
+  "${COMPOSE[@]}" "${COMPOSE_ENV_ARGS[@]}" \
+    -f "${ROOT_DIR}/script/docker/docker-compose.yml" up -d --build
+
+  for attempt in $(seq 1 60); do
+    if curl -fsS --max-time 5 "${HEALTH_URL}" >/dev/null 2>&1; then
+      echo "[完成] ${TARGET_ENV} 后端健康检查通过: ${HEALTH_URL}"
+      return 0
+    fi
+    sleep 2
+  done
+  echo "[错误] ${TARGET_ENV} 后端健康检查失败: ${HEALTH_URL}" >&2
+  "${COMPOSE[@]}" "${COMPOSE_ENV_ARGS[@]}" \
+    -f "${ROOT_DIR}/script/docker/docker-compose.yml" ps >&2 || true
+  exit 1
+}
+
+reject_manual_target() {
+  echo "[停止] 目标环境 ${TARGET_ENV} 是手工部署形态（宿主机 JAR + 既有 Nginx）。" >&2
+  echo "deploy.sh 不会把它误当成 Docker Compose 目标重建。" >&2
+  echo "请在目标服务器使用 script/docker/intranet/update-oa-on-target.sh 更新 JAR/前端，" >&2
+  echo "并使用 script/docker/intranet/apply-preview-target.sh ${TARGET_ENV} 管理离线预览服务。" >&2
+  exit 2
 }
 
 validate_value() {
@@ -109,11 +207,7 @@ validate_env() {
     echo "[错误] 前端环境文件不存在: ${ROOT_DIR}/${FRONTEND_ENV_FILE}" >&2
     exit 1
   fi
-  if [ ! -f "${ROOT_DIR}/${DB_MIGRATION_FILE}" ]; then
-    echo "[错误] 数据库迁移文件不存在: ${ROOT_DIR}/${DB_MIGRATION_FILE}" >&2
-    exit 1
-  fi
-  if [ "${DEPLOY_ENV}" != "dev" ]; then
+  if [ "${TARGET_PROFILE_MODE}" != "true" ] && [ "${DEPLOY_ENV}" != "dev" ]; then
     validate_value REMOTE_HOST
     validate_value REMOTE_USER
     validate_value REMOTE_DEPLOY_DIR
@@ -146,7 +240,10 @@ build_images() {
   (cd "${ROOT_DIR}" && docker buildx build --platform "${DOCKER_PLATFORM}" --load -f script/docker/backend.Dockerfile -t "${SERVER_IMAGE}" .)
 
   echo "[步骤] 构建前端镜像 ${ADMIN_IMAGE}，环境文件 ${FRONTEND_ENV_FILE}"
-  (cd "${ROOT_DIR}" && docker buildx build --platform "${DOCKER_PLATFORM}" --load --build-arg FRONTEND_ENV_FILE="${FRONTEND_ENV_FILE}" -f script/docker/frontend.Dockerfile -t "${ADMIN_IMAGE}" .)
+  (cd "${ROOT_DIR}" && docker buildx build --platform "${DOCKER_PLATFORM}" --load \
+    --build-arg FRONTEND_ENV_FILE="${FRONTEND_ENV_FILE}" \
+    --build-arg INTRANET_APP_ORIGIN="${INTRANET_APP_ORIGIN:-http://${REMOTE_HOST:-127.0.0.1}:${ADMIN_PORT:-18080}}" \
+    -f script/docker/frontend.Dockerfile -t "${ADMIN_IMAGE}" .)
 }
 
 dump_database() {
@@ -178,7 +275,6 @@ upload_artifacts() {
   copy_to_remote "${ROOT_DIR}/${SERVER_TAR}" "/tmp/${SERVER_TAR}"
   copy_to_remote "${ROOT_DIR}/${ADMIN_TAR}" "/tmp/${ADMIN_TAR}"
   copy_to_remote "${ROOT_DIR}/script/docker/remote-reload-app.sh" "/tmp/remote-reload-app.sh"
-  copy_to_remote "${ROOT_DIR}/${DB_MIGRATION_FILE}" "/tmp/${DB_MIGRATION_NAME}"
   copy_to_remote "${ROOT_DIR}/script/docker/docker-compose.yml" "${REMOTE_DEPLOY_DIR}/docker-compose.yml"
   if [ "${IMPORT_DATABASE}" = "true" ]; then
     copy_to_remote "${ROOT_DIR}/${DB_DUMP_GZ}" "/tmp/${DB_DUMP_GZ}"
@@ -187,13 +283,13 @@ upload_artifacts() {
 
 deploy_remote_app_only() {
   echo "[步骤] 远端重载应用（不覆盖数据库）"
-  remote_sh "chmod +x /tmp/remote-reload-app.sh && REMOTE_DEPLOY_DIR='${REMOTE_DEPLOY_DIR}' SERVER_TAR='${SERVER_TAR}' ADMIN_TAR='${ADMIN_TAR}' DB_MIGRATION_FILE='/tmp/${DB_MIGRATION_NAME}' /tmp/remote-reload-app.sh && rm -f /tmp/remote-reload-app.sh"
+  remote_sh "chmod +x /tmp/remote-reload-app.sh && REMOTE_DEPLOY_DIR='${REMOTE_DEPLOY_DIR}' SERVER_TAR='${SERVER_TAR}' ADMIN_TAR='${ADMIN_TAR}' /tmp/remote-reload-app.sh && rm -f /tmp/remote-reload-app.sh"
 }
 
 deploy_remote_with_db() {
   echo "[步骤] 远端停旧服务、导入镜像并覆盖数据库"
   remote_sh \
-    "REMOTE_DEPLOY_DIR='${REMOTE_DEPLOY_DIR}' SERVER_TAR='${SERVER_TAR}' ADMIN_TAR='${ADMIN_TAR}' DB_DUMP_GZ='${DB_DUMP_GZ}' DB_MIGRATION_NAME='${DB_MIGRATION_NAME}' REMOTE_DB_CONTAINER='${REMOTE_DB_CONTAINER}' DB_NAME='${DB_NAME}' REMOTE_ENV_BASENAME='${REMOTE_ENV_BASENAME}' bash -s" <<'EOF'
+    "REMOTE_DEPLOY_DIR='${REMOTE_DEPLOY_DIR}' SERVER_TAR='${SERVER_TAR}' ADMIN_TAR='${ADMIN_TAR}' DB_DUMP_GZ='${DB_DUMP_GZ}' REMOTE_DB_CONTAINER='${REMOTE_DB_CONTAINER}' DB_NAME='${DB_NAME}' REMOTE_ENV_BASENAME='${REMOTE_ENV_BASENAME}' bash -s" <<'EOF'
 set -euo pipefail
 
 if [ -f "${REMOTE_DEPLOY_DIR}/.env" ]; then
@@ -220,13 +316,12 @@ for i in $(seq 1 60); do
 done
 printf 'DROP DATABASE IF EXISTS `%s`; CREATE DATABASE `%s` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;' "${DB_NAME}" "${DB_NAME}" | docker exec -i "${REMOTE_DB_CONTAINER}" mysql -uroot -p"${MYSQL_ROOT_PASSWORD}"
 gzip -dc "/tmp/${DB_DUMP_GZ}" | docker exec -i "${REMOTE_DB_CONTAINER}" mysql -uroot -p"${MYSQL_ROOT_PASSWORD}" "${DB_NAME}"
-docker exec -i "${REMOTE_DB_CONTAINER}" mysql -uroot -p"${MYSQL_ROOT_PASSWORD}" "${DB_NAME}" < "/tmp/${DB_MIGRATION_NAME}"
 docker compose stop server admin || true
 docker compose rm -sf server admin || true
 docker load -i "/tmp/${SERVER_TAR}"
 docker load -i "/tmp/${ADMIN_TAR}"
 docker compose up -d --no-build server admin
-rm -f "/tmp/${SERVER_TAR}" "/tmp/${ADMIN_TAR}" "/tmp/${DB_DUMP_GZ}" "/tmp/${DB_MIGRATION_NAME}" "/tmp/${REMOTE_ENV_BASENAME}" /tmp/remote-reload-app.sh
+rm -f "/tmp/${SERVER_TAR}" "/tmp/${ADMIN_TAR}" "/tmp/${DB_DUMP_GZ}" "/tmp/${REMOTE_ENV_BASENAME}" /tmp/remote-reload-app.sh
 docker image prune -f >/dev/null 2>&1 || true
 EOF
   remote_sh "curl -fsS http://127.0.0.1:48080/actuator/health"
@@ -247,10 +342,23 @@ print_summary() {
 main() {
   trap cleanup_local EXIT
 
+  load_env_file
+  if [ "${TARGET_PROFILE_MODE}" = "true" ]; then
+    validate_target_profile
+    case "${TARGET_ENV}" in
+      local)
+        deploy_target_local
+        print_summary
+        exit 0
+        ;;
+      103|production)
+        reject_manual_target
+        ;;
+    esac
+  fi
   require_cmd mvn
   require_cmd docker
   require_cmd gzip
-  load_env_file
   validate_env
   if [ "${DEPLOY_ENV}" != "dev" ]; then
     require_cmd scp

@@ -26,6 +26,8 @@ yudao:
     callback-base-url: ${KOD_SSO_CALLBACK_BASE_URL:http://192.168.1.100:7800}
     tenant-id: 1
     auto-create-user: false
+    organization-sync-enabled: false
+    organization-sync-cron: '-'
 
 --- #################### 数据库相关配置 ####################
 spring:

@@ -18,12 +18,15 @@ import cn.iocoder.yudao.module.system.controller.admin.dept.vo.dept.DeptSaveReqV
 import cn.iocoder.yudao.module.system.controller.admin.user.vo.profile.UserProfileUpdateReqVO;
 import cn.iocoder.yudao.module.system.controller.admin.user.vo.user.UserSaveReqVO;
 import cn.iocoder.yudao.module.system.dal.dataobject.auth.KodSsoUserBindDO;
+import cn.iocoder.yudao.module.system.dal.dataobject.auth.KodDeptSyncDO;
 import cn.iocoder.yudao.module.system.dal.dataobject.dept.DeptDO;
 import cn.iocoder.yudao.module.system.dal.dataobject.user.AdminUserDO;
 import cn.iocoder.yudao.module.system.dal.mysql.auth.KodSsoUserBindMapper;
+import cn.iocoder.yudao.module.system.dal.mysql.auth.KodDeptSyncMapper;
 import cn.iocoder.yudao.module.system.dal.mysql.dept.DeptMapper;
 import cn.iocoder.yudao.module.system.enums.logger.LoginLogTypeEnum;
 import cn.iocoder.yudao.module.system.framework.kodsso.config.KodSsoProperties;
+import cn.iocoder.yudao.framework.tenant.core.context.TenantContextHolder;
 import cn.iocoder.yudao.module.system.service.dept.DeptService;
 import cn.iocoder.yudao.module.system.service.permission.PermissionService;
 import cn.iocoder.yudao.module.system.service.user.AdminUserService;
@@ -60,12 +63,12 @@ import static cn.iocoder.yudao.module.system.enums.ErrorCodeConstants.*;
 public class KodSsoServiceImpl implements KodSsoService {
 
     private static final String EXCHANGE_CODE_PARAM = "kodSsoCode";
-    private static final String AUTO_CREATED_USER_PASSWORD = "admin123";
-
     @Resource
     private KodSsoProperties kodSsoProperties;
     @Resource
     private KodSsoUserBindMapper kodSsoUserBindMapper;
+    @Resource
+    private KodDeptSyncMapper kodDeptSyncMapper;
     @Resource
     private DeptMapper deptMapper;
     @Resource
@@ -230,7 +233,8 @@ public class KodSsoServiceImpl implements KodSsoService {
         createReqVO.setEmail(sanitizeEmail(profile.getEmail()));
         createReqVO.setMobile(sanitizeMobile(profile.getMobile()));
         createReqVO.setDeptId(resolveOrCreateDeptId(profile));
-        createReqVO.setPassword(AUTO_CREATED_USER_PASSWORD);
+        // SSO-created accounts authenticate through KodBox; never give them a shared local password.
+        createReqVO.setPassword(IdUtil.fastSimpleUUID() + "A1!");
         Long userId = runWithSystemOperatorContext(() -> adminUserService.createUser(createReqVO));
         syncLocalRoles(userId, profile);
         return userId;
@@ -419,7 +423,24 @@ public class KodSsoServiceImpl implements KodSsoService {
             if (StrUtil.isBlank(deptName)) {
                 continue;
             }
-            DeptDO dept = deptMapper.selectByParentIdAndName(parentId, deptName);
+            DeptDO dept = null;
+            Long tenantId = TenantContextHolder.getTenantId();
+            if (tenantId == null) {
+                tenantId = kodSsoProperties.getTenantId();
+            }
+            if (StrUtil.isNotBlank(deptNode.getGroupId())) {
+                KodDeptSyncDO mapping = kodDeptSyncMapper.selectByKodGroupId(tenantId, deptNode.getGroupId());
+                if (mapping != null && mapping.getLocalDeptId() != null) {
+                    dept = deptMapper.selectById(mapping.getLocalDeptId());
+                }
+            }
+            if (dept != null && !Objects.equals(dept.getParentId(), parentId)) {
+                // The full organization sync owns moves. Do not create a duplicate during login.
+                dept = null;
+            }
+            if (dept == null) {
+                dept = deptMapper.selectByParentIdAndName(parentId, deptName);
+            }
             if (dept == null) {
                 DeptSaveReqVO createReqVO = new DeptSaveReqVO();
                 createReqVO.setParentId(parentId);
@@ -540,18 +561,23 @@ public class KodSsoServiceImpl implements KodSsoService {
 
     private void syncLocalRoles(Long userId, KodUserProfile profile) {
         Set<Long> currentRoleIds = permissionService.getUserRoleIdListByUserId(userId);
+        Long mappedRoleId = resolveLocalRoleId(profile);
+        if (mappedRoleId == null && CollUtil.isEmpty(kodSsoProperties.getDefaultRoleIds())) {
+            // KodBox's user:all profile does not always expose roleID/isRoot. In that
+            // case the SSO login cannot safely infer a replacement local role; preserve
+            // existing local roles instead of silently removing all authorization.
+            log.warn("可道云用户 {} 未返回可映射角色，保留现有本地角色 {}", profile.getKodUserId(), currentRoleIds);
+            return;
+        }
+
         Set<Long> targetRoleIds = new HashSet<>(CollUtil.emptyIfNull(currentRoleIds));
         targetRoleIds.removeAll(getManagedLocalRoleIds());
-
-        Long mappedRoleId = resolveLocalRoleId(profile);
         if (mappedRoleId != null) {
             targetRoleIds.add(mappedRoleId);
-        } else if (CollUtil.isNotEmpty(kodSsoProperties.getDefaultRoleIds())) {
+        } else {
             targetRoleIds.addAll(kodSsoProperties.getDefaultRoleIds());
             log.warn("可道云用户 {} 未匹配到角色映射，回退使用默认角色 {}", profile.getKodUserId(),
                     kodSsoProperties.getDefaultRoleIds());
-        } else {
-            log.warn("可道云用户 {} 未匹配到角色映射，且未配置默认角色，登录后可能看不到任何菜单", profile.getKodUserId());
         }
 
         if (!Objects.equals(targetRoleIds, currentRoleIds)) {

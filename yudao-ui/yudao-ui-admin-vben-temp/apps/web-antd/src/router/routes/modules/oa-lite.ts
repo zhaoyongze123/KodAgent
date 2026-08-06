@@ -4,7 +4,10 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/oa-lite',
     name: 'OALite',
-    component: () => import('#/views/oa-lite/index.vue'),
+    redirect: (to) => ({
+      path: '/oa-lite/center',
+      query: { ...to.query, view: 'create' },
+    }),
     meta: {
       title: '发起审批',
       hideInMenu: true,

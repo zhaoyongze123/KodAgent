@@ -23,6 +23,13 @@ yudao:
     callback-base-url: ${KOD_SSO_CALLBACK_BASE_URL:http://replace-with-backend-host}
     tenant-id: ${KOD_SSO_TENANT_ID:1}
     auto-create-user: ${KOD_SSO_AUTO_CREATE_USER:false}
+    organization-sync-enabled: ${KOD_ORGANIZATION_SYNC_ENABLED:false}
+    organization-sync-username: ${KOD_ORGANIZATION_SYNC_USERNAME:}
+    organization-sync-password: ${KOD_ORGANIZATION_SYNC_PASSWORD:}
+    organization-sync-access-token: ${KOD_ORGANIZATION_SYNC_ACCESS_TOKEN:}
+    organization-sync-endpoint: ${KOD_ORGANIZATION_SYNC_ENDPOINT:}
+    organization-sync-root-group-id: ${KOD_ORGANIZATION_SYNC_ROOT_GROUP_ID:1}
+    organization-sync-cron: ${KOD_ORGANIZATION_SYNC_CRON:-}
 
 wx:
   mp:

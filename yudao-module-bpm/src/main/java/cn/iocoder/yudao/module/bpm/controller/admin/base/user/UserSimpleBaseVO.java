@@ -3,6 +3,8 @@ package cn.iocoder.yudao.module.bpm.controller.admin.base.user;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
 
+import java.util.Set;
+
 @Schema(description = "用户精简信息 VO")
 @Data
 public class UserSimpleBaseVO {
@@ -18,5 +20,8 @@ public class UserSimpleBaseVO {
     private Long deptId;
     @Schema(description = "部门名称", requiredMode = Schema.RequiredMode.REQUIRED, example = "研发部")
     private String deptName;
+
+    @Schema(description = "岗位编号列表")
+    private Set<Long> postIds;
 
 }

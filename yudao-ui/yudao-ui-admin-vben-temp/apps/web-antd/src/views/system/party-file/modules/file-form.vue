@@ -133,9 +133,6 @@ const getTitle = computed(() =>
 );
 
 const isKodStorageSelected = computed(() => Number(storageTypeValue.value) === 2);
-const isKodAttachmentUploadBlocked = computed(
-  () => isKodStorageSelected.value && (!kodSourceIdValue.value || !kodFolderPathValue.value),
-);
 
 function handleKodFileSelectionChange(
   keys: Array<number | string>,

@@ -1,0 +1,16 @@
+services:
+  kodbox:
+    image: kodcloud/kodbox:latest
+    container_name: kodbox
+    restart: unless-stopped
+    ports:
+      - "${INTRANET_HOST}:18081:80"
+    volumes:
+      - /data/kodbox/site:/var/www/html
+    networks:
+      - ghy-intranet
+
+networks:
+  ghy-intranet:
+    external: true
+    name: ghy-intranet

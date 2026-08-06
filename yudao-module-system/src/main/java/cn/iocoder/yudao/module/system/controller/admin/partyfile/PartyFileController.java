@@ -33,6 +33,7 @@ import javax.servlet.http.HttpServletResponse;
 import javax.validation.Valid;
 import java.io.IOException;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -242,8 +243,12 @@ public class PartyFileController {
                 .filter(item -> Objects.equals(item.getId(), fileId))
                 .findFirst()
                 .orElseThrow(() -> exception(PARTY_FILE_ATTACHMENT_NOT_FOUND));
-        byte[] content = partyFileAttachmentService.getAttachmentContent(fileId);
-        writeInline(response, attachment.getName(), attachment.getType(), content);
+        byte[] content = partyFileAttachmentService.getAttachmentPreviewContent(fileId);
+        boolean officeDocument = isOfficeDocument(attachment.getName());
+        writeInline(response,
+                officeDocument ? replaceExtension(attachment.getName(), ".pdf") : attachment.getName(),
+                officeDocument ? "application/pdf" : attachment.getType(),
+                content);
     }
 
     private void writeInline(HttpServletResponse response, String filename, String contentType, byte[] content) throws IOException {
@@ -251,5 +256,15 @@ public class PartyFileController {
         response.setContentType(contentType != null ? contentType : "application/octet-stream");
         response.getOutputStream().write(content);
         response.getOutputStream().flush();
+    }
+
+    private boolean isOfficeDocument(String filename) {
+        String lowerName = filename == null ? "" : filename.toLowerCase(Locale.ROOT);
+        return lowerName.endsWith(".doc") || lowerName.endsWith(".docx");
+    }
+
+    private String replaceExtension(String filename, String extension) {
+        int index = filename.lastIndexOf('.');
+        return (index > 0 ? filename.substring(0, index) : filename) + extension;
     }
 }

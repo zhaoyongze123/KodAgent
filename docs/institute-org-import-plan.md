@@ -14,8 +14,7 @@
 
 - 组织结构图：用户上传图片
 - 人员账号清单：`/Users/mac/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/wxid_tc376xz27m2222_cb11/temp/drag/20260608152558TxXJ.csv`
-- 当前仓库数据库结构：[`sql/mysql/ruoyi-vue-pro.sql`](/Users/mac/项目/若伊部署/sql/mysql/ruoyi-vue-pro.sql:405)
-- 当前仓库部门同步脚本样例：[`sql/mysql/kod-dept-sync.sql`](/Users/mac/项目/若伊部署/sql/mysql/kod-dept-sync.sql:1)
+- 当前仓库数据库基线：[`sql/mysql/ruoyi-vue-pro.sql`](/Users/mac/项目/若伊部署/sql/mysql/ruoyi-vue-pro.sql:1)
 - 当前仓库 BPM 审批人策略：[`BpmTaskCandidateStrategyEnum.java`](/Users/mac/项目/若伊部署/yudao-module-bpm/src/main/java/cn/iocoder/yudao/module/bpm/framework/flowable/core/enums/BpmTaskCandidateStrategyEnum.java:1)
 
 ## 建议落库模型

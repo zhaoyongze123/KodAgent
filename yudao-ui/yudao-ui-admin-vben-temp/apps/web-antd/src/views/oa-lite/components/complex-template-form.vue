@@ -254,13 +254,17 @@ onMounted(async () => {
 
         <div class="oa-lite-complex-divider"></div>
 
-        <Form layout="vertical">
-          <Form.Item
-            v-for="field in config.createFields"
-            :key="field.field"
-            :label="field.label"
-            :required="field.required"
-          >
+          <Form layout="vertical" class="oa-lite-complex-form-grid">
+            <Form.Item
+              v-for="field in config.createFields"
+              :key="field.field"
+              class="oa-lite-complex-form-field"
+              :class="{
+                'is-full': field.type === 'textarea' || field.type === 'files',
+              }"
+              :label="field.label"
+              :required="field.required"
+            >
             <Input
               v-if="field.type === 'readonly' || field.type === 'text'"
               v-model:value="formState[field.field]"
@@ -359,6 +363,20 @@ onMounted(async () => {
   padding: 20px 0 0;
 }
 
+.oa-lite-complex-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 18px;
+}
+
+.oa-lite-complex-form-field {
+  min-width: 0;
+}
+
+.oa-lite-complex-form-field.is-full {
+  grid-column: 1 / -1;
+}
+
 .oa-lite-complex-title-row,
 .oa-lite-complex-flow-head {
   display: flex;
@@ -413,6 +431,10 @@ onMounted(async () => {
 
 @media (max-width: 1100px) {
   .oa-lite-complex-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .oa-lite-complex-form-grid {
     grid-template-columns: 1fr;
   }
 }
