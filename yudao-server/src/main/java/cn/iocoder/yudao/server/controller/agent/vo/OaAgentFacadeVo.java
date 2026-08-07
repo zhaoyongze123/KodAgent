@@ -130,7 +130,7 @@ public class OaAgentFacadeVo {
     }
 
     @Data
-    public static class ApprovalSubmitRequest {
+    public static class ApprovalRequestData {
 
         @NotBlank
         private String requestType;
@@ -152,18 +152,6 @@ public class OaAgentFacadeVo {
         private String reason;
 
         private Map<String, List<Long>> startUserSelectAssignees;
-    }
-
-    @Data
-    public static class ApprovalSubmitResponse {
-
-        private boolean success;
-
-        private String processInstanceId;
-
-        private Long businessId;
-
-        private String message;
     }
 
     @Data
@@ -478,34 +466,6 @@ public class OaAgentFacadeVo {
     }
 
     @Data
-    public static class TaskApproveRequest {
-
-        @NotBlank
-        private String taskId;
-
-        private String reason = "同意";
-
-    }
-
-    @Data
-    public static class TaskRejectRequest {
-
-        @NotBlank
-        private String taskId;
-
-        @NotBlank
-        private String reason;
-    }
-
-    @Data
-    public static class TaskActionResponse {
-
-        private boolean success;
-
-        private String message;
-    }
-
-    @Data
     public static class MeetingRoom {
 
         private Long id;
@@ -601,12 +561,6 @@ public class OaAgentFacadeVo {
         private String remark;
 
         private Boolean forceConflict;
-
-        /** Compatibility only. Java always reads the operation from the approved draft. */
-        private String operation;
-
-        /** Compatibility only. Java always reads the source id from the approved draft. */
-        private Long sourceBookingId;
 
         private String cancelReason;
     }

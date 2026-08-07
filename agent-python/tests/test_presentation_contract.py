@@ -68,6 +68,21 @@ def test_guarded_boundary_normalizes_tool_response_for_langchain():
     assert payload["presentation"]["observedScope"]["totalCount"] == 2
 
 
+def test_party_file_approval_stays_a_control_flow_projection():
+    response = ToolResponse(
+        ok=True,
+        data={"draftId": "draft-1", "approvalId": "approval-1"},
+        presentation={"blockType": "card", "cardType": "party_file_approval"},
+    )
+
+    presentation_for_response(response)
+
+    assert response.presentation == {
+        "blockType": "card",
+        "cardType": "party_file_approval",
+    }
+
+
 def test_presentation_spec_accepts_camel_case_transport_shape():
     spec = PresentationSpec.model_validate(
         {

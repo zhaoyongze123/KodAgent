@@ -174,6 +174,7 @@ def test_decode_json_rejects_scalar_response_type():
 
 def test_request_distinguishes_http_failure(monkeypatch):
     monkeypatch.setenv("OA_AGENT_CONSOLE_DEV_MODE", "true")
+    monkeypatch.setenv("OA_AGENT_IDENTITY", "test-identity-ticket")
     class FakeClient:
         def request(self, *args, **kwargs):
             return response(503, b'{"message":"temporarily unavailable"}')
@@ -192,6 +193,7 @@ def test_request_distinguishes_http_failure(monkeypatch):
 
 def test_request_distinguishes_connection_failure(monkeypatch):
     monkeypatch.setenv("OA_AGENT_CONSOLE_DEV_MODE", "true")
+    monkeypatch.setenv("OA_AGENT_IDENTITY", "test-identity-ticket")
 
     class FakeClient:
         def request(self, *args, **kwargs):
@@ -239,6 +241,7 @@ def test_retryable_read_statuses_follow_contract(monkeypatch):
             return next(responses)
 
     monkeypatch.setenv("OA_AGENT_CONSOLE_DEV_MODE", "true")
+    monkeypatch.setenv("OA_AGENT_IDENTITY", "test-identity-ticket")
     monkeypatch.setattr(http_client, "_get_shared_http_client", lambda: FakeClient())
     result = http_client._request("GET", "/agent/tools/meetings/my")
 

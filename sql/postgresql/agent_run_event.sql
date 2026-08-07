@@ -549,6 +549,51 @@ BEGIN
     END IF;
 END $$;
 
+-- Operation-less approvals belong to the retired pre-Operation protocol. Keep
+-- their rows as audit facts, but make every still-actionable approval and its
+-- pending draft terminal/inactive. The predicates deliberately exclude every
+-- Operation-bound row so a rerun cannot affect the current contract.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM agent_schema_migration
+        WHERE version = 'agent_approval_operation_binding_v1'
+    ) THEN
+        UPDATE agent_approval
+           SET status = CASE
+                            WHEN status IN ('PENDING', 'APPROVED', 'SUBMITTING') THEN 'EXPIRED'
+                            ELSE status
+                        END,
+               archived_at = COALESCE(archived_at, CURRENT_TIMESTAMP),
+               updated_at = CURRENT_TIMESTAMP
+         WHERE operation_id IS NULL;
+
+        UPDATE agent_meeting_booking_draft d
+           SET status = 'CANCELLED',
+               archived_at = COALESCE(d.archived_at, CURRENT_TIMESTAMP),
+               updated_at = CURRENT_TIMESTAMP
+         WHERE d.operation_id IS NULL
+           AND d.status = 'PENDING';
+
+        UPDATE agent_personal_schedule_draft d
+           SET status = 'CANCELLED',
+               archived_at = COALESCE(d.archived_at, CURRENT_TIMESTAMP),
+               updated_at = CURRENT_TIMESTAMP
+         WHERE d.operation_id IS NULL
+           AND d.status = 'PENDING';
+
+        UPDATE agent_party_file_draft d
+           SET status = 'CANCELLED',
+               archived_at = COALESCE(d.archived_at, CURRENT_TIMESTAMP),
+               updated_at = CURRENT_TIMESTAMP
+         WHERE d.operation_id IS NULL
+           AND d.status = 'PENDING';
+
+        INSERT INTO agent_schema_migration (version)
+        VALUES ('agent_approval_operation_binding_v1');
+    END IF;
+END $$;
+
 -- These records are written by the only schema writer: the deployment
 -- migration job. Java verifies them at startup but never performs DDL itself.
 INSERT INTO agent_schema_migration (version) VALUES

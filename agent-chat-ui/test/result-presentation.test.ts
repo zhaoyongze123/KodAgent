@@ -51,3 +51,19 @@ test("legacy cardType presentation remains on the compatibility path", () => {
   assert.equal(block?.kind, "card");
   assert.equal(block?.kind === "card" ? block.card.type : undefined, "todo");
 });
+
+test("party-file approval projection does not render a stale generic result", () => {
+  const content = {
+    ok: true,
+    data: { draftId: "draft-1", approvalId: "approval-1" },
+    presentation: {
+      blockType: "card",
+      cardType: "party_file_approval",
+      // Compatibility with messages persisted before the projection fix.
+      resultKind: "record_list",
+      sourceResultId: "result:draft-1",
+    },
+  };
+
+  assert.equal(resultEnvelopeFromToolResult(content), undefined);
+});

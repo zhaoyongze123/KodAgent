@@ -35,6 +35,31 @@ services:
     networks:
       - default
 
+  runtime-outbox:
+    image: agent-python-langgraph-api:latest
+    container_name: agent-python-runtime-outbox-1
+    restart: unless-stopped
+    entrypoint: ["python"]
+    command: ["-m", "src.runtime.outbox_worker"]
+    working_dir: /deps/agent-python
+    healthcheck:
+      disable: true
+    env_file:
+      - .env
+    environment:
+      OA_AGENT_RUNTIME_POSTGRES_URI: postgresql://langgraph:langgraph@host.docker.internal:15432/langgraph
+      OA_AGENT_RUNTIME_OUTBOX_BATCH_SIZE: "50"
+      OA_AGENT_RUNTIME_OUTBOX_LEASE_SECONDS: "30"
+      OA_AGENT_RUNTIME_OUTBOX_MAX_ATTEMPTS: "10"
+      OA_AGENT_RUNTIME_OUTBOX_POLL_SECONDS: "2"
+      PYTHONUNBUFFERED: "1"
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    volumes:
+      - ./src:/deps/agent-python/src
+    networks:
+      - default
+
 networks:
   default:
     name: agent-python_default

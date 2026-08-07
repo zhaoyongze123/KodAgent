@@ -280,12 +280,10 @@ yudao:
       tenant-id: ${OA_AGENT_TENANT_ID:1}
       refresh-ahead-seconds: ${OA_AGENT_REFRESH_AHEAD_SECONDS:60}
       header-name: X-Agent-Key
-      principal-header: X-Agent-User-Id
     identity:
       secret: ${OA_AGENT_IDENTITY_SECRET:}
       ttl-seconds: ${OA_AGENT_IDENTITY_TTL_SECONDS:7200}
       header-name: X-Agent-Identity
-      legacy-principal-enabled: ${OA_AGENT_LEGACY_PRINCIPAL_ENABLED:false}
   web:
     admin-ui:
       url: http://dashboard.yudao.iocoder.cn # Admin 管理后台 UI 的地址

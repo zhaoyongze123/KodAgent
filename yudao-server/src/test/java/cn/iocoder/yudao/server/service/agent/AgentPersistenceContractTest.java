@@ -80,6 +80,10 @@ class AgentPersistenceContractTest {
         assertTrue(source.contains("CREATE TABLE IF NOT EXISTS agent_party_file_draft"));
         assertTrue(source.contains("ALTER TABLE agent_party_file_draft ADD COLUMN IF NOT EXISTS operation_id VARCHAR(128)"));
         assertTrue(source.contains("agent_party_file_operation_binding_v1"));
+        assertTrue(source.contains("agent_approval_operation_binding_v1"));
+        assertTrue(source.contains("WHERE operation_id IS NULL"));
+        assertTrue(source.contains("archived_at = COALESCE(archived_at, CURRENT_TIMESTAMP)"));
+        assertTrue(source.contains("status = 'CANCELLED'"));
         assertTrue(source.contains("agent_party_file_commit_result_v1"));
         assertTrue(source.contains("legacy-run:' || draft_id"));
         assertTrue(source.contains("DROP INDEX IF EXISTS uk_agent_draft_idempotency"));
@@ -200,6 +204,7 @@ class AgentPersistenceContractTest {
                 "yudao-server/src/main/java/cn/iocoder/yudao/server/service/agent/AgentApprovalService.java")),
                 StandardCharsets.UTF_8);
         assertTrue(approvalServiceSource.contains("LEFT JOIN agent_party_file_draft p"));
+        assertTrue(approvalServiceSource.contains("a.archived_at IS NULL AND a.status = 'PENDING'"));
         assertTrue(approvalServiceSource.contains("p.archived_at IS NULL AND a.message_id = p.message_id"));
         assertTrue(approvalServiceSource.contains("COALESCE(d.draft_data, s.draft_data, p.draft_data, a.draft_data)"));
         assertTrue(approvalServiceSource.contains("WHEN p.draft_id IS NOT NULL THEN 'PARTY_FILE'"));
@@ -391,8 +396,15 @@ class AgentPersistenceContractTest {
         assertTrue(controller.contains("/approvals/request-commit"));
         assertTrue(controller.contains("/approvals/withdraw-draft"));
         assertTrue(controller.contains("/approvals/withdraw-commit"));
-        assertTrue(controller.contains("/approvals/submit"));
-        assertTrue(controller.contains("AGENT_APPROVAL_CARD_REQUIRED"));
+        assertTrue(controller.contains("/approvals/preview"));
+        assertTrue(controller.contains("operationId"));
+        assertFalse(controller.contains("/approvals/submit"));
+        assertFalse(controller.contains("/tasks/approve"));
+        assertFalse(controller.contains("/tasks/reject"));
+        assertFalse(controller.contains("ApprovalSubmit"));
+        assertFalse(controller.contains("TaskApproveRequest"));
+        assertFalse(controller.contains("TaskRejectRequest"));
+        assertFalse(controller.contains("TaskActionResponse"));
         assertTrue(controller.contains("formatApprovalTime(normalized.getStartTime())"));
         assertTrue(controller.contains("formatApprovalTime(normalized.getEndTime())"));
         assertTrue(controller.contains("if (value instanceof Number)"));

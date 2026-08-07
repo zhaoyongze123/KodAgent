@@ -92,6 +92,7 @@ def test_model_compound_self_reference_resolves_to_current_user():
         "仅当前用户本人",
         "只有当前用户本人参会",
         "仅有用户本人出席",
+        "only_current_user",
     ],
 )
 def test_decorated_current_user_referents_are_canonicalized(value):

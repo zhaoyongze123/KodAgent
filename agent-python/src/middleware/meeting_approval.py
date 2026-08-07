@@ -107,42 +107,17 @@ def _stable_confirm_call_id(context: PendingApprovalContext) -> str:
 
 def _upsert_pending_confirmation(request: Any, response: Any) -> Any:
     """Project only the immediately preceding draft result into official HITL."""
-    # Temporary diagnostic retained at DEBUG level for server-side checkpoint
-    # rehydration issues; it is intentionally silent in normal production.
-    import logging
-    _log = logging.getLogger(__name__)
-    _log.warning(
-        "approval projection frame: state=%s last=%s source=%s",
-        type(getattr(request, "state", None)).__name__,
-        type((getattr(request, "state", {}) or {}).get("messages", [])[-1]).__name__
-        if isinstance(getattr(request, "state", None), dict) and (getattr(request, "state", {}) or {}).get("messages") else "<none>",
-        is_draft_projection_turn(request, _DRAFT_SOURCE_TOOLS),
-    )
     if not (
         is_draft_projection_turn(request, _DRAFT_SOURCE_TOOLS)
         or is_delegated_draft_projection_turn(request, _DRAFT_DELEGATE_AGENTS)
     ):
         return _enrich_model_response(response)
-    context, error = load_pending_approval_context()
-    _log.warning(
-        "approval projection context: error=%s context=%s approval_status=%s draft_id=%s approval_id=%s",
-        getattr(error, "error_code", None) if error is not None else None,
-        context is not None,
-        str(context.approval.get("status") or "") if context is not None else None,
-        context.draft.get("draftId") if context is not None else None,
-        context.draft.get("approvalId") if context is not None else None,
-    )
+    context, error = load_pending_approval_context(request)
     if error or context is None:
         # Preserve the previous behavior for explicit settled/resume calls.
         return _enrich_model_response(response)
 
     messages = getattr(response, "result", None)
-    _log.warning(
-        "approval projection response: response_type=%s result_type=%s result_len=%s result=%s",
-        type(response).__name__, type(messages).__name__,
-        len(messages) if isinstance(messages, (list, tuple)) else None,
-        repr(messages)[:1200],
-    )
     if not messages:
         return response
     target_index = next(
@@ -150,7 +125,6 @@ def _upsert_pending_confirmation(request: Any, response: Any) -> Any:
         None,
     )
     if target_index is None:
-        _log.warning("approval projection response has no AIMessage")
         return response
 
     target = messages[target_index]
@@ -175,10 +149,6 @@ def _upsert_pending_confirmation(request: Any, response: Any) -> Any:
     )
     updated_messages[target_index] = _copy_ai_message(
         target, [canonical_call], projection=projection,
-    )
-    _log.warning(
-        "approval projection canonical call injected: target_index=%s call_id=%s action=%s",
-        target_index, canonical_call["id"], CONFIRM_TOOL_NAME,
     )
     return _replace_response_messages(response, updated_messages)
 

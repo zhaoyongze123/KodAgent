@@ -138,7 +138,11 @@ CAPABILITIES = (
 ACTION_SPECS = (
     ActionSpec(
         "approval.read.pending", "approval_read", "查询、筛选和排序当前用户待办审批",
-        "metadata_query", "PENDING", ("LIST", "SEARCH", "QUERY"), True, False,
+        "metadata_query", "PENDING", (
+            "LIST", "SEARCH", "QUERY",
+            "query_pending_approvals", "list_pending_approvals", "pending_approvals",
+            "list_pending_approval_tasks",
+        ), True, False,
         "run_approval_query_plan", (),
     ),
     ActionSpec(
@@ -189,7 +193,7 @@ ACTION_SPECS = (
     ),
     ActionSpec(
         "meeting.create", "meeting", "创建会议室预约草稿",
-        "workflow", "BOOK", ("CREATE", "CREATE_DRAFT", "BOOKING"), False, True,
+        "workflow", "BOOK", ("CREATE", "CREATE_DRAFT", "BOOKING", "CREATE_BOOKING", "CREATE_MEETING_BOOKING", "BOOK_MEETING_ROOM"), False, True,
         "run_meeting_booking_workflow", ("subject", "start_time", "end_time"),
     ),
     ActionSpec(
@@ -209,17 +213,21 @@ ACTION_SPECS = (
     ),
     ActionSpec(
         "schedule.create", "schedule", "创建个人日程草稿",
-        "workflow", "CREATE", ("CREATE_DRAFT", "NEW"), False, True,
+        "workflow", "CREATE", (
+            "CREATE", "CREATE_DRAFT", "NEW", "CREATE_SCHEDULE", "CREATE_SCHEDULE_DRAFT",
+            "CREATE_PERSONAL_SCHEDULE", "CREATE_PERSONAL_SCHEDULE_DRAFT",
+            "SCHEDULES/CREATE_SCHEDULE_DRAFT",
+        ), False, True,
         "run_personal_schedule_workflow", ("title", "start_time", "end_time"),
     ),
     ActionSpec(
         "schedule.update", "schedule", "修改个人日程",
-        "workflow", "UPDATE", ("EDIT",), False, True,
+        "workflow", "UPDATE", ("EDIT", "UPDATE_SCHEDULE", "EDIT_SCHEDULE"), False, True,
         "run_personal_schedule_workflow", ("source_schedule_id",),
     ),
     ActionSpec(
         "schedule.cancel", "schedule", "取消个人日程",
-        "workflow", "CANCEL", ("DELETE",), False, True,
+        "workflow", "CANCEL", ("CANCEL_SCHEDULE", "DELETE", "DELETE_SCHEDULE"), False, True,
         "run_personal_schedule_workflow", ("source_schedule_id",),
     ),
     ActionSpec(
@@ -249,7 +257,7 @@ ACTION_SPECS = (
     ),
     ActionSpec(
         "party_file.create", "party_file", "创建或发布党务文件草稿",
-        "workflow", "CREATE", ("DRAFT", "PUBLISH"), False, True,
+        "workflow", "CREATE", ("DRAFT", "PUBLISH", "create_document_draft", "create_party_file_draft"), False, True,
         "create_party_file_draft", ("title", "content", "category_name"),
     ),
     ActionSpec(
@@ -581,6 +589,20 @@ def actions_for_capability(capability_id: str | None) -> tuple[ActionSpec, ...]:
     return tuple(item for item in _visible_action_specs() if item.capability_id == canonical)
 
 
+def _normalize_action_reference(value: str | None) -> str:
+    """Normalize a provider's transport reference without changing semantics."""
+    return str(value or "").strip().lower().replace("-", "_")
+
+
+def _action_matches_reference(action: ActionSpec, requested_id: str) -> bool:
+    if _normalize_action_reference(action.action_id) == requested_id:
+        return True
+    return any(
+        _normalize_action_reference(alias) == requested_id
+        for alias in action.aliases
+    )
+
+
 def resolve_action(
     capability_id: str | None,
     action_id: str | None = None,
@@ -594,12 +616,20 @@ def resolve_action(
     """
     del operation
     canonical = canonical_capability_id(capability_id)
-    requested_id = str(action_id or "").strip().lower()
+    requested_id = _normalize_action_reference(action_id)
     if requested_id:
         runtime = runtime_action(requested_id)
         item = _runtime_action_spec(runtime) if runtime else _ACTION_MAP.get(requested_id)
         if item and item.capability_id == canonical:
             return item
+        # The canonical action id remains the Java contract.  These aliases
+        # are only a bounded transport adapter for providers that emit a
+        # registered capability/action label (for example ``create_booking``)
+        # instead of the canonical ``meeting.create`` reference.  Never use
+        # an alias to select an executor outside the selected capability.
+        for candidate in actions_for_capability(canonical):
+            if _action_matches_reference(candidate, requested_id):
+                return candidate
         return None
     return None
 
@@ -623,7 +653,13 @@ _CAPABILITY_ALIASES = {
     "approval": "approval_read",
     "approvals": "approval_read",
     "approval_query": "approval_read",
+    "approvals_agent": "approval_read",
+    "schedules": "schedule",
+    "personal_schedule": "schedule",
     "schedules_agent": "schedule",
+    "meeting_rooms": "meeting",
+    "meeting_room": "meeting",
+    "meeting_booking": "meeting",
     "meeting_rooms_agent": "meeting",
     "party_files_agent": "party_file",
     # Providers may use the plural/domain label from the user-facing

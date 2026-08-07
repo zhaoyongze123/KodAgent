@@ -38,6 +38,10 @@ _SELF_REFERENT_PATTERN = (
 SELF_REFERENTS = frozenset({
     "我", "本人", "自己", "我本人", "当前用户", "用户", "用户本人", "发起人",
     "当前用户本人", "本用户", "申请人", "操作者",
+    # OpenAI-compatible providers sometimes emit a typed English marker for
+    # the user's self-only attendee constraint.  It is a transport alias, not
+    # a directory name, and must resolve through the authenticated /me path.
+    "only_current_user", "current_user_only", "only_me", "self_only", "current_user",
 })
 
 _SELF_ONLY_PATTERN = re.compile(

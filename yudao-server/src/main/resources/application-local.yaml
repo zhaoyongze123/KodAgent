@@ -3,6 +3,11 @@ server:
 
 yudao:
   agent:
+    batch-test:
+      # Explicitly opt-in local-only fault injection for real OA batch tests.
+      # Production profiles ignore this hook even if the environment leaks.
+      failpoint: ${OA_AGENT_BATCH_TEST_FAILPOINT:}
+      gate: ${OA_AGENT_BATCH_TEST_GATE:}
     events:
       postgres:
         enabled: ${AGENT_EVENT_POSTGRES_ENABLED:true}
@@ -19,13 +24,10 @@ yudao:
       tenant-id: ${OA_AGENT_TENANT_ID:1}
       refresh-ahead-seconds: ${OA_AGENT_REFRESH_AHEAD_SECONDS:60}
       header-name: X-Agent-Key
-      principal-header: ${OA_AGENT_PRINCIPAL_HEADER:X-Agent-User-Id}
     identity:
       secret: ${OA_AGENT_IDENTITY_SECRET:}
       ttl-seconds: ${OA_AGENT_IDENTITY_TTL_SECONDS:7200}
       header-name: X-Agent-Identity
-      # 仅 local profile 默认开启固定用户联调；其他 profile 仍默认关闭。
-      legacy-principal-enabled: ${OA_AGENT_LEGACY_PRINCIPAL_ENABLED:false}
   security:
     permit-all-urls:
       - /agent/tools/**

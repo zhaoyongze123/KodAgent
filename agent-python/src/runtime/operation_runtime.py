@@ -46,12 +46,6 @@ def action_id_for(capability_id: str, operation: str) -> str:
     return f"{prefix}.{verb.lower()}"
 
 
-def operation_action_id(operation: str) -> str:
-    """Compatibility wrapper for the original meeting workflow API."""
-
-    return action_id_for("meeting", operation)
-
-
 def _required_runtime() -> bool:
     return os.getenv("OA_AGENT_RUNTIME_REQUIRED", "false").strip().lower() in {
         "1", "true", "yes", "on",
@@ -542,7 +536,6 @@ __all__ = [
     "action_id_for",
     "OperationRuntime",
     "get_active_operation",
-    "operation_action_id",
     "reset_active_operation",
     "set_active_operation",
 ]

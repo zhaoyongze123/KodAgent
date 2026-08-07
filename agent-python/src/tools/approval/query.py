@@ -1,9 +1,7 @@
-"""Compatibility facade for the split approval Tool modules.
+"""Public facade for the split approval Tool modules.
 
 The canonical implementations live in ``templates``, ``requests``,
-``history``, ``pending`` and ``actions``.  Keeping this explicit import surface
-preserves older route checkpoints and integrations without maintaining a
-second implementation.
+``history``, ``pending`` and ``actions``.
 """
 
 from .common import (
@@ -25,7 +23,6 @@ from .requests import (
     create_approval_request_draft,
     create_approval_withdraw_draft,
     create_generic_approval_request_draft,
-    submit_approval_request,
 )
 from .pending import (
     analyze_my_pending_approvals,
@@ -34,20 +31,16 @@ from .pending import (
     search_my_pending_approvals,
 )
 from .actions import (
-    _action_approval_task,
-    approve_approval_task,
     confirm_approval_batch_action,
     confirm_approval_task_action,
     get_approval_task_detail,
     preview_approval_batch_action,
     preview_approval_task_action,
-    reject_approval_task,
 )
 
 
 __all__ = [
     "analyze_my_pending_approvals",
-    "approve_approval_task",
     "confirm_approval_batch_action",
     "confirm_approval_request_action",
     "confirm_approval_task_action",
@@ -64,8 +57,6 @@ __all__ = [
     "preview_approval_batch_action",
     "preview_approval_request",
     "preview_approval_task_action",
-    "reject_approval_task",
     "run_approval_query_plan",
     "search_my_pending_approvals",
-    "submit_approval_request",
 ]

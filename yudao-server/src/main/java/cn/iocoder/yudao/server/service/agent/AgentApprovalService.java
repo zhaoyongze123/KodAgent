@@ -154,7 +154,7 @@ public class AgentApprovalService {
                         + "LEFT JOIN agent_personal_schedule_draft s ON s.approval_id = a.approval_id "
                         + "LEFT JOIN agent_party_file_draft p ON p.approval_id = a.approval_id "
                 + "WHERE a.tenant_id = ? AND a.approver_user_id = ? AND a.draft_id = ? "
-                + "AND a.status = 'PENDING' AND a.expires_at > CURRENT_TIMESTAMP "
+                + "AND a.archived_at IS NULL AND a.status = 'PENDING' AND a.expires_at > CURRENT_TIMESTAMP "
                 + "AND ((d.draft_id IS NOT NULL AND d.archived_at IS NULL AND a.message_id = d.message_id) "
                 + "OR (s.draft_id IS NOT NULL AND s.archived_at IS NULL AND a.message_id = s.message_id) "
                 + "OR (p.draft_id IS NOT NULL AND p.archived_at IS NULL AND a.message_id = p.message_id)) "
@@ -171,7 +171,7 @@ public class AgentApprovalService {
         int updated = jdbcTemplate.update("UPDATE agent_approval SET status = 'APPROVED', "
                         + "idempotency_key = ?, approved_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP "
                         + "WHERE approval_id = ? AND tenant_id = ? AND approver_user_id = ? "
-                        + "AND status = 'PENDING' AND expires_at > CURRENT_TIMESTAMP "
+                        + "AND archived_at IS NULL AND status = 'PENDING' AND expires_at > CURRENT_TIMESTAMP "
                         + "AND (draft_id IS NULL OR EXISTS (SELECT 1 FROM agent_meeting_booking_draft d "
                         + "WHERE d.draft_id = agent_approval.draft_id AND d.tenant_id = agent_approval.tenant_id "
                         + "AND d.owner_user_id = agent_approval.approver_user_id AND d.status = 'PENDING' "
@@ -195,7 +195,8 @@ public class AgentApprovalService {
         int updated = jdbcTemplate.update("UPDATE agent_approval SET status = 'REJECTED', "
                         + "idempotency_key = ?, rejected_at = CURRENT_TIMESTAMP, rejected_reason = ?, "
                         + "updated_at = CURRENT_TIMESTAMP WHERE approval_id = ? AND tenant_id = ? "
-                        + "AND approver_user_id = ? AND status = 'PENDING' AND expires_at > CURRENT_TIMESTAMP",
+                        + "AND approver_user_id = ? AND archived_at IS NULL "
+                        + "AND status = 'PENDING' AND expires_at > CURRENT_TIMESTAMP",
                 idempotencyKey, reason, approvalId, tenantId, userId);
         if (updated == 0) return handleAlreadyProcessed(tenantId, userId, approvalId, idempotencyKey, "REJECTED");
         jdbcTemplate.update("UPDATE agent_meeting_booking_draft SET status = 'CANCELLED', "
@@ -228,6 +229,7 @@ public class AgentApprovalService {
         int updated = jdbcTemplate.update("UPDATE agent_approval SET resume_idempotency_key = ?, "
                         + "resumed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE approval_id = ? "
                         + "AND tenant_id = ? AND approver_user_id = ? AND status = 'APPROVED' "
+                        + "AND archived_at IS NULL AND operation_id IS NOT NULL "
                         + "AND resume_idempotency_key IS NULL",
                 resumeIdempotencyKey, approvalId, tenantId, userId);
         if (updated == 0) {
@@ -401,7 +403,7 @@ public class AgentApprovalService {
     private Map<String, Object> findApproval(Long tenantId, Long userId, String approvalId,
                                               boolean pendingOnly) {
         String statusPredicate = pendingOnly
-                ? "AND a.status = 'PENDING' AND a.expires_at > CURRENT_TIMESTAMP "
+                ? "AND a.archived_at IS NULL AND a.status = 'PENDING' AND a.expires_at > CURRENT_TIMESTAMP "
                 : "";
         List<Map<String, Object>> rows = jdbcTemplate.query(
                 approvalSelect() + " FROM agent_approval a "

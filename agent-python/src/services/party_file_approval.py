@@ -10,7 +10,7 @@ of this proof: a replay is authorized by the Java Approval's
 from __future__ import annotations
 
 import json
-from copy import copy
+from copy import copy, deepcopy
 from dataclasses import dataclass, replace
 from hashlib import sha256
 from typing import Any
@@ -29,6 +29,7 @@ from ..tools.common import (
     set_message_context,
     tool_failure,
 )
+from ..tools.common.http_client import JavaFacadeBusinessError, JavaFacadeHttpError
 from ..services.approval_core import (
     ApprovalBinding,
     IDENTITY_FIELDS,
@@ -100,6 +101,14 @@ def _sync_terminal_approval(approval: dict[str, Any]) -> Any | None:
     return None
 
 
+def _is_not_found(exc: Exception | None) -> bool:
+    if isinstance(exc, JavaFacadeHttpError):
+        return exc.status_code == 404
+    if isinstance(exc, JavaFacadeBusinessError):
+        return str(exc.code) == "404"
+    return False
+
+
 def load_party_file_confirmation(
     draft_id: str, approval_id: str,
 ) -> tuple[PartyFileApprovalContext | None, Any | None]:
@@ -109,25 +118,39 @@ def load_party_file_confirmation(
         return None, tool_failure("APPROVAL_CONTEXT_INVALID", "缺少党务文件草稿或确认 ID")
     try:
         approval = java_get(f"/agent/approvals/{approval_id}")
-        draft_response = java_get(f"/agent/tools/party-files/drafts/{draft_id}")
     except Exception as exc:
         return None, tool_failure(
             "APPROVAL_NOT_FOUND",
             "党务文件确认记录不存在、已过期或无权访问",
             details=str(exc),
         )
-    if not isinstance(approval, dict) or not isinstance(draft_response, dict):
+    if not isinstance(approval, dict):
         return None, tool_failure("APPROVAL_CONTEXT_INVALID", "党务文件确认记录返回格式无效")
 
-    draft = draft_response.get("draft")
+    draft_response = None
+    draft_error = None
+    try:
+        draft_response = java_get(f"/agent/tools/party-files/drafts/{draft_id}")
+    except Exception as exc:
+        draft_error = exc
+
+    draft = draft_response.get("draft") if isinstance(draft_response, dict) else None
+    status = str(approval.get("status") or "").upper()
     if not isinstance(draft, dict) or not draft:
         snapshot = approval.get("draft")
-        if str(approval.get("status") or "").upper() == "REJECTED" and isinstance(snapshot, dict):
-            draft = dict(snapshot)
+        if status == "REJECTED" and isinstance(snapshot, dict) and snapshot and _is_not_found(draft_error):
+            # The live draft is archived after rejection.  Bind a private copy
+            # of the Approval's immutable snapshot so identity enrichment below
+            # cannot mutate the Approval response or its nested payload.
+            draft = deepcopy(snapshot)
         else:
-            return None, tool_failure("DRAFT_NOT_FOUND", "党务文件草稿不存在、已处理、已过期或无权访问")
+            return None, tool_failure(
+                "DRAFT_NOT_FOUND",
+                "党务文件草稿不存在、已处理、已过期或无权访问",
+                details=str(draft_error) if draft_error else None,
+            )
     else:
-        draft = dict(draft)
+        draft = deepcopy(draft)
 
     for field in ("approvalId", "draftId", *IDENTITY_FIELDS, "runId", "operationId"):
         if not draft.get(field) and approval.get(field) is not None:

@@ -62,7 +62,7 @@ def _enrich_or_inject(request: Any, response: Any) -> Any:
     replaces same-turn calls so no unrelated side effect can run before the
     user decides.
     """
-    pending, pending_error = load_pending_personal_schedule_context()
+    pending, pending_error = load_pending_personal_schedule_context(request)
     messages = getattr(response, "result", None)
     if not messages:
         return response

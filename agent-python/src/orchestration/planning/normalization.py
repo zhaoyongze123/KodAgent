@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
+
+from ..capabilities import action_field_specs
 
 
 _ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
     "meeting.create": {
-        "subject": ("title", "meeting_subject"), "start_time": ("startTime", "start"),
+        "subject": ("title", "topic", "meeting_subject"), "start_time": ("startTime", "start"),
         "end_time": ("endTime", "end"), "attendees": ("attendee_names", "participants"),
         "room_capacity": ("capacity",), "remark": ("notes", "remark_text"),
     },
     "meeting.update": {
         "source_booking_id": ("sourceBookingId", "booking_id", "bookingId"),
-        "subject": ("title", "meeting_subject"), "start_time": ("startTime", "start"),
+        "subject": ("title", "topic", "meeting_subject"), "start_time": ("startTime", "start"),
         "end_time": ("endTime", "end"), "attendees": ("attendee_names", "participants"),
         "room_capacity": ("capacity",), "remark": ("notes", "remark_text"),
     },
@@ -74,6 +77,21 @@ def normalize_action_payload(action: Any, payload: dict[str, Any] | None) -> dic
     targets = values.get("targets")
     if isinstance(targets, str) and targets.strip():
         values["targets"] = [item.strip() for item in targets.split(",") if item.strip()]
+
+    # Providers sometimes serialize a schema-declared array as one text value.
+    # Normalize that transport representation from the Java-owned field schema
+    # before validation; domain workflows still own the meaning of each item.
+    array_fields = {
+        field.name for field in action_field_specs(action) if field.field_type == "array"
+    }
+    for field_name in array_fields:
+        value = values.get(field_name)
+        if isinstance(value, str) and value.strip():
+            values[field_name] = [
+                item.strip()
+                for item in re.split(r"[,，、;；\n]+", value)
+                if item.strip()
+            ]
     return values
 
 

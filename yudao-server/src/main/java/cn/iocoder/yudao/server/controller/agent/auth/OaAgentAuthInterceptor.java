@@ -106,28 +106,13 @@ public class OaAgentAuthInterceptor implements HandlerInterceptor {
 
     private LoginUser resolveLoginUser(HttpServletRequest request) {
         String identityTicket = request.getHeader(identityProperties.getHeaderName());
-        if (StringUtils.hasText(identityTicket)) {
-            OaAgentIdentityTicketService.IdentityPayload payload = identityTicketService.verify(identityTicket);
-            TenantContextHolder.setTenantId(payload.getTenantId());
-            TenantContextHolder.setIgnore(false);
-            return buildLoginUser(payload.getUserId(), payload.getTenantId());
-        }
-        if (!identityProperties.isLegacyPrincipalEnabled()) {
+        if (!StringUtils.hasText(identityTicket)) {
             throw new IllegalArgumentException("缺少 X-Agent-Identity 用户身份票据");
         }
-        String principal = request.getHeader(properties.getPrincipalHeader());
-        if (!StringUtils.hasText(principal)) {
-            throw new IllegalArgumentException("缺少旧版 Agent 用户编号");
-        }
-        final Long userId;
-        try {
-            userId = Long.valueOf(principal);
-        } catch (NumberFormatException ex) {
-            throw new IllegalArgumentException("X-Agent-User-Id 必须是数字");
-        }
-        TenantContextHolder.setTenantId(properties.getTenantId());
+        OaAgentIdentityTicketService.IdentityPayload payload = identityTicketService.verify(identityTicket);
+        TenantContextHolder.setTenantId(payload.getTenantId());
         TenantContextHolder.setIgnore(false);
-        return buildLoginUser(userId, properties.getTenantId());
+        return buildLoginUser(payload.getUserId(), payload.getTenantId());
     }
 
     private LoginUser buildLoginUser(Long userId, Long tenantId) {
@@ -159,7 +144,6 @@ public class OaAgentAuthInterceptor implements HandlerInterceptor {
     private String classifyReason(RuntimeException ex) {
         String message = ex.getMessage() == null ? "" : ex.getMessage();
         if (message.contains("身份票据") || message.contains("用户身份")) return "identity_ticket_invalid";
-        if (message.contains("旧版 Agent 用户编号") || message.contains("X-Agent-User-Id")) return "legacy_identity_invalid";
         if (message.contains("租户") || message.contains("用户不存在")) return "identity_scope_invalid";
         if (message.contains("权限")) return "permission_header_invalid";
         return "authentication_failed";

@@ -14,6 +14,7 @@ from ..tools.common import (
     get_meeting_draft,
     mark_run_paused,
     mark_run_resumed,
+    set_message_context,
     set_operation_context,
     tool_failure,
 )
@@ -235,14 +236,84 @@ def load_confirmation_context(
     ), None
 
 
-def load_pending_approval_context() -> tuple[PendingApprovalContext | None, ToolResponse | None]:
+def _operation_id_from_draft_request(request: Any | None) -> str:
+    """Read the operation binding from the immediately preceding draft result.
+
+    The workflow binds ``operationId`` only while its Tool call is executing.
+    The following model call is a new Runnable context, so the ContextVar may
+    not contain that value even though the checkpoint still has the structured
+    ``DRAFT_READY`` ToolMessage.  This is a one-frame recovery: it accepts no
+    text or historical message and therefore cannot reopen an old draft.
+    """
+    state = getattr(request, "state", None) if request is not None else None
+    if not isinstance(state, dict):
+        return ""
+    messages = state.get("messages") or []
+    if not messages:
+        return ""
+    message = messages[-1]
+    content = message.get("content", "") if isinstance(message, dict) else getattr(message, "content", "")
+    if not isinstance(content, str):
+        return ""
+    try:
+        envelope = json.loads(content)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return ""
+    data = envelope.get("data") if isinstance(envelope, dict) else None
+    if not isinstance(data, dict) or str(data.get("status") or "").upper() != "DRAFT_READY":
+        return ""
+    for record in (data, data.get("facts")):
+        if not isinstance(record, dict):
+            continue
+        operation_id = str(record.get("operationId") or record.get("operation_id") or "").strip()
+        if operation_id:
+            return operation_id
+    return ""
+
+
+def _message_id_from_draft_request(request: Any | None) -> str:
+    """Restore the trusted user-turn binding from checkpoint state.
+
+    LangGraph's model middleware can receive a Runnable context without the
+    Gateway's optional ``messageId`` metadata.  The root middleware stores the
+    authenticated current user message in state before any business tool is
+    called; accepting only that code-owned, trusted binding keeps this from
+    becoming a free-form message or historical-thread fallback.
+    """
+    state = getattr(request, "state", None) if request is not None else None
+    if not isinstance(state, dict):
+        return ""
+    binding = state.get("current_user_message")
+    if not isinstance(binding, dict) or binding.get("trusted") is not True:
+        return ""
+    if binding.get("source") != "current_human_message":
+        return ""
+    return str(binding.get("messageId") or binding.get("message_id") or "").strip()
+
+
+def load_pending_approval_context(
+    request: Any | None = None,
+) -> tuple[PendingApprovalContext | None, ToolResponse | None]:
     """Resolve the one current draft that is allowed to create an HITL card.
 
     Operation supplies the current process binding and Java supplies the
     durable business records.  A settled approval is deliberately rejected
     here so a later model call cannot resurrect an old card.
     """
-    operation_id = str(current_agent_context().get("operationId") or "").strip()
+    runtime_context = current_agent_context()
+    checkpoint_message_id = _message_id_from_draft_request(request)
+    if checkpoint_message_id and checkpoint_message_id != str(runtime_context.get("messageId") or "").strip():
+        # The immediate draft frame is the only place where the checkpoint's
+        # code-owned current-user binding may repair a missing or stale
+        # Runnable ContextVar.  A later free-form message never reaches this
+        # branch because ``is_draft_projection_turn`` rejects it upstream.
+        set_message_context(checkpoint_message_id)
+        runtime_context = current_agent_context()
+    operation_id = str(runtime_context.get("operationId") or "").strip()
+    if not operation_id:
+        operation_id = _operation_id_from_draft_request(request)
+        if operation_id:
+            set_operation_context(operation_id)
     if not operation_id:
         return None, tool_failure(
             "OPERATION_REQUIRED",

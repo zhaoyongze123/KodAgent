@@ -5,6 +5,8 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.web.bind.annotation.*;
 
+import javax.servlet.http.HttpServletResponse;
+
 import javax.annotation.Resource;
 import java.util.List;
 import java.util.Map;
@@ -74,4 +76,13 @@ public class AgentModelConfigController {
     @GetMapping("/agent/config/models")
     @Operation(summary = "查询当前用户可选择的 Agent 模型")
     public List<Map<String,Object>> availableModels() { return service.listModels(getTenantId(), null); }
+
+    /** Java-owned model gateway; provider credentials never leave this service. */
+    @PostMapping(value = "/agent/internal/models/{modelId}/chat/completions",
+            consumes = "application/json")
+    @Operation(summary = "代理模型聊天完成请求")
+    public void chatCompletions(@PathVariable Long modelId, @RequestBody byte[] requestBody,
+                                HttpServletResponse response) {
+        service.proxyChatCompletion(getTenantId(), modelId, requestBody, response);
+    }
 }

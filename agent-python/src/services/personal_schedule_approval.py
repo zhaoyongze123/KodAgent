@@ -22,6 +22,7 @@ from ..tools.common import (
     java_get,
     mark_run_paused,
     mark_run_resumed,
+    set_message_context,
     set_operation_context,
     tool_failure,
 )
@@ -218,9 +219,61 @@ def load_personal_schedule_confirmation(
     ), None
 
 
-def load_pending_personal_schedule_context() -> tuple[PersonalScheduleApprovalContext | None, ToolResponse | None]:
+def _operation_id_from_draft_request(request: Any | None) -> str:
+    """Read the Operation binding from the immediately preceding draft result."""
+    state = getattr(request, "state", None) if request is not None else None
+    if not isinstance(state, dict):
+        return ""
+    messages = state.get("messages") or []
+    if not messages:
+        return ""
+    message = messages[-1]
+    content = message.get("content", "") if isinstance(message, dict) else getattr(message, "content", "")
+    if not isinstance(content, str):
+        return ""
+    try:
+        envelope = json.loads(content)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return ""
+    data = envelope.get("data") if isinstance(envelope, dict) else None
+    if not isinstance(data, dict) or str(data.get("status") or "").upper() != "DRAFT_READY":
+        return ""
+    for record in (data, data.get("facts")):
+        if not isinstance(record, dict):
+            continue
+        operation_id = str(record.get("operationId") or record.get("operation_id") or "").strip()
+        if operation_id:
+            return operation_id
+    return ""
+
+
+def _message_id_from_draft_request(request: Any | None) -> str:
+    """Read the trusted current user-turn binding from checkpoint state."""
+    state = getattr(request, "state", None) if request is not None else None
+    if not isinstance(state, dict):
+        return ""
+    binding = state.get("current_user_message")
+    if not isinstance(binding, dict) or binding.get("trusted") is not True:
+        return ""
+    if binding.get("source") != "current_human_message":
+        return ""
+    return str(binding.get("messageId") or binding.get("message_id") or "").strip()
+
+
+def load_pending_personal_schedule_context(
+    request: Any | None = None,
+) -> tuple[PersonalScheduleApprovalContext | None, ToolResponse | None]:
     """Return the sole draft permitted to create a new schedule ApprovalCard."""
-    operation_id = _operation_id()
+    runtime_context = current_agent_context()
+    checkpoint_message_id = _message_id_from_draft_request(request)
+    if checkpoint_message_id and checkpoint_message_id != str(runtime_context.get("messageId") or "").strip():
+        set_message_context(checkpoint_message_id)
+        runtime_context = current_agent_context()
+    operation_id = str(runtime_context.get("operationId") or "").strip()
+    if not operation_id:
+        operation_id = _operation_id_from_draft_request(request)
+        if operation_id:
+            set_operation_context(operation_id)
     if operation_id:
         try:
             operation = _operation_snapshot(operation_id)

@@ -8,7 +8,7 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -96,9 +96,11 @@ export function ApprovalCard({ payload, interrupt }: ApprovalCardProps) {
   // reported as malformed or non-actionable in the other.
   const isCurrentInterrupt = isApprovalInterruptAction(interrupt);
   const isBatchApproval = payload?.cardType === "approval_batch";
-  const isTaskApproval = payload?.cardType === "approval_task";
   const canSubmit = isCurrentActionableApproval(payload, interrupt);
   const draft = payload?.draft;
+  // React state updates are asynchronous. This ref closes the same-event-loop
+  // gap where a rapid second click could otherwise start another resume.
+  const resumeSubmittingRef = useRef(false);
   const [submitting, setSubmitting] = useState(false);
   const [status, setStatus] = useState<
     "idle" | "approved" | "rejected" | "error"
@@ -186,7 +188,8 @@ export function ApprovalCard({ payload, interrupt }: ApprovalCardProps) {
   };
 
   const resume = async (type: "approve" | "reject") => {
-    if (submitting || settled) return;
+    if (resumeSubmittingRef.current || submitting || settled) return;
+    resumeSubmittingRef.current = true;
     const approveLabel = payload?.approveLabel || "确认";
     const rejectLabel = payload?.rejectLabel || "取消";
     setSubmitting(true);
@@ -225,10 +228,12 @@ export function ApprovalCard({ payload, interrupt }: ApprovalCardProps) {
         runId: payload?.originRunId || payload?.runId,
         messageId: payload?.messageId,
       });
-      const taskResumeAudit = isTaskApproval && shouldRecordResumeAudit(type);
-      if (taskResumeAudit) {
-        // The task executor requires this durable proof before the resumed
-        // graph can claim its Effect. Recording it after submit is too late.
+      const resumeAuditBeforeGraph =
+        shouldRecordResumeAudit(type) && !isBatchApproval;
+      if (resumeAuditBeforeGraph) {
+        // Every non-batch write executor requires this durable proof before
+        // the resumed graph can claim its Effect. Recording it after submit
+        // is too late for meeting, schedule, file, request, and task writes.
         setResumeAuditStatus("pending");
         await recordResumeAudit();
         setResumeAuditStatus("recorded");
@@ -253,38 +258,16 @@ export function ApprovalCard({ payload, interrupt }: ApprovalCardProps) {
         return;
       }
 
-      // The business action has now been accepted by LangGraph.  Mark it as
-      // completed before writing the audit fact so an audit outage can never
-      // be shown as a failed or unexecuted booking.
+      // The Java approval and resume facts were written before this call. The
+      // graph now owns the remaining business execution and its outcome.
       setStatus("approved");
-      if (taskResumeAudit) {
-        toast.success(`已${approveLabel}`, {
-          description: "单条审批已提交执行。",
-          richColors: true,
-          closeButton: true,
-        });
-        return;
-      }
-      setResumeAuditStatus("pending");
-      try {
-        await recordResumeAudit();
-        setResumeAuditStatus("recorded");
-        toast.success(`已${approveLabel}`, {
-          description: "预约已执行，审批与 Agent resume 审计记录均已保存。",
-          richColors: true,
-          closeButton: true,
-        });
-      } catch (auditError) {
-        const message =
-          auditError instanceof Error ? auditError.message : "请稍后重试";
-        setResumeAuditStatus("failed");
-        setResumeAuditError(message);
-        toast.warning("预约已执行，但审计记录待补齐", {
-          description: "不会重复提交预约，可点击卡片中的“重试审计记录”。",
-          richColors: true,
-          closeButton: true,
-        });
-      }
+      toast.success(`已${approveLabel}`, {
+        description: isBatchApproval
+          ? "批量审批已提交执行。"
+          : "审批与 Agent resume 审计记录均已保存。",
+        richColors: true,
+        closeButton: true,
+      });
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "操作失败，请稍后重试";
@@ -305,6 +288,7 @@ export function ApprovalCard({ payload, interrupt }: ApprovalCardProps) {
         closeButton: true,
       });
     } finally {
+      resumeSubmittingRef.current = false;
       setSubmitting(false);
     }
   };

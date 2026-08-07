@@ -168,3 +168,50 @@ test("ApprovalCard does not issue a second draft cancellation write", async () =
   assert.match(source, /isApprovalInterruptAction\(interrupt\)/);
   assert.doesNotMatch(source, /agent-drafts\/.*\/cancel/);
 });
+
+test("non-batch approval writes the resume proof before graph resume", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(
+    new URL("../src/components/thread/cards/ApprovalCard.tsx", import.meta.url),
+    "utf8",
+  );
+
+  const auditGate = source.indexOf("if (resumeAuditBeforeGraph)");
+  const graphResume = source.indexOf("await thread.submit(");
+  assert.ok(auditGate >= 0);
+  assert.ok(graphResume > auditGate);
+  assert.match(source, /shouldRecordResumeAudit\(type\) && !isBatchApproval/);
+});
+
+test("ApprovalCard synchronously locks rapid resume clicks and releases after failure", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(
+    new URL("../src/components/thread/cards/ApprovalCard.tsx", import.meta.url),
+    "utf8",
+  );
+
+  const resumeStart = source.indexOf('const resume = async (type: "approve" | "reject") => {');
+  const resumeEnd = source.indexOf("\n  };", resumeStart);
+  assert.ok(resumeStart >= 0);
+  assert.ok(resumeEnd > resumeStart);
+  const resumeSource = source.slice(resumeStart, resumeEnd);
+
+  const guard = resumeSource.indexOf(
+    "if (resumeSubmittingRef.current || submitting || settled) return;",
+  );
+  const lock = resumeSource.indexOf("resumeSubmittingRef.current = true;");
+  const stateUpdate = resumeSource.indexOf("setSubmitting(true);");
+  const unlock = resumeSource.indexOf("resumeSubmittingRef.current = false;");
+  const finallyBlock = resumeSource.indexOf("} finally {");
+
+  // The ref guard and lock run synchronously, before React can batch the
+  // state update; a second click in the same event loop is therefore rejected.
+  assert.ok(guard >= 0);
+  assert.ok(lock > guard);
+  assert.ok(stateUpdate > lock);
+
+  // Unlocking in finally preserves retry behavior after fetch, audit, or
+  // graph-submit failures.
+  assert.ok(finallyBlock >= 0);
+  assert.ok(unlock > finallyBlock);
+});

@@ -15,7 +15,10 @@ import {
   agentBlockFromToolResult,
   type AgentErrorCode,
 } from "@/types/agent-block";
-import { isMeetingApprovalCancellation } from "@/lib/meeting-tool-result";
+import {
+  isApprovalCardProjection,
+  isApprovalControlFlow,
+} from "@/lib/approval-tool-result";
 import { findLatestCorrelatedToolEvent } from "@/lib/tool-event-correlation";
 import { toolLabel } from "../tool-labels";
 import { isProcessOnlyToolName } from "./message-visibility";
@@ -275,7 +278,12 @@ export function ToolResult({
     message.name,
   );
   const response = parseStructuredToolResponse(message.content);
-  if (isMeetingApprovalCancellation(message)) return null;
+  // Approval rejection/expiry is a normal HITL outcome. The assistant's
+  // structured/narrated result remains visible; the low-level ToolMessage
+  // must not add a generic red failure card on top of it.
+  if (isApprovalControlFlow(message) || isApprovalCardProjection(message)) {
+    return null;
+  }
   const failed =
     message.status === "error" ||
     response?.ok === false ||

@@ -21,6 +21,7 @@ from ..tools.common.events import (
     is_run_paused,
     sync_runtime_event_context,
 )
+from ..tools.common.auth import _java_request_config
 from ..tools.common.http_client import persist_agent_event, resolve_agent_model
 from ..orchestration.action_catalog_sync import ActionCatalogSyncError, sync_action_catalog
 from .conversation_router import clear_route_reasoning_policy, get_route_reasoning_policy
@@ -180,16 +181,13 @@ def _is_qwen3(model_config: dict[str, Any]) -> bool:
 
 
 def _model_config_fingerprint(model_config: dict[str, Any]) -> str:
-    """Identify the effective config without exposing the credential in cache keys."""
-    api_key_digest = hashlib.sha256(
-        str(model_config.get("apiKey") or "").encode("utf-8")
-    ).hexdigest()
+    """Identify the effective model without ever depending on a provider key."""
     values = "\x1f".join(
         (
+            str(model_config.get("model_id") or "").strip(),
             str(model_config.get("provider_name") or "").strip(),
             str(model_config.get("model_name") or "").strip(),
             str(model_config.get("base_url") or "").strip().rstrip("/"),
-            api_key_digest,
         )
     )
     return hashlib.sha256(values.encode("utf-8")).hexdigest()
@@ -197,9 +195,8 @@ def _model_config_fingerprint(model_config: dict[str, Any]) -> str:
 
 def _validate_model_config(model_config: dict[str, Any]) -> None:
     required = (
+        ("model_id", "设置中缺少模型编号。"),
         ("model_name", "设置中缺少模型名称。"),
-        ("apiKey", "设置中缺少模型凭证。"),
-        ("base_url", "设置中缺少模型服务地址。"),
     )
     for field, message in required:
         if not str(model_config.get(field) or "").strip():
@@ -207,33 +204,47 @@ def _validate_model_config(model_config: dict[str, Any]) -> None:
 
 
 def _effective_model_base_url(model_config: dict[str, Any]) -> str:
-    """Resolve an optional host relay for a LAN-only model endpoint.
+    """Point the LangChain client at Java's credential-holding gateway."""
+    return _model_gateway_config(model_config)[0]
 
-    The Java model configuration remains the source of truth and is still
-    used by the Java-side provider test.  Docker Desktop on macOS can reach
-    the host gateway but, depending on the LAN firewall, may not be allowed
-    to connect directly to a private model host.  A relay is therefore only
-    applied when both URLs are explicitly configured and the model's exact
-    configured URL matches the relay target.  Other providers are untouched.
-    """
-    configured = str(model_config.get("base_url") or "").strip().rstrip("/")
-    target = os.getenv("OA_AGENT_MODEL_RELAY_TARGET_URL", "").strip().rstrip("/")
-    relay = os.getenv("OA_AGENT_MODEL_RELAY_BASE_URL", "").strip().rstrip("/")
-    if configured and target and relay and configured == target:
-        return relay
-    return configured
+
+def _model_gateway_config(model_config: dict[str, Any]) -> tuple[str, dict[str, str]]:
+    """Resolve the Java gateway URL and scoped headers once per model build."""
+    base_url, headers = _java_request_config()
+    model_id = str(model_config.get("model_id") or "").strip()
+    if not model_id:
+        raise ModelRuntimeError("MODEL_CONFIG_INVALID", "设置中缺少模型编号。")
+    return (
+        f"{base_url.rstrip('/')}/agent/internal/models/{model_id}",
+        {
+            **headers,
+            "X-Agent-Tool": "agent_model_chat_completion",
+            "X-Agent-Permission": "model:read",
+        },
+    )
+
+
+def _model_gateway_headers(model_config: dict[str, Any]) -> dict[str, str]:
+    """Build per-Run Java headers without exposing provider credentials."""
+    return _model_gateway_config(model_config)[1]
 
 
 def _build_model(model_config: dict[str, Any], reasoning_effort: str = "auto") -> ChatOpenAI:
     _validate_model_config(model_config)
     siliconflow = _is_siliconflow(model_config)
     qwen3 = _is_qwen3(model_config)
-    base_url = _effective_model_base_url(model_config)
+    base_url, gateway_headers = _model_gateway_config(model_config)
     options: dict[str, Any] = {
         "model": str(model_config["model_name"]),
-        "api_key": str(model_config["apiKey"]),
+        # ChatOpenAI requires a non-empty token even though Java authenticates
+        # the request with X-Agent-Key and X-Agent-Identity. This is a local
+        # gateway marker, never a provider credential.
+        "api_key": "kodagent-java-model-gateway",
         "base_url": base_url,
-        "default_headers": {"User-Agent": "kodagent-deepagents/0.1"},
+        "default_headers": {
+            **gateway_headers,
+            "User-Agent": "kodagent-deepagents/0.1",
+        },
         # SiliconFlow and most OpenAI-compatible providers expose Chat
         # Completions, while Responses support is not universal.
         "use_responses_api": False,

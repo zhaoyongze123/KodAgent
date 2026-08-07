@@ -42,6 +42,7 @@ public class OaAgentAuthConfiguration implements WebMvcConfigurer {
                         "/agent/threads/**",
                         "/agent/approvals/**",
                         "/agent/config/**",
+                        "/agent/internal/models/**",
                         // Model settings are exposed under admin-api, but are
                         // authenticated by the same Agent identity ticket.
                         "/admin-api/agent/model-providers/**",

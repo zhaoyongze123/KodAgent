@@ -31,10 +31,9 @@ def clean(value: str) -> str:
 
 def build_sql(base: str, key: str, user_id: str, tenant_id: int, identity_ticket: str = "") -> str:
     headers = {"X-Agent-Key": key, "X-Agent-Permission": "party-file:read", "X-Agent-Tool": "search_party_files"}
-    if identity_ticket.strip():
-        headers["X-Agent-Identity"] = identity_ticket.strip()
-    else:
-        headers["X-Agent-User-Id"] = user_id
+    if not identity_ticket.strip():
+        raise ValueError("必须通过 --identity-ticket 或 OA_AGENT_IDENTITY_TICKET 提供身份票据")
+    headers["X-Agent-Identity"] = identity_ticket.strip()
     files = []
     page_no = 1
     while True:

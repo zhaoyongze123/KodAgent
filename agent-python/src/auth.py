@@ -2,7 +2,7 @@
 
 KodBox/OA issues a short-lived HMAC identity ticket.  LangGraph validates the
 ticket before a thread or run is accepted, and copies the verified identity
-into run metadata. Java still validates the same ticket again on every
+into scoped run metadata. Java receives a newly issued hop ticket on each
 business-tool request.
 """
 
@@ -71,7 +71,6 @@ async def authenticate(headers: dict[bytes, bytes] | None = None) -> dict[str, A
         "permissions": [],
         "userId": user_id,
         "tenantId": tenant_id,
-        "identityTicket": ticket,
     }
 
 
@@ -79,10 +78,16 @@ def _stamp_metadata(ctx: Any, value: Any) -> bool:
     if not isinstance(value, dict):
         return True
     user = ctx.user
-    metadata = value.setdefault("metadata", {})
+    metadata = value.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+        value["metadata"] = metadata
+    # Caller-supplied metadata is not an authentication source. Never persist
+    # or stream the request ticket.
+    metadata.pop("identityTicket", None)
+    metadata.pop("identity_ticket", None)
     metadata["userId"] = user.get("userId")
     metadata["tenantId"] = user.get("tenantId")
-    metadata["identityTicket"] = user.get("identityTicket")
     metadata["owner"] = user.identity
     return True
 

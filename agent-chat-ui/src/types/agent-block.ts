@@ -744,6 +744,16 @@ export function resultEnvelopeFromToolResult(
     ? dataRecord.presentation as Record<string, unknown>
     : undefined;
   const source = response.presentation ?? (response.resultKind ? response : undefined) ?? nested;
+  // Approval drafts are projected by the HITL interrupt card. Older persisted
+  // messages may still contain a synthesized resultKind, so suppress that
+  // legacy result before it can render as an empty generic result panel.
+  if (
+    source &&
+    typeof source === "object" &&
+    (source as Record<string, unknown>).cardType === "party_file_approval"
+  ) {
+    return undefined;
+  }
   const rawKind = source && typeof source === "object"
     ? (source as Record<string, unknown>).resultKind
     : undefined;

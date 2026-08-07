@@ -427,26 +427,6 @@ def get_approval_task_detail(
     return tool_success(result, presentation)
 
 
-@tool
-def approve_approval_task(
-    task_id: str,
-    reason: str = "同意",
-    tool_call_id: Annotated[str, InjectedToolCallId] = "",
-) -> ToolResponse:
-    """Deprecated raw write; all approvals must use preview + ApprovalCard."""
-    return tool_failure("AGENT_APPROVAL_CARD_REQUIRED", "请先生成审批预览并通过 ApprovalCard 确认。")
-
-
-@tool
-def reject_approval_task(
-    task_id: str,
-    reason: str,
-    tool_call_id: Annotated[str, InjectedToolCallId] = "",
-) -> ToolResponse:
-    """Deprecated raw write; all approvals must use preview + ApprovalCard."""
-    return tool_failure("AGENT_APPROVAL_CARD_REQUIRED", "请先生成审批预览并通过 ApprovalCard 确认。")
-
-
 _TASK_ACTION_ID = "approval.write.task"
 
 
@@ -760,28 +740,10 @@ def confirm_approval_task_action(
     return tool_success(result, {"blockType": "card", "cardType": "approval_task_result"})
 
 
-def _action_approval_task(action: str, task_id: str, reason: str, tool_call_id: str) -> ToolResponse:
-    bind_tool_call_id(tool_call_id)
-    if not task_id.strip() or not reason.strip():
-        return tool_failure("APPROVAL_ACTION_FIELDS_INCOMPLETE", "请选择待办并填写审批意见。")
-    writer = get_stream_writer()
-    tool_name = f"{action}_approval_task"
-    label = "通过" if action == "approve" else "驳回"
-    emit(writer, "tool_started", f"🔧 正在{label}待办审批……", toolName=tool_name, toolCallId=tool_call_id)
-    try:
-        result = java_post(f"/agent/tools/tasks/{action}", {"taskId": task_id.strip(), "reason": reason.strip()})
-    except Exception as exc:
-        return _approval_failure(writer, tool_name, tool_call_id, f"审批{label}失败，请稍后重试", exc)
-    emit(writer, "tool_completed", f"✅ 已{label}该待办审批", toolName=tool_name, toolCallId=tool_call_id, result=result)
-    return tool_success(result)
-
-
 __all__ = [
     "preview_approval_batch_action",
     "confirm_approval_batch_action",
     "get_approval_task_detail",
-    "approve_approval_task",
-    "reject_approval_task",
     "preview_approval_task_action",
     "confirm_approval_task_action",
 ]

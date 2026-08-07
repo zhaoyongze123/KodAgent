@@ -24,6 +24,7 @@ public final class AgentEventSchemaMigrator {
     static final String PERSONAL_SCHEDULE_CONTRACT_V1 = "agent_personal_schedule_commit_result_v1";
     static final String PARTY_FILE_CONTRACT_V1 = "agent_party_file_commit_result_v1";
     static final String PARTY_FILE_OPERATION_BINDING_V1 = "agent_party_file_operation_binding_v1";
+    static final String APPROVAL_OPERATION_BINDING_V1 = "agent_approval_operation_binding_v1";
     static final String MODEL_CONFIG_V1 = "agent_model_config_v1";
     static final String PARTY_KNOWLEDGE_V1 = "agent_party_knowledge_v1";
     private static final String DURABLE_CURSOR_V1 = "agent_run_event_durable_cursor_v1";
@@ -112,6 +113,7 @@ public final class AgentEventSchemaMigrator {
                 DURABLE_CURSOR_V1, APPROVAL_CONTRACT_V1, BATCH_APPROVAL_CONTRACT_V1,
                 MEETING_BOOKING_CONTRACT_V1, PERSONAL_SCHEDULE_CONTRACT_V1,
                 PARTY_FILE_CONTRACT_V1, PARTY_FILE_OPERATION_BINDING_V1,
+                APPROVAL_OPERATION_BINDING_V1,
                 MODEL_CONFIG_V1, PARTY_KNOWLEDGE_V1));
     }
 }

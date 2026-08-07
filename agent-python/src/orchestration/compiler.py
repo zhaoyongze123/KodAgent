@@ -15,6 +15,7 @@ from ..domain.query_plan import CandidateQueryIntent
 from .action_validation import authorized_source_fields, validate_action_payload
 from .capabilities import (
     action_field_specs,
+    canonical_capability_id,
     resolve_action,
 )
 from .planning.approval import ApprovalPlanCompiler, ApprovalProcessPlanCompiler
@@ -89,7 +90,7 @@ def compile_task_plan(
     query_intent: dict[str, Any] | None = None,
 ) -> CompiledTaskPlan | None:
     """Compile a model proposal without models, I/O or business side effects."""
-    capability = str(capability_id or "").strip()
+    capability = canonical_capability_id(capability_id)
     proposed_class = str(execution_class or "").strip() or "clarify"
     payload = dict(candidate_plan) if isinstance(candidate_plan, dict) else {}
     intent = dict(query_intent) if isinstance(query_intent, dict) else {}

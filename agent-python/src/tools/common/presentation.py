@@ -60,6 +60,10 @@ _CARD_KIND_MAP: dict[str, str] = {
     "error": "error",
 }
 
+# Approval drafts are represented by the LangGraph HITL interrupt. They are
+# control-flow projections, not ordinary business result rows.
+_CONTROL_FLOW_CARD_TYPES = frozenset({"party_file_approval"})
+
 
 def _as_dict(value: Any) -> dict[str, Any]:
     if isinstance(value, BaseModel):
@@ -255,7 +259,12 @@ def presentation_for_response(response: Any) -> Any:
                         }
                 except Exception:
                     pass
-            response.presentation = normalize_presentation(presentation, data=response.data)
+            if card_type in _CONTROL_FLOW_CARD_TYPES:
+                # Keep the legacy card discriminator for the interrupt
+                # adapter, but do not synthesize resultKind/sourceResultId.
+                response.presentation = dict(presentation)
+            else:
+                response.presentation = normalize_presentation(presentation, data=response.data)
     else:
         error = response.error.model_dump() if response.error else {}
         response.presentation = normalize_presentation(

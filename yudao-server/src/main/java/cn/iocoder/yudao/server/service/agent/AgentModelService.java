@@ -4,9 +4,22 @@ import cn.hutool.crypto.SecureUtil;
 import cn.iocoder.yudao.framework.common.exception.util.ServiceExceptionUtil;
 import cn.iocoder.yudao.framework.common.util.json.JsonUtils;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
+import org.springframework.http.client.ClientHttpRequest;
+import org.springframework.http.client.ClientHttpResponse;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.web.client.HttpStatusCodeException;
+import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.client.RestClientException;
+
+import javax.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 
 import javax.annotation.Resource;
 import java.nio.charset.StandardCharsets;
@@ -211,8 +224,124 @@ public class AgentModelService {
         if (!toolsSupported(row.get("capabilities")) || !streamingSupported(row.get("capabilities"))) {
             throw ServiceExceptionUtil.exception0(400, "当前模型不满足 Agent 所需的流式输出和工具调用能力，请切换模型");
         }
-        row.put("apiKey", decrypt(String.valueOf(row.remove("api_key_ciphertext"))));
+        // The credential is deliberately selected only to prove that the
+        // provider has one configured. It must never cross the Java/Python
+        // boundary. The model gateway below is the only code path allowed to
+        // decrypt and use it.
+        row.remove("api_key_ciphertext");
         return row;
+    }
+
+    /**
+     * Proxy one OpenAI-compatible chat completion while keeping the provider
+     * credential inside Java. The response body is copied as-is so both JSON
+     * and text/event-stream clients keep the provider protocol.
+     */
+    public void proxyChatCompletion(Long tenantId, Long modelId, byte[] requestBody,
+                                    HttpServletResponse servletResponse) {
+        GatewayConfig gateway = gatewayConfig(tenantId, modelId);
+        Map<String, Object> request = JsonUtils.parseObject(new String(requestBody, StandardCharsets.UTF_8), Map.class);
+        if (request == null) throw ServiceExceptionUtil.exception0(400, "模型请求体不能为空");
+        request.put("model", gateway.modelName);
+        byte[] normalizedBody = JsonUtils.toJsonString(request).getBytes(StandardCharsets.UTF_8);
+        boolean stream = Boolean.TRUE.equals(request.get("stream"));
+        String endpoint = gateway.baseUrl + "/chat/completions";
+        try {
+            restTemplate.execute(endpoint, HttpMethod.POST, clientRequest -> {
+                HttpHeaders headers = clientRequest.getHeaders();
+                headers.setContentType(MediaType.APPLICATION_JSON);
+                headers.setAccept(Collections.singletonList(stream
+                        ? MediaType.TEXT_EVENT_STREAM : MediaType.APPLICATION_JSON));
+                headers.setBearerAuth(gateway.apiKey);
+                headers.setContentLength(normalizedBody.length);
+                OutputStream output = clientRequest.getBody();
+                output.write(normalizedBody);
+            }, response -> copyProviderResponse(response, servletResponse));
+        } catch (HttpStatusCodeException ex) {
+            writeProviderError(servletResponse, ex.getRawStatusCode(), ex.getResponseBodyAsByteArray(), gateway.apiKey);
+        } catch (ResourceAccessException ex) {
+            if (!servletResponse.isCommitted()) {
+                writeJsonError(servletResponse, HttpServletResponse.SC_BAD_GATEWAY,
+                        "模型供应商连接失败，请稍后重试");
+            }
+        } catch (RestClientException ex) {
+            if (!servletResponse.isCommitted()) {
+                writeJsonError(servletResponse, HttpServletResponse.SC_BAD_GATEWAY,
+                        "模型供应商响应读取失败，请稍后重试");
+            }
+        }
+    }
+
+    private Void copyProviderResponse(ClientHttpResponse providerResponse,
+                                      HttpServletResponse servletResponse) throws IOException {
+        servletResponse.setStatus(providerResponse.getRawStatusCode());
+        MediaType contentType = providerResponse.getHeaders().getContentType();
+        if (contentType != null) servletResponse.setContentType(contentType.toString());
+        if (providerResponse.getHeaders().containsKey(HttpHeaders.CACHE_CONTROL)) {
+            servletResponse.setHeader(HttpHeaders.CACHE_CONTROL,
+                    providerResponse.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL));
+        }
+        // Prevent an intermediary from buffering model SSE chunks.
+        if (contentType != null && MediaType.TEXT_EVENT_STREAM.includes(contentType)) {
+            servletResponse.setHeader("X-Accel-Buffering", "no");
+        }
+        try (InputStream input = providerResponse.getBody(); OutputStream output = servletResponse.getOutputStream()) {
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = input.read(buffer)) >= 0) {
+                if (read == 0) continue;
+                output.write(buffer, 0, read);
+                output.flush();
+            }
+        }
+        return null;
+    }
+
+    private void writeProviderError(HttpServletResponse response, int status, byte[] body, String apiKey) {
+        if (response.isCommitted()) return;
+        response.setStatus(status);
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        String text = new String(body == null ? new byte[0] : body, StandardCharsets.UTF_8);
+        if (apiKey != null && !apiKey.isEmpty()) text = text.replace(apiKey, "***");
+        try {
+            response.getWriter().write(text.isEmpty()
+                    ? JsonUtils.toJsonString(Collections.singletonMap("error", "模型供应商请求失败")) : text);
+        } catch (IOException ignored) {
+            // The client connection may already be closed; there is no safe
+            // second response channel to use here.
+        }
+    }
+
+    private void writeJsonError(HttpServletResponse response, int status, String message) {
+        response.setStatus(status);
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        try {
+            response.getWriter().write(JsonUtils.toJsonString(Collections.singletonMap("error", message)));
+        } catch (IOException ignored) {
+            // The client connection may already be closed.
+        }
+    }
+
+    private GatewayConfig gatewayConfig(Long tenantId, Long modelId) {
+        Map<String, Object> row;
+        try {
+            row = jdbcTemplate.queryForMap("SELECT m.model_name,m.capabilities,p.base_url,c.api_key_ciphertext " +
+                    "FROM agent_model m JOIN agent_model_provider p ON p.id=m.provider_id " +
+                    "JOIN agent_model_credential c ON c.provider_id=p.id " +
+                    "WHERE m.id=? AND p.tenant_id=? AND p.enabled=true AND p.deleted=false AND m.enabled=true",
+                    modelId, tenantId);
+        } catch (Exception ex) {
+            throw ServiceExceptionUtil.exception0(404, "模型不存在或未启用");
+        }
+        if (!toolsSupported(row.get("capabilities")) || !streamingSupported(row.get("capabilities"))) {
+            throw ServiceExceptionUtil.exception0(400, "当前模型不满足 Agent 所需的流式输出和工具调用能力，请切换模型");
+        }
+        String baseUrl = String.valueOf(row.get("base_url")).replaceAll("/+$", "");
+        String apiKey = decrypt(String.valueOf(row.get("api_key_ciphertext")));
+        if (baseUrl.isEmpty() || apiKey.isEmpty()) {
+            throw ServiceExceptionUtil.exception0(502, "模型供应商凭据或地址无效");
+        }
+        return new GatewayConfig(baseUrl, String.valueOf(row.get("model_name")), apiKey);
     }
 
     @SuppressWarnings("rawtypes")
@@ -308,6 +437,18 @@ public class AgentModelService {
 
         private ProviderConfig(String baseUrl, String apiKey) {
             this.baseUrl = baseUrl;
+            this.apiKey = apiKey;
+        }
+    }
+
+    private static final class GatewayConfig {
+        private final String baseUrl;
+        private final String modelName;
+        private final String apiKey;
+
+        private GatewayConfig(String baseUrl, String modelName, String apiKey) {
+            this.baseUrl = baseUrl;
+            this.modelName = modelName;
             this.apiKey = apiKey;
         }
     }

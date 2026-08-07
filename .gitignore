@@ -105,6 +105,9 @@ logs/
 /tmp/
 /.pnpm-store/
 
+# Local acceptance reports, screenshots, and fault-rehearsal artifacts
+/output/
+
 # Local database files
 *.db
 

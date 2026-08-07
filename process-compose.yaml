@@ -40,7 +40,7 @@ processes:
     command: >-
       bash -lc '
       trap "docker compose -f docker-compose.dev.yml down" EXIT INT TERM;
-      docker compose -f docker-compose.dev.yml up --no-color langgraph-api'
+      docker compose -f docker-compose.dev.yml up --no-color langgraph-api runtime-outbox'
     working_dir: /Users/mac/项目/kodagent/agent-python
     depends_on:
       model-lan-relay:

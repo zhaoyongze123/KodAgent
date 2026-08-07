@@ -242,22 +242,6 @@ def create_approval_withdraw_draft(
     return tool_success({**result, "requires_confirmation": True}, {"blockType": "card", "cardType": "approval_withdraw"})
 
 
-@tool
-def submit_approval_request(
-    request_type: str,
-    start_time: str,
-    end_time: str,
-    approval_type: int | None,
-    reason: str,
-    tool_call_id: Annotated[str, InjectedToolCallId] = "",
-) -> ToolResponse:
-    """Deprecated raw write; all approval writes require a durable card flow."""
-    return tool_failure(
-        "AGENT_APPROVAL_CARD_REQUIRED",
-        "审批申请必须先生成草稿并通过 ApprovalCard 确认。",
-    )
-
-
 def _confirm_approval_request(approval_id: str, tool_call_id: str, withdrawal: bool) -> ToolResponse:
     context, error = load_approval_request_context(approval_id)
     if error or context is None:
@@ -364,7 +348,6 @@ __all__ = [
     "create_approval_request_draft",
     "create_generic_approval_request_draft",
     "create_approval_withdraw_draft",
-    "submit_approval_request",
     "confirm_approval_request_action",
     "confirm_approval_withdraw_action",
 ]

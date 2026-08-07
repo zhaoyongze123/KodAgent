@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
+
+from langchain_core.messages import HumanMessage, ToolMessage
 
 from src.services import meeting_approval as meeting_approval_service
 from src.tools.common.events import set_event_context
@@ -43,6 +46,37 @@ def _bind_context() -> None:
         origin_run_id="run-1",
         resume_run_id="resume-1",
     )
+
+
+def test_pending_projection_recovers_operation_only_from_immediate_draft_result():
+    request = SimpleNamespace(state={"messages": [ToolMessage(
+        content=json.dumps({
+            "ok": True,
+            "data": {"status": "DRAFT_READY", "operation_id": "op-draft"},
+        }),
+        name="run_meeting_booking_workflow",
+        tool_call_id="draft-call",
+    )]})
+
+    assert meeting_approval_service._operation_id_from_draft_request(request) == "op-draft"
+    assert meeting_approval_service._operation_id_from_draft_request(
+        SimpleNamespace(state={"messages": [HumanMessage(content="确认")]}),
+    ) == ""
+
+
+def test_pending_projection_restores_message_id_from_trusted_checkpoint_binding():
+    request = SimpleNamespace(state={
+        "current_user_message": {
+            "source": "current_human_message",
+            "messageId": "message-from-checkpoint",
+            "trusted": True,
+        },
+    })
+
+    assert meeting_approval_service._message_id_from_draft_request(request) == "message-from-checkpoint"
+    assert meeting_approval_service._message_id_from_draft_request(SimpleNamespace(
+        state={"current_user_message": {"messageId": "untrusted"}},
+    )) == ""
 
 
 def test_settled_rejection_syncs_operation_before_snapshot_resume(monkeypatch):

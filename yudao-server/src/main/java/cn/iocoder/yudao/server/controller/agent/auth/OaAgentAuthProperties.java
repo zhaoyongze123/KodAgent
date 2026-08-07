@@ -24,6 +24,4 @@ public class OaAgentAuthProperties {
     private long refreshAheadSeconds = 60L;
     /** 外部鉴权头名称。 */
     private String headerName = "X-Agent-Key";
-    /** 旧版用户编号请求头，仅用于迁移期本地联调。 */
-    private String principalHeader = "X-Agent-User-Id";
 }

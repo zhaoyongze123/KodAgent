@@ -13,7 +13,6 @@ except ImportError:  # pragma: no cover - console fallback
     get_config = None
 
 LOCAL_AGENT_API_KEY = "kodagent-local-dev-only-20260721"
-LOCAL_AGENT_USER_ID = "1"
 AGENT_TIMEZONE = ZoneInfo(os.getenv("OA_AGENT_TIMEZONE", "Asia/Shanghai"))
 
 
@@ -21,7 +20,7 @@ def _java_request_config() -> tuple[str, dict[str, str]]:
     """从当前 LangGraph Run 读取认证上下文，控制台才允许显式开发回退。"""
     base_url = os.getenv("OA_AGENT_BASE_URL", "http://127.0.0.1:48080").rstrip("/")
     # OA_AGENT_DEV_MODE 不再作为全局身份后门。LangGraph Server 必须使用
-    # 当前认证上下文中的 identityTicket；固定用户只允许本地控制台调试。
+    # 当前认证上下文中的 userId/tenantId；固定用户和环境票据只允许本地控制台调试。
     console_dev_mode = os.getenv("OA_AGENT_CONSOLE_DEV_MODE", "false").lower() == "true"
     agent_key = os.getenv("OA_AGENT_API_KEY")
     if not agent_key:
@@ -29,7 +28,6 @@ def _java_request_config() -> tuple[str, dict[str, str]]:
             agent_key = LOCAL_AGENT_API_KEY
         else:
             raise RuntimeError("缺少 OA_AGENT_API_KEY，已拒绝使用内置开发密钥")
-    identity_ticket = None
     context_user_id = None
     context_tenant_id = None
     metadata = {}
@@ -37,7 +35,6 @@ def _java_request_config() -> tuple[str, dict[str, str]]:
         try:
             config = get_config()
             metadata = config.get("metadata") or {}
-            identity_ticket = metadata.get("identityTicket") or metadata.get("identity_ticket")
             context_user_id = metadata.get("userId") or metadata.get("user_id")
             context_tenant_id = metadata.get("tenantId") or metadata.get("tenant_id")
             # Some LangGraph runtime versions preserve the authorization owner
@@ -52,13 +49,8 @@ def _java_request_config() -> tuple[str, dict[str, str]]:
                     context_user_id = context_user_id or owner_user
         except RuntimeError:
             pass
-    identity_ticket = identity_ticket or os.getenv("OA_AGENT_IDENTITY")
-    dev_user_id = os.getenv("OA_AGENT_USER_ID") or LOCAL_AGENT_USER_ID
-
     headers = {"X-Agent-Key": agent_key}
-    if identity_ticket:
-        headers["X-Agent-Identity"] = identity_ticket
-    elif context_user_id and context_tenant_id:
+    if context_user_id and context_tenant_id:
         # The LangGraph server has already authenticated the request. Create a
         # short-lived service-to-facade ticket when the runtime does not carry
         # the original ticket into the Tool RunnableConfig. Java verifies the
@@ -66,10 +58,10 @@ def _java_request_config() -> tuple[str, dict[str, str]]:
         headers["X-Agent-Identity"] = _issue_internal_ticket(
             str(context_user_id), str(context_tenant_id)
         )
-    elif console_dev_mode and dev_user_id:
-        headers["X-Agent-User-Id"] = dev_user_id
+    elif console_dev_mode and os.getenv("OA_AGENT_IDENTITY"):
+        headers["X-Agent-Identity"] = os.environ["OA_AGENT_IDENTITY"]
     else:
-        raise RuntimeError("缺少当前 Run 的 OA_AGENT_IDENTITY，已拒绝使用固定用户身份")
+        raise RuntimeError("缺少当前 Run 的 OA-Agent 身份票据，已拒绝使用旧用户编号回退")
     # Do not mirror per-request identity into ``os.environ``.  Environment
     # variables are process-global and a LangGraph worker can serve multiple
     # tenants concurrently.  The scoped identity is already carried by the

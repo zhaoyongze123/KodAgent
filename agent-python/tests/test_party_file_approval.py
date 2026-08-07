@@ -6,6 +6,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 
 from src.services import party_file_approval
 from src.tools.party_files import manage
+from src.tools.common.http_client import JavaFacadeBusinessError, JavaFacadeHttpError
 
 
 def _request(messages, tool_call=None):
@@ -143,6 +144,97 @@ def test_party_file_confirmation_interrupt_requires_trusted_pending_approval(mon
     )
     request = _request([message], tool_call=action)
     assert party_file_approval.prepare_party_file_confirmation(request) is True
+
+
+def test_rejected_party_file_resume_uses_approval_snapshot_when_draft_is_archived(monkeypatch):
+    monkeypatch.setattr(
+        party_file_approval,
+        "current_agent_context",
+        lambda: {
+            "runId": "run-resume", "originRunId": "run-1", "threadId": "thread-1",
+            "messageId": "msg-1", "tenantId": "1", "userId": "1",
+        },
+    )
+    snapshot = {
+        "draftId": "draft-1", "approvalId": "approval-1", "operation": "CREATE",
+        "operationId": "op-party-file-1", "runId": "run-1", "threadId": "thread-1",
+        "messageId": "msg-1", "tenantId": "1", "userId": "1",
+        "presentation": {"sourceTitle": "被拒绝文件"},
+    }
+    approval = {
+        "approvalId": "approval-1", "draftId": "draft-1", "draftType": "PARTY_FILE",
+        "status": "REJECTED", "operationId": "op-party-file-1", "runId": "run-1",
+        "threadId": "thread-1", "messageId": "msg-1", "tenantId": "1", "userId": "1",
+        "draft": snapshot,
+    }
+
+    def fake_java_get(path):
+        if path == "/agent/approvals/approval-1":
+            return approval
+        raise JavaFacadeHttpError(404, path)
+
+    monkeypatch.setattr(party_file_approval, "java_get", fake_java_get)
+    monkeypatch.setattr(
+        party_file_approval.OperationRuntime,
+        "open_existing",
+        lambda *args, **kwargs: SimpleNamespace(
+            operation=SimpleNamespace(action_id="party_file.create", status="CANCELLED"),
+            close=lambda: None,
+        ),
+    )
+    monkeypatch.setattr(party_file_approval.OperationRuntime, "settle_approval", lambda *args, **kwargs: None)
+    monkeypatch.setattr(manage, "java_post", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("rejected resume must not commit")))
+
+    result = manage._confirm("CREATE", "draft-1", "draft-1", "approval-1", "call-1")
+
+    assert result.ok is False
+    assert result.error.code == "APPROVAL_REJECTED"
+    assert approval["draft"] == snapshot
+
+
+def test_rejected_party_file_resume_uses_snapshot_for_facade_business_404(monkeypatch):
+    monkeypatch.setattr(
+        party_file_approval,
+        "current_agent_context",
+        lambda: {
+            "runId": "run-resume", "originRunId": "run-1", "threadId": "thread-1",
+            "messageId": "msg-1", "tenantId": "1", "userId": "1",
+        },
+    )
+    snapshot = {
+        "draftId": "draft-1", "approvalId": "approval-1", "operation": "CREATE",
+        "operationId": "op-party-file-1", "runId": "run-1", "threadId": "thread-1",
+        "messageId": "msg-1", "tenantId": "1", "userId": "1",
+    }
+    approval = {
+        "approvalId": "approval-1", "draftId": "draft-1", "draftType": "PARTY_FILE",
+        "status": "REJECTED", "operationId": "op-party-file-1", "runId": "run-1",
+        "threadId": "thread-1", "messageId": "msg-1", "tenantId": "1", "userId": "1",
+        "draft": snapshot,
+    }
+
+    def fake_java_get(path):
+        if path == "/agent/approvals/approval-1":
+            return approval
+        raise JavaFacadeBusinessError(404, "草稿不存在", {"code": 404}, path)
+
+    monkeypatch.setattr(party_file_approval, "java_get", fake_java_get)
+    monkeypatch.setattr(
+        party_file_approval.OperationRuntime,
+        "open_existing",
+        lambda *args, **kwargs: SimpleNamespace(
+            operation=SimpleNamespace(action_id="party_file.create", status="CANCELLED"),
+            close=lambda: None,
+        ),
+    )
+    monkeypatch.setattr(party_file_approval.OperationRuntime, "settle_approval", lambda *args, **kwargs: None)
+    monkeypatch.setattr(manage, "java_post", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("rejected resume must not commit")))
+
+    result = manage._confirm("CREATE", "draft-1", "draft-1", "approval-1", "call-1")
+
+    assert result.ok is False
+    assert result.error.code == "APPROVAL_REJECTED"
+    assert approval["draft"] == snapshot
 
 
 def test_completed_party_file_resume_replays_effect_without_second_approval(monkeypatch):

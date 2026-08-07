@@ -32,8 +32,6 @@ def test_approval_request_only_accepts_fixed_oa_types_and_fields():
 def test_approval_paths_are_mapped_to_specific_contracts():
     assert http_client._tool_name_for_path("/agent/tools/approvals/types") == "list_startable_approval_types"
     assert http_client._tool_name_for_path("/agent/tools/approvals/preview", "POST") == "preview_approval_request"
-    with pytest.raises(RuntimeError, match="未登记 Java Facade 路径"):
-        http_client._tool_name_for_path("/agent/tools/approvals/submit", "POST")
     assert http_client._tool_name_for_path("/agent/tools/approvals/request-draft", "POST") == "create_approval_request_draft"
     assert http_client._tool_name_for_path("/agent/tools/approvals/request-commit", "POST") == "confirm_approval_request_action"
     assert http_client._tool_name_for_path("/agent/tools/approvals/generic/draft", "POST") == "create_generic_approval_request_draft"
@@ -46,8 +44,6 @@ def test_approval_paths_are_mapped_to_specific_contracts():
     assert http_client._tool_name_for_path("/agent/tools/tasks/action-preview", "POST") == "preview_approval_task_action"
     assert http_client._tool_name_for_path("/agent/tools/tasks/action-execute", "POST") == "confirm_approval_task_action"
     assert http_client._tool_name_for_path("/agent/tools/tasks/action-reconcile", "POST") == "reconcile_approval_task_action"
-    with pytest.raises(RuntimeError, match="未登记 Java Facade 路径"):
-        http_client._tool_name_for_path("/agent/tools/tasks/approve", "POST")
 
 
 def test_inbox_search_forwards_only_structured_read_only_conditions(monkeypatch):

@@ -182,7 +182,6 @@ mvn clean package -DskipTests
 
 OA_AGENT_API_KEY=本地开发密钥 \\
 OA_AGENT_IDENTITY_SECRET=至少 32 位的本地身份票据密钥 \\
-OA_AGENT_LEGACY_PRINCIPAL_ENABLED=true \\
 java -jar yudao-server/target/yudao-server.jar
 ```
 

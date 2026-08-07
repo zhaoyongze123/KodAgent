@@ -32,6 +32,7 @@ import cn.iocoder.yudao.module.system.api.user.dto.AdminUserRespDTO;
 import cn.iocoder.yudao.server.service.agent.AgentApprovalInboxFilter;
 import cn.iocoder.yudao.server.service.agent.AgentApprovalBatchPreviewService;
 import cn.iocoder.yudao.server.service.agent.AgentApprovalBatchReconciliationService;
+import cn.iocoder.yudao.server.service.agent.AgentApprovalBatchTestHook;
 import cn.iocoder.yudao.server.service.agent.AgentApprovalService;
 import cn.iocoder.yudao.server.controller.agent.vo.OaAgentFacadeVo.*;
 import io.swagger.v3.oas.annotations.Operation;
@@ -85,6 +86,7 @@ public class AgentApprovalToolController {
     @Resource private DeptApi deptApi;
     @Resource private AgentApprovalBatchPreviewService approvalBatchPreviewService;
     @Resource private AgentApprovalBatchReconciliationService approvalBatchReconciliationService;
+    @Resource private AgentApprovalBatchTestHook approvalBatchTestHook;
     @Resource private AgentApprovalService agentApprovalService;
 
     @GetMapping("/approvals/types")
@@ -221,18 +223,6 @@ public class AgentApprovalToolController {
     }
 
     /**
-     * Retired direct-write entry point.  Every Agent approval request must
-     * cross the durable draft + ApprovalCard + HITL resume boundary through
-     * request-draft/request-commit or generic/draft/generic/commit.
-     */
-    @PostMapping("/approvals/submit")
-    @Operation(summary = "已废弃：直接提交审批")
-    public ApprovalSubmitResponse submitApprovalRequest(@Valid @RequestBody ApprovalSubmitRequest request) {
-        throw ServiceExceptionUtil.exception0(410,
-                "AGENT_APPROVAL_CARD_REQUIRED：请先生成审批草稿并通过 ApprovalCard 确认");
-    }
-
-    /**
      * Persist a leave/trip request as a durable Agent draft.  The BPM service
      * is deliberately not called here: this endpoint only creates the
      * approval-card binding and previews the real approval chain.
@@ -240,7 +230,7 @@ public class AgentApprovalToolController {
     @PostMapping("/approvals/request-draft")
     @Operation(summary = "生成请假或出差审批草稿")
     public Map<String, Object> createApprovalRequestDraft(@RequestBody Map<String, Object> request) {
-        ApprovalSubmitRequest normalized = toApprovalSubmitRequest(request);
+        ApprovalRequestData normalized = toApprovalRequestData(request);
         ApprovalPreviewRequest previewRequest = new ApprovalPreviewRequest();
         previewRequest.setRequestType(normalized.getRequestType());
         previewRequest.setStartTime(normalized.getStartTime());
@@ -304,7 +294,7 @@ public class AgentApprovalToolController {
         Map<String, Object> draft = binding.get("draft") instanceof Map
                 ? (Map<String, Object>) binding.get("draft") : Collections.emptyMap();
         String type = String.valueOf(draft.getOrDefault("requestType", ""));
-        ApprovalSubmitRequest normalized = toApprovalSubmitRequest(draft);
+        ApprovalRequestData normalized = toApprovalRequestData(draft);
         try {
             Long businessId;
             String processInstanceId;
@@ -727,7 +717,7 @@ public class AgentApprovalToolController {
     @PostMapping("/approvals/batch/execute")
     @Operation(summary = "确认后原子执行批量审批")
     @PreAuthorize("@ss.hasPermission('bpm:task:update')")
-    @Transactional(rollbackFor = Exception.class)
+    @Transactional(transactionManager = "transactionManager", rollbackFor = Exception.class)
     public ApprovalBatchExecuteResponse executeApprovalBatch(@Valid @RequestBody ApprovalBatchExecuteRequest request) {
         Long tenantId = getTenantId();
         Long userId = getLoginUserId();
@@ -754,11 +744,15 @@ public class AgentApprovalToolController {
                 }
                 taskService.validateTask(userId, taskId);
             }
-            for (String taskId : taskIds) {
+            for (int index = 0; index < taskIds.size(); index++) {
+                String taskId = taskIds.get(index);
                 if ("APPROVE".equals(action)) {
                     taskService.approveTask(userId, new BpmTaskApproveReqVO().setId(taskId).setReason(reason));
                 } else {
                     taskService.rejectTask(userId, new BpmTaskRejectReqVO().setId(taskId).setReason(reason));
+                }
+                if (index == 0) {
+                    approvalBatchTestHook.afterFirstMutation();
                 }
             }
             ApprovalBatchExecuteResponse response = new ApprovalBatchExecuteResponse();
@@ -1008,22 +1002,6 @@ public class AgentApprovalToolController {
             status.put("approvalStatus", approval.get("status"));
         }
         return status;
-    }
-
-    /**
-     * Legacy raw writes are intentionally retired. Keeping the route as an
-     * explicit 410 prevents older clients from silently bypassing the
-     * ApprovalCard/HITL contract while producing a diagnosable migration
-     * response instead of executing BPM directly.
-     */
-    @PostMapping("/tasks/approve") @Operation(summary = "已废弃：审批通过待办") @PreAuthorize("@ss.hasPermission('bpm:task:update')")
-    public TaskActionResponse approveTodoTask(@Valid @RequestBody TaskApproveRequest request) {
-        throw ServiceExceptionUtil.exception0(410, "AGENT_APPROVAL_CARD_REQUIRED：请先生成审批预览并通过 ApprovalCard 确认");
-    }
-
-    @PostMapping("/tasks/reject") @Operation(summary = "已废弃：驳回待办") @PreAuthorize("@ss.hasPermission('bpm:task:update')")
-    public TaskActionResponse rejectTodoTask(@Valid @RequestBody TaskRejectRequest request) {
-        throw ServiceExceptionUtil.exception0(410, "AGENT_APPROVAL_CARD_REQUIRED：请先生成审批预览并通过 ApprovalCard 确认");
     }
 
     private String validateBatchPreview(ApprovalBatchPreviewRequest request) {
@@ -1327,9 +1305,9 @@ public class AgentApprovalToolController {
     }
 
     @SuppressWarnings("unchecked")
-    private ApprovalSubmitRequest toApprovalSubmitRequest(Map<String, Object> request) {
+    private ApprovalRequestData toApprovalRequestData(Map<String, Object> request) {
         if (request == null) throw ServiceExceptionUtil.exception0(400, "审批申请参数不能为空");
-        ApprovalSubmitRequest result = new ApprovalSubmitRequest();
+        ApprovalRequestData result = new ApprovalRequestData();
         result.setRequestType(requiredBinding(request, "requestType").toLowerCase(Locale.ROOT));
         result.setStartTime(parseApprovalTime(request.get("startTime"), "startTime"));
         result.setEndTime(parseApprovalTime(request.get("endTime"), "endTime"));

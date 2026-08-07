@@ -81,6 +81,17 @@ public class AgentApprovalBatchReconciliationService {
             hasFailure |= "FAILED".equals(observation.status);
         }
 
+        // If every original task is still active, the MySQL transaction was
+        // rolled back before any BPM fact became durable. Release the
+        // confirmation claim so the user can make a deliberate retry; this
+        // read-only reconciliation must never submit the batch itself.
+        if (hasPending && !hasSuccess && !hasUnknown && !hasFailure) {
+            previewService.release(tenantId, userId, previewId, idempotencyKey);
+            return state(previewId, operationId, "NOT_COMMITTED",
+                    resultData(previewId, action, false, results),
+                    "批量审批事务未提交，原待办仍未变更；已释放确认占用，请人工重新确认后再执行");
+        }
+
         if (hasFailure) {
             String resultStatus = hasSuccess || hasPending || hasUnknown
                     ? "INCONSISTENT" : "FAILED_FINAL";

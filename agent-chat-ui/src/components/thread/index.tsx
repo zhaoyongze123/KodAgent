@@ -65,6 +65,10 @@ import {
   reduceProcessEvents,
   type ProcessEvent,
 } from "./process-events";
+import {
+  maxDurableEventCursor,
+  mergePersistedProcessRuns,
+} from "@/lib/persisted-event-recovery";
 import { useThreadPresentation, type ProcessRun } from "./thread-presentation";
 import { inferToolName, toolLabel } from "./tool-labels";
 import { createAgentStreamOptions } from "@/lib/agent-stream-options";
@@ -656,6 +660,8 @@ export function Thread() {
     ProcessRun[]
   >([]);
   const [persistedInterrupt, setPersistedInterrupt] = useState<unknown>();
+  const persistedEventCursorRef = useRef<number | undefined>(undefined);
+  const recoveredRunRef = useRef<string | null>(null);
   const isLargeScreen = useMediaQuery("(min-width: 1024px)");
 
   const stream = useStreamContext();
@@ -695,16 +701,43 @@ export function Thread() {
   }, []);
 
   const loadPersistedProcessRuns = useCallback(
-    async (signal?: AbortSignal) => {
+    async (
+      signal?: AbortSignal,
+      mode: "snapshot" | "cursor" = "snapshot",
+    ) => {
       if (!threadId) return;
       try {
+        const afterCursor =
+          mode === "cursor" ? persistedEventCursorRef.current : undefined;
+        const query =
+          afterCursor === undefined
+            ? ""
+            : `?afterCursor=${encodeURIComponent(String(afterCursor))}`;
         const response = await fetch(
-          `/api/agent-events/${encodeURIComponent(threadId)}`,
+          `/api/agent-events/${encodeURIComponent(threadId)}${query}`,
           { signal, cache: "no-store" },
         );
         if (!response.ok) return;
         const payload = await response.json();
-        setPersistedProcessRuns(parsePersistedProcessRuns(payload));
+        const parsed = parsePersistedProcessRuns(payload);
+        const nextCursor = maxDurableEventCursor(payload);
+        if (mode === "snapshot") {
+          persistedEventCursorRef.current = nextCursor;
+          setPersistedProcessRuns(parsed);
+          return;
+        }
+        if (
+          nextCursor !== undefined &&
+          (persistedEventCursorRef.current === undefined ||
+            nextCursor > persistedEventCursorRef.current)
+        ) {
+          persistedEventCursorRef.current = nextCursor;
+        }
+        if (parsed.length) {
+          setPersistedProcessRuns((current) =>
+            mergePersistedProcessRuns(current, parsed),
+          );
+        }
       } catch (error: unknown) {
         if ((error as { name?: string })?.name !== "AbortError") {
           console.warn("读取 Agent 过程事件失败", error);
@@ -740,6 +773,8 @@ export function Thread() {
   useEffect(() => {
     setPersistedProcessRuns([]);
     setPersistedInterrupt(undefined);
+    persistedEventCursorRef.current = undefined;
+    recoveredRunRef.current = null;
     if (!threadId) return;
 
     const controller = new AbortController();
@@ -753,9 +788,27 @@ export function Thread() {
     if (!threadId) return;
     const refresh = () => void loadPersistedState();
     if (!isLoading) return;
-    const timer = window.setInterval(refresh, 1000);
+    const timer = window.setInterval(() => {
+      refresh();
+      void loadPersistedProcessRuns(undefined, "cursor");
+    }, 1000);
     return () => window.clearInterval(timer);
-  }, [isLoading, loadPersistedState, threadId]);
+  }, [isLoading, loadPersistedProcessRuns, loadPersistedState, threadId]);
+
+  useEffect(() => {
+    if (!recoveringRunId) {
+      recoveredRunRef.current = null;
+      return;
+    }
+    if (recoveredRunRef.current === recoveringRunId) return;
+    recoveredRunRef.current = recoveringRunId;
+    const controller = new AbortController();
+    // A transport recovery is a Snapshot boundary. It catches an updated
+    // narration whose event identity/cursor was retained by Java's upsert
+    // contract, while the following stream/poll continues from the cursor.
+    void loadPersistedProcessRuns(controller.signal, "snapshot");
+    return () => controller.abort();
+  }, [loadPersistedProcessRuns, recoveringRunId]);
 
   const wasLoading = useRef(false);
   useEffect(() => {
@@ -771,7 +824,7 @@ export function Thread() {
     // process history is reloaded below; terminal status comes from LangGraph
     // and backend events.
     const timer = window.setTimeout(() => {
-      void loadPersistedProcessRuns();
+      void loadPersistedProcessRuns(undefined, "snapshot");
     }, 300);
     return () => window.clearTimeout(timer);
   }, [
@@ -807,6 +860,8 @@ export function Thread() {
     processStartedAt.current = null;
     setProcessElapsedSeconds(0);
     setPersistedProcessRuns([]);
+    persistedEventCursorRef.current = undefined;
+    recoveredRunRef.current = null;
     // close artifact and reset artifact context
     closeArtifact();
     setArtifactContext({});

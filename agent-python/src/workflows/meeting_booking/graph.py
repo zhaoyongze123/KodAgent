@@ -16,8 +16,8 @@ from langgraph.graph import END, START, StateGraph
 from ...runtime.operation_payload import merge_operation_payload, operation_payload
 from ...runtime.operation_runtime import (
     OperationRuntime,
+    action_id_for,
     get_active_operation,
-    operation_action_id,
     reset_active_operation,
     set_active_operation,
 )
@@ -521,7 +521,7 @@ def run_meeting_booking_workflow(
             runtime_context["messageId"] = message_id
             set_message_context(message_id)
     operation_runtime = OperationRuntime.start(
-        action_id=operation_action_id(operation),
+        action_id=action_id_for("meeting", operation),
         capability_id="meeting",
         # Meeting writes are fully migrated to Operation/Effect.  A missing
         # runtime is a deployment error, never permission to call the legacy

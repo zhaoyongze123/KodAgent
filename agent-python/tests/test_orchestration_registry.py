@@ -27,10 +27,8 @@ def test_business_registry_contains_domain_contracts_and_four_subagents():
     assert "find_nearest_party_file_by_publish_time" not in names
     assert "confirm_approval_batch_action" in names
     assert "execute_approval_batch_action" not in names
-    # Bare BPM mutation helpers may exist for legacy/internal callers, but
-    # must never become model-visible Agent tools. Approval writes enter only
-    # through preview + official HITL confirmation.
-    assert {"approve_approval_task", "reject_approval_task", "submit_approval_request"}.isdisjoint(names)
+    # Approval writes enter only through preview + official HITL confirmation.
+    assert "confirm_approval_task_action" in names
     assert {item["name"] for item in build_subagents("2026-07-29 12:00:00")} == {
         "approvals_agent",
         "meeting_rooms_agent",
@@ -46,7 +44,6 @@ def test_subagent_capability_boundaries_keep_party_receipts_and_approval_writes_
 
     assert {"preview_approval_batch_action", "preview_approval_task_action"} <= approval_tools
     assert "find_nearest_party_file_by_publish_time" not in party_tools
-    assert {"approve_approval_task", "reject_approval_task", "submit_approval_request", "confirm_approval_batch_action", "confirm_approval_task_action"}.isdisjoint(approval_tools)
     # Request submission stays unavailable to models until Java exposes a
     # durable approval-request draft plus the same ApprovalCard/HITL binding
     # used by meeting, schedule and task actions.

@@ -1,41 +1,9 @@
-type StructuredToolError = {
-  code?: string;
-  message?: string;
-};
+import {
+  isApprovalControlFlow,
+  type ApprovalToolMessage,
+} from "./approval-tool-result.ts";
 
-type StructuredToolResponse = {
-  error?: StructuredToolError | null;
-};
-
-export type MeetingToolMessage = {
-  name?: string;
-  status?: "success" | "error";
-  content: unknown;
-};
-
-const OFFICIAL_HITL_REJECTION =
-  /^User rejected the tool call for `confirm_meeting_booking` with id .+?\. The tool was not executed\b/;
-
-function parseStructuredToolResponse(
-  content: unknown,
-): StructuredToolResponse | undefined {
-  const value =
-    typeof content === "string"
-      ? (() => {
-          try {
-            return JSON.parse(content) as unknown;
-          } catch {
-            return undefined;
-          }
-        })()
-      : content;
-
-  if (!value || typeof value !== "object") return undefined;
-  const response = value as StructuredToolResponse;
-  return response.error && typeof response.error === "object"
-    ? response
-    : undefined;
-}
+export type MeetingToolMessage = ApprovalToolMessage;
 
 /**
  * Official DeepAgents HITL reject is an error-status ToolMessage by protocol,
@@ -45,18 +13,5 @@ function parseStructuredToolResponse(
 export function isMeetingApprovalCancellation(
   message: MeetingToolMessage,
 ): boolean {
-  if (
-    message.name !== "confirm_meeting_booking" ||
-    message.status !== "error"
-  ) {
-    return false;
-  }
-
-  const response = parseStructuredToolResponse(message.content);
-  if (response?.error?.code === "APPROVAL_REJECTED") return true;
-
-  return (
-    typeof message.content === "string" &&
-    OFFICIAL_HITL_REJECTION.test(message.content.trim())
-  );
+  return message.name === "confirm_meeting_booking" && isApprovalControlFlow(message);
 }

@@ -16,6 +16,4 @@ public class OaAgentIdentityProperties {
     private long ttlSeconds = 7200L;
     /** Dify 转发票据时使用的请求头。 */
     private String headerName = "X-Agent-Identity";
-    /** 是否允许旧版 X-Agent-User-Id，仅用于迁移期本地联调。 */
-    private boolean legacyPrincipalEnabled = false;
 }
