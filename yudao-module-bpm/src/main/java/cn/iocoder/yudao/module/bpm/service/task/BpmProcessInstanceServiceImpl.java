@@ -311,8 +311,8 @@ public class BpmProcessInstanceServiceImpl implements BpmProcessInstanceService 
         // 1. 构建查询条件
         HistoricProcessInstanceQuery processInstanceQuery = historyService.createHistoricProcessInstanceQuery()
                 .includeProcessVariables()
-                .processInstanceTenantId(FlowableUtils.getTenantId())
                 .orderByProcessInstanceStartTime().desc();
+        FlowableUtils.applyTenantFilter(processInstanceQuery);
         if (userId != null) { // 【我的流程】菜单时，需要传递该字段
             processInstanceQuery.startedBy(String.valueOf(userId));
         } else if (pageReqVO.getStartUserId() != null) { // 【管理流程】菜单时，才会传递该字段
@@ -819,6 +819,9 @@ public class BpmProcessInstanceServiceImpl implements BpmProcessInstanceService 
                 .processDefinitionId(definition.getId())
                 .businessKey(businessKey)
                 .variables(variables);
+        if (FlowableUtils.isSingleTenantMode()) {
+            processInstanceBuilder.tenantId(FlowableUtils.getTenantId());
+        }
         // 3.1 创建流程 ID
         BpmModelMetaInfoVO.ProcessIdRule processIdRule = processDefinitionInfo.getProcessIdRule();
         if (processIdRule != null && Boolean.TRUE.equals(processIdRule.getEnable())) {

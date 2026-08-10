@@ -15,6 +15,7 @@ interface PluginOptions {
 
 const GLOBAL_CONFIG_FILE_NAME = '_app.config.js';
 const VBEN_ADMIN_PRO_APP_CONF = '_VBEN_ADMIN_PRO_APP_CONF_';
+const OA_RUNTIME_CONFIG_FILE_NAME = 'oa-runtime-config.js';
 
 /**
  * 用于将配置文件抽离出来并注入到项目中
@@ -64,7 +65,13 @@ async function viteExtraAppConfigPlugin({
 
       return {
         html,
-        tags: [{ attrs: { src: appConfigSrc }, tag: 'script' }],
+        tags: [
+          {
+            attrs: { src: `${publicPath}${OA_RUNTIME_CONFIG_FILE_NAME}` },
+            tag: 'script',
+          },
+          { attrs: { src: appConfigSrc }, tag: 'script' },
+        ],
       };
     },
   };

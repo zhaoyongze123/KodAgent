@@ -83,9 +83,10 @@ public class BpmProcessDefinitionServiceImpl implements BpmProcessDefinitionServ
 
     @Override
     public ProcessDefinition getActiveProcessDefinition(String key) {
-        return repositoryService.createProcessDefinitionQuery()
-                .processDefinitionTenantId(FlowableUtils.getTenantId())
-                .processDefinitionKey(key).active().singleResult();
+        ProcessDefinitionQuery query = repositoryService.createProcessDefinitionQuery()
+                .processDefinitionKey(key).active();
+        FlowableUtils.applyTenantFilter(query);
+        return query.singleResult();
     }
 
     @Override
@@ -216,7 +217,7 @@ public class BpmProcessDefinitionServiceImpl implements BpmProcessDefinitionServ
     @Override
     public PageResult<ProcessDefinition> getProcessDefinitionPage(BpmProcessDefinitionPageReqVO pageVO) {
         ProcessDefinitionQuery query = repositoryService.createProcessDefinitionQuery();
-        query.processDefinitionTenantId(FlowableUtils.getTenantId());
+        FlowableUtils.applyTenantFilter(query);
         if (StrUtil.isNotBlank(pageVO.getKey())) {
             query.processDefinitionKey(pageVO.getKey());
         }
@@ -240,7 +241,7 @@ public class BpmProcessDefinitionServiceImpl implements BpmProcessDefinitionServ
             query.active();
         }
         // 执行查询
-        query.processDefinitionTenantId(FlowableUtils.getTenantId());
+        FlowableUtils.applyTenantFilter(query);
         return query.list();
     }
 

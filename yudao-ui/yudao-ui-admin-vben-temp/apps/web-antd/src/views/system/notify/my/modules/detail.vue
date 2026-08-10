@@ -10,8 +10,9 @@ import { formatDateTime } from '@vben/utils';
 import { Button, Empty, Tag } from 'ant-design-vue';
 
 import { extractNoticeId } from '#/api/system/notify/message';
-import { getNotice } from '#/api/system/notice';
+import { getNotice, getNoticeAttachmentPreviewUrl } from '#/api/system/notice';
 import { router } from '#/router';
+import { getOaFilePreviewUrl, normalizeOaAssetUrl } from '#/utils';
 import { resolveNotificationPresentation } from '#/views/oa-lite/notification-presenter';
 
 const messageData = ref<SystemNotifyMessageApi.NotifyMessage>();
@@ -44,11 +45,36 @@ const [ModalApi, modalApi] = useVbenModal({
   },
 });
 
-function handlePreview(url?: string) {
-  if (!url) {
+async function handlePreview(attachment: SystemNoticeApi.NoticeAttachment) {
+  if (!noticeDetail.value?.id) {
     return;
   }
-  window.open(url, '_blank', 'noopener,noreferrer');
+  const previewWindow = window.open('about:blank', '_blank', 'noopener,noreferrer');
+  try {
+    const sourceUrl = await getNoticeAttachmentPreviewUrl(noticeDetail.value.id, attachment.id);
+    const normalizedUrl = normalizeOaAssetUrl(sourceUrl);
+    if (!normalizedUrl) {
+      previewWindow?.close();
+      return;
+    }
+    const previewUrl = getOaFilePreviewUrl(normalizedUrl);
+    if (previewWindow) {
+      previewWindow.location.href = previewUrl;
+    } else {
+      window.open(previewUrl, '_blank', 'noopener,noreferrer');
+    }
+  } catch (error) {
+    previewWindow?.close();
+    throw error;
+  }
+}
+
+function handleDownload(url?: string) {
+  const normalizedUrl = normalizeOaAssetUrl(url);
+  if (!normalizedUrl) {
+    return;
+  }
+  window.open(normalizedUrl, '_blank', 'noopener,noreferrer');
 }
 
 function handleNotificationAction() {
@@ -159,10 +185,10 @@ function handleNotificationAction() {
                     <p>{{ item.type || '未知类型' }}</p>
                   </div>
                   <div class="notify-detail__attachment-actions">
-                    <Button type="link" size="small" @click="handlePreview(item.url)">
+                    <Button type="link" size="small" @click="handlePreview(item)">
                       预览
                     </Button>
-                    <Button type="link" size="small" @click="handlePreview(item.url)">
+                    <Button type="link" size="small" @click="handleDownload(item.url)">
                       下载
                     </Button>
                   </div>

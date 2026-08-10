@@ -2407,6 +2407,7 @@ CREATE TABLE `system_kod_sso_user_bind` (
   `kod_username` varchar(128) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '' COMMENT 'å¯é“äº‘ç”¨æˆ·å',
   `kod_nickname` varchar(128) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT '' COMMENT 'å¯é“äº‘æ˜µç§°',
   `raw_profile_json` text COLLATE utf8mb4_unicode_ci COMMENT 'å¯é“äº‘åŽŸå§‹ç”¨æˆ·ä¿¡æ¯',
+  `kod_access_token` varchar(2048) COLLATE utf8mb4_unicode_ci DEFAULT NULL COMMENT 'KodBox SSO access token',
   `creator` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT '' COMMENT 'åˆ›å»ºè€…',
   `create_time` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'åˆ›å»ºæ—¶é—´',
   `updater` varchar(64) COLLATE utf8mb4_unicode_ci DEFAULT '' COMMENT 'æ›´æ–°è€…',

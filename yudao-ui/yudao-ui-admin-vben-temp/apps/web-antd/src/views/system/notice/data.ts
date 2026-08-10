@@ -41,6 +41,9 @@ export function useFormSchema(): VbenFormSchema[] {
       fieldName: 'pinned',
       label: '置顶状态',
       component: 'Switch',
+      componentProps: {
+        class: '!w-11',
+      },
       defaultValue: false,
     },
     {
@@ -153,7 +156,7 @@ export function useGridColumns(): VxeTableGridOptions['columns'] {
     },
     {
       title: '操作',
-      width: 280,
+      width: 320,
       fixed: 'right',
       slots: { default: 'actions' },
     },

@@ -15,8 +15,9 @@ import {
   updateAllNotifyMessageRead,
   updateNotifyMessageRead,
 } from '#/api/system/notify/message';
-import { getNotice } from '#/api/system/notice';
+import { getNotice, getNoticeAttachmentPreviewUrl } from '#/api/system/notice';
 import { router } from '#/router';
+import { getOaFilePreviewUrl, normalizeOaAssetUrl } from '#/utils';
 import {
   resolveNotificationPresentation,
   resolveNotificationPreview,
@@ -178,6 +179,38 @@ function handleOpenNotificationAction() {
   } else if (action.url) {
     window.open(action.url, '_blank', 'noopener,noreferrer');
   }
+}
+
+async function handleAttachmentPreview(attachment: SystemNoticeApi.NoticeAttachment) {
+  if (!selectedNotice.value?.id) {
+    return;
+  }
+  const previewWindow = window.open('about:blank', '_blank', 'noopener,noreferrer');
+  try {
+    const sourceUrl = await getNoticeAttachmentPreviewUrl(selectedNotice.value.id, attachment.id);
+    const normalizedUrl = normalizeOaAssetUrl(sourceUrl);
+    if (!normalizedUrl) {
+      previewWindow?.close();
+      return;
+    }
+    const previewUrl = getOaFilePreviewUrl(normalizedUrl);
+    if (previewWindow) {
+      previewWindow.location.href = previewUrl;
+    } else {
+      window.open(previewUrl, '_blank', 'noopener,noreferrer');
+    }
+  } catch (error) {
+    previewWindow?.close();
+    throw error;
+  }
+}
+
+function handleAttachmentDownload(url?: string) {
+  const normalizedUrl = normalizeOaAssetUrl(url);
+  if (!normalizedUrl) {
+    return;
+  }
+  window.open(normalizedUrl, '_blank', 'noopener,noreferrer');
 }
 
 onMounted(() => {
@@ -428,14 +461,14 @@ onUnmounted(() => {
                     <Button
                       type="link"
                       size="small"
-                      @click="window.open(attachment.url, '_blank', 'noopener,noreferrer')"
+                      @click="handleAttachmentPreview(attachment)"
                     >
                       预览
                     </Button>
                     <Button
                       type="link"
                       size="small"
-                      @click="window.open(attachment.url, '_blank', 'noopener,noreferrer')"
+                      @click="handleAttachmentDownload(attachment.url)"
                     >
                       下载
                     </Button>

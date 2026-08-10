@@ -1,3 +1,10 @@
+import { useAppConfig } from '@vben/hooks';
+
+const { filePreviewFetchOrigin, filePreviewURL } = useAppConfig(
+  import.meta.env,
+  import.meta.env.PROD,
+);
+
 function normalizeBasePath(basePath: string) {
   if (!basePath || basePath === '/') {
     return '';
@@ -45,22 +52,10 @@ function shouldRewriteOrigin(url: URL) {
   );
 }
 
-const OFFICE_PREVIEW_EXTENSIONS = new Set([
-  'DOC',
-  'DOCX',
-  'XLS',
-  'XLSX',
-  'PPT',
-  'PPTX',
-]);
-
-function getFileExtension(fileName?: string) {
-  const normalized = (fileName || '').split(/[?#]/, 1)[0] || '';
-  const lastPart = normalized.slice(normalized.lastIndexOf('/') + 1);
-  const extension = lastPart.includes('.')
-    ? lastPart.slice(lastPart.lastIndexOf('.') + 1)
-    : '';
-  return extension.toUpperCase();
+function requiresBrowserAuthentication(url: URL) {
+  return url.pathname.startsWith(
+    '/admin-api/system/party-file/attachment/access',
+  );
 }
 
 export function normalizeOaAssetUrl(rawUrl?: null | string) {
@@ -101,29 +96,36 @@ export function normalizeOaAssetUrl(rawUrl?: null | string) {
 }
 
 /**
- * Build an offline preview URL for office documents.
+ * Build the local preview-service URL for an OA file.
  *
  * The preview service must fetch the file URL itself, so the backend file
  * endpoint is intentionally kept as the Base64-encoded `url` query parameter.
- * KKFileView 4.1.0 decodes this parameter before fetching it. The backend
- * marks that endpoint as public (`/infra/file/{configId}/get/**`), which lets
- * KKFileView fetch it without a browser login cookie.
+ * KKFileView 4.1.0 decodes this parameter before fetching it. Only HTTP(S)
+ * sources can be delegated to KKFileView; browser-local sources and
+ * permission-bound attachment endpoints must keep their original URL because
+ * KKFileView cannot forward the browser session.
  */
-export function getOaFilePreviewUrl(fileUrl: string, fileName?: string) {
+export function getOaFilePreviewUrl(fileUrl: string) {
   const normalizedFileUrl = (fileUrl || '').trim();
-  const previewEndpoint = (import.meta.env.VITE_FILE_PREVIEW_URL || '').trim();
-  if (
-    !normalizedFileUrl ||
-    !previewEndpoint ||
-    !OFFICE_PREVIEW_EXTENSIONS.has(getFileExtension(fileName))
-  ) {
+  const previewEndpoint = filePreviewURL.trim();
+  if (!normalizedFileUrl || !previewEndpoint) {
     return normalizedFileUrl;
   }
   try {
     const baseUrl =
-      typeof window === 'undefined' ? 'http://localhost/' : window.location.origin;
+      typeof window === 'undefined'
+        ? 'http://localhost/'
+        : window.location.origin;
+    const sourceUrl = new URL(normalizedFileUrl, baseUrl);
+    if (
+      !['http:', 'https:'].includes(sourceUrl.protocol) ||
+      requiresBrowserAuthentication(sourceUrl)
+    ) {
+      return normalizedFileUrl;
+    }
     const previewUrl = new URL(previewEndpoint, baseUrl);
-    const bytes = new TextEncoder().encode(normalizedFileUrl);
+    const previewFetchUrl = resolvePreviewFetchUrl(sourceUrl, baseUrl);
+    const bytes = new TextEncoder().encode(previewFetchUrl);
     let binary = '';
     for (const byte of bytes) {
       binary += String.fromCharCode(byte);
@@ -132,5 +134,29 @@ export function getOaFilePreviewUrl(fileUrl: string, fileName?: string) {
     return previewUrl.toString();
   } catch {
     return normalizedFileUrl;
+  }
+}
+
+/**
+ * A preview service in Docker cannot use the browser's localhost address.
+ * This optional origin is only used in KKFileView's server-side fetch URL;
+ * browser navigation and SSO redirects remain unchanged.
+ */
+function resolvePreviewFetchUrl(sourceUrl: URL, browserOrigin: string) {
+  const fetchOrigin = filePreviewFetchOrigin.trim();
+  if (!fetchOrigin || sourceUrl.origin !== browserOrigin) {
+    return sourceUrl.toString();
+  }
+  try {
+    const fetchBaseUrl = new URL(fetchOrigin);
+    if (!['http:', 'https:'].includes(fetchBaseUrl.protocol)) {
+      return sourceUrl.toString();
+    }
+    return new URL(
+      `${sourceUrl.pathname}${sourceUrl.search}${sourceUrl.hash}`,
+      fetchBaseUrl,
+    ).toString();
+  } catch {
+    return sourceUrl.toString();
   }
 }

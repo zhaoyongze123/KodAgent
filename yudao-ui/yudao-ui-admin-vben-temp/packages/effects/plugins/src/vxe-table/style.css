@@ -115,7 +115,7 @@
 }
 
 .vxe-grid--layout-body-content-wrapper {
-  overflow: hidden;
+  overflow: auto;
 }
 
 /* 必填字段错误样式 */

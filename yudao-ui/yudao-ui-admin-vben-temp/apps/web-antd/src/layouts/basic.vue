@@ -13,9 +13,10 @@ import { preferences } from '@vben/preferences';
 import { useAccessStore, useUserStore } from '@vben/stores';
 import { useWebSocket } from '@vueuse/core';
 
-import { message } from 'ant-design-vue';
+import { Dropdown, Menu, message } from 'ant-design-vue';
 
 import { router } from '#/router';
+import { useAuthStore } from '#/store';
 import {
   getStandaloneCenterMenuItems,
   getStandaloneCenterMenuPathSet,
@@ -122,6 +123,7 @@ function flattenMenus(
 }
 
 const route = useRoute();
+const authStore = useAuthStore();
 const userStore = useUserStore();
 const accessStore = useAccessStore();
 const { hasAccessByCodes } = useAccess();
@@ -144,6 +146,12 @@ const {
 const avatar = computed(
   () => userStore.userInfo?.avatar ?? preferences.app.defaultAvatar,
 );
+
+function handleUserMenuClick(key: string) {
+  if (key === 'logout') {
+    void authStore.logout();
+  }
+}
 
 const accessRootMenus = computed<MenuRecordRaw[]>(() => accessStore.accessMenus);
 const accessFlatMenus = computed<MenuRecordRaw[]>(() =>
@@ -625,9 +633,29 @@ watch(
 
       <div class="oa-lite-unified-actions">
         <div class="oa-lite-unified-action-card">
-          <span class="oa-lite-unified-user-name">
-            {{ userStore.userInfo?.nickname || userStore.userInfo?.username || '-' }}
-          </span>
+          <Dropdown placement="bottomRight" :trigger="['click']">
+            <button
+              class="oa-lite-unified-user-button"
+              type="button"
+              aria-haspopup="menu"
+              aria-label="打开用户菜单"
+            >
+              <span class="oa-lite-unified-user-name">
+                {{ userStore.userInfo?.nickname || userStore.userInfo?.username || '-' }}
+              </span>
+              <IconifyIcon icon="solar:alt-arrow-down-outline" />
+            </button>
+            <template #overlay>
+              <Menu @click="(e) => handleUserMenuClick(e.key as string)">
+                <Menu.Item key="logout">
+                  <div class="oa-lite-unified-user-menu-item">
+                    <IconifyIcon icon="solar:logout-2-outline" />
+                    退出登录
+                  </div>
+                </Menu.Item>
+              </Menu>
+            </template>
+          </Dropdown>
         </div>
       </div>
     </header>
@@ -852,11 +880,42 @@ watch(
   background: transparent;
 }
 
+.oa-lite-unified-user-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--oa-ink);
+  cursor: pointer;
+  font: inherit;
+  transition:
+    background-color 0.2s ease,
+    border-color 0.2s ease,
+    color 0.2s ease;
+}
+
+.oa-lite-unified-user-button:hover,
+.oa-lite-unified-user-button:focus-visible {
+  border-color: var(--oa-shell-border);
+  background: var(--oa-shell-surface-subtle);
+  color: var(--oa-accent);
+  outline: none;
+}
+
 .oa-lite-unified-user-name {
   color: var(--oa-ink);
   font-size: 13px;
   font-weight: 500;
   white-space: nowrap;
+}
+
+.oa-lite-unified-user-menu-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .oa-lite-unified-icon-button {

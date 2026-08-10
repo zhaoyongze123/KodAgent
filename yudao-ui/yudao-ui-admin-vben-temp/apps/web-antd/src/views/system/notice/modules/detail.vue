@@ -4,13 +4,23 @@ import type { SystemNoticeApi } from '#/api/system/notice';
 import { computed, ref } from 'vue';
 
 import { useVbenModal } from '@vben/common-ui';
+import { IconifyIcon } from '@vben/icons';
 import { formatDateTime } from '@vben/utils';
 
-import { Button, Empty, Tag } from 'ant-design-vue';
+import { Modal as AntModal, Button, Empty, Tag } from 'ant-design-vue';
 
-import { getNotice, readNotice } from '#/api/system/notice';
+import {
+  getNotice,
+  getNoticeAttachmentPreviewUrl,
+  readNotice,
+} from '#/api/system/notice';
+import { getOaFilePreviewUrl, normalizeOaAssetUrl } from '#/utils';
 
 const notice = ref<SystemNoticeApi.Notice>();
+const previewOpen = ref(false);
+const previewLoading = ref(false);
+const previewUrl = ref('');
+const previewTitle = ref('附件预览');
 
 const [Modal, modalApi] = useVbenModal({
   async onOpenChange(isOpen: boolean) {
@@ -63,18 +73,32 @@ const readSummaryText = computed(
   () => `已有 ${notice.value?.readCount || 0} 人阅读，${notice.value?.unreadCount || 0} 人未读`,
 );
 
-function handlePreview(url?: string) {
-  if (!url) {
+async function handlePreview(attachment: SystemNoticeApi.NoticeAttachment) {
+  if (!notice.value?.id) {
     return;
   }
-  window.open(url, '_blank', 'noopener,noreferrer');
+  previewTitle.value = attachment.name || '附件预览';
+  previewOpen.value = true;
+  previewLoading.value = true;
+  previewUrl.value = '';
+  try {
+    const sourceUrl = await getNoticeAttachmentPreviewUrl(notice.value.id, attachment.id);
+    const normalizedUrl = normalizeOaAssetUrl(sourceUrl);
+    if (!normalizedUrl) {
+      return;
+    }
+    previewUrl.value = getOaFilePreviewUrl(normalizedUrl);
+  } finally {
+    previewLoading.value = false;
+  }
 }
 
 function handleDownload(url?: string) {
-  if (!url) {
+  const normalizedUrl = normalizeOaAssetUrl(url);
+  if (!normalizedUrl) {
     return;
   }
-  window.open(url, '_blank', 'noopener,noreferrer');
+  window.open(normalizedUrl, '_blank', 'noopener,noreferrer');
 }
 
 function handleBatchDownload() {
@@ -97,6 +121,23 @@ function formatFileSize(size?: number) {
     unitIndex += 1;
   }
   return `${current >= 100 ? current.toFixed(0) : current.toFixed(2).replace(/\.?0+$/, '')} ${units[unitIndex]}`;
+}
+
+function getFileIcon(name?: string) {
+  const extension = name?.split('.').pop()?.toLowerCase();
+  if (extension === 'pdf') {
+    return 'lucide:file-type-2';
+  }
+  if (['doc', 'docx', 'txt'].includes(extension || '')) {
+    return 'lucide:file-text';
+  }
+  if (['csv', 'xls', 'xlsx'].includes(extension || '')) {
+    return 'lucide:file-spreadsheet';
+  }
+  if (['gif', 'jpeg', 'jpg', 'png', 'webp'].includes(extension || '')) {
+    return 'lucide:image';
+  }
+  return 'lucide:file';
 }
 </script>
 
@@ -160,27 +201,24 @@ function formatFileSize(size?: number) {
           </dl>
         </section>
 
-        <section class="notice-detail__panel">
-          <div class="notice-detail__panel-head">
-            <div class="notice-detail__panel-title">附件信息</div>
-            <span v-if="attachmentCount" class="notice-detail__panel-extra">
-              共 {{ attachmentCount }} 个
-            </span>
-          </div>
+        <section class="notice-detail__panel notice-detail__attachment-panel">
           <div v-if="attachmentCount" class="notice-detail__attachments">
             <div
               v-for="item in notice.attachments"
               :key="item.id"
               class="notice-detail__attachment"
             >
+              <span class="notice-detail__attachment-icon" aria-hidden="true">
+                <IconifyIcon :icon="getFileIcon(item.name)" />
+              </span>
               <div class="notice-detail__attachment-body">
                 <div class="notice-detail__attachment-name">{{ item.name }}</div>
-                <div class="notice-detail__attachment-meta">
-                  {{ [item.type || '未知类型', formatFileSize(item.size)].filter(Boolean).join('，') }}
+                <div v-if="formatFileSize(item.size)" class="notice-detail__attachment-meta">
+                  {{ formatFileSize(item.size) }}
                 </div>
               </div>
               <div class="notice-detail__attachment-actions">
-                <Button size="small" type="link" @click="handlePreview(item.url)">
+                <Button size="small" type="link" @click="handlePreview(item)">
                   预览
                 </Button>
                 <Button size="small" type="link" @click="handleDownload(item.url)">
@@ -254,6 +292,22 @@ function formatFileSize(size?: number) {
       </aside>
     </div>
   </Modal>
+
+  <AntModal
+    v-model:open="previewOpen"
+    :footer="null"
+    :title="previewTitle"
+    width="900px"
+    destroy-on-close
+  >
+    <div v-if="previewLoading" class="notice-detail-preview-loading">正在加载预览...</div>
+    <iframe
+      v-else-if="previewUrl"
+      :src="previewUrl"
+      :title="`预览 ${previewTitle}`"
+      class="notice-detail-preview-frame"
+    ></iframe>
+  </AntModal>
 </template>
 
 <style scoped>
@@ -348,6 +402,10 @@ function formatFileSize(size?: number) {
   padding: 12px;
 }
 
+.notice-detail__attachment-panel {
+  padding: 10px 12px;
+}
+
 .notice-detail__panel-title {
   font-size: 13px;
   font-weight: 600;
@@ -402,22 +460,34 @@ function formatFileSize(size?: number) {
   padding-right: 4px;
 }
 
+.notice-detail__attachments {
+  margin-top: 0;
+}
+
 .notice-detail__attachment,
 .notice-detail__read-item {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 10px 0;
+}
+
+.notice-detail__read-item {
   border-bottom: 1px solid rgb(15 23 42 / 6%);
 }
 
-.notice-detail__attachment:last-child,
+.notice-detail__attachment {
+  padding: 10px;
+  border: 1px solid rgb(15 23 42 / 8%);
+  border-radius: 8px;
+  background: #f7f9fb;
+}
+
 .notice-detail__read-item:last-child {
   border-bottom: none;
   padding-bottom: 0;
 }
 
-.notice-detail__attachment:first-child,
 .notice-detail__read-item:first-child {
   padding-top: 0;
 }
@@ -457,6 +527,19 @@ function formatFileSize(size?: number) {
   font-size: 12px;
 }
 
+.notice-detail__attachment-icon {
+  display: inline-flex;
+  width: 36px;
+  height: 36px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: #e7f1fb;
+  color: #2674d9;
+  font-size: 21px;
+}
+
 .notice-detail__avatar {
   display: inline-flex;
   width: 34px;
@@ -474,6 +557,20 @@ function formatFileSize(size?: number) {
 .notice-detail__avatar--muted {
   background: linear-gradient(135deg, rgb(148 163 184 / 18%), rgb(203 213 225 / 20%));
   color: rgb(100 116 139);
+}
+
+.notice-detail-preview-loading {
+  display: grid;
+  min-height: 420px;
+  place-items: center;
+  color: #64748b;
+}
+
+.notice-detail-preview-frame {
+  display: block;
+  width: 100%;
+  height: 70vh;
+  border: 0;
 }
 
 @media (max-width: 960px) {

@@ -70,6 +70,7 @@ import { message, Modal, notification } from 'ant-design-vue';
 
 import { Tinymce as RichTextarea } from '#/components/tinymce';
 import { FileUpload, ImageUpload } from '#/components/upload';
+import { getOaFilePreviewUrl, normalizeOaAssetUrl } from '#/utils';
 type AdapterUploadProps = UploadProps & {
   aspectRatio?: string;
   crop?: boolean;
@@ -245,9 +246,9 @@ async function previewImage(
 ) {
   // 非图片文件直接打开链接
   if (!isImageFile(file)) {
-    const url = file.url || file.preview;
+    const url = normalizeOaAssetUrl(file.url || file.preview);
     if (url) {
-      window.open(url, '_blank');
+      window.open(getOaFilePreviewUrl(url), '_blank', 'noopener,noreferrer');
     } else {
       message.error($t('ui.formRules.previewWarning'));
     }

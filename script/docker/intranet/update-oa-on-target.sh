@@ -23,6 +23,8 @@ readonly APP_SERVICE="${APP_SERVICE:-oa-manual.service}"
 readonly NGINX_CONTAINER="${NGINX_CONTAINER:-oa-manual-nginx}"
 readonly HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:48180/actuator/health}"
 readonly FRONTEND_URL="${FRONTEND_URL:-http://127.0.0.1:18080/}"
+readonly RUNTIME_ENV_FILE="${OA_RUNTIME_ENV_FILE:-${APP_ROOT}/.env}"
+readonly RUNTIME_CONFIG_FILE="${OA_RUNTIME_CONFIG_FILE:-${HTML_ROOT}/oa-runtime-config.js}"
 readonly LOCK_FILE="${LOCK_FILE:-${UPDATE_ROOT}/.update.lock}"
 
 RELEASE_DIR=""
@@ -35,6 +37,17 @@ SQL_APPLIED=0
 APP_CHANGED=0
 FRONTEND_CHANGED=0
 APP_NEEDS_RESTART=0
+RUNTIME_PREVIEW_URL=""
+RUNTIME_CAPTCHA_ENABLE="false"
+RUNTIME_INTRANET_DEPLOYMENT="true"
+RUNTIME_API_ENCRYPT_ENABLE="false"
+RUNTIME_API_ENCRYPT_HEADER=""
+RUNTIME_API_ENCRYPT_ALGORITHM="AES"
+RUNTIME_API_ENCRYPT_REQUEST_KEY=""
+RUNTIME_API_ENCRYPT_RESPONSE_KEY=""
+RUNTIME_STORE_SECURE_KEY=""
+RUNTIME_BAIDU_MAP_KEY=""
+RUNTIME_BAIDU_ANALYTICS_CODE=""
 
 usage() {
   cat <<EOF
@@ -50,6 +63,10 @@ Release layout:
   CHANGELOG.md             required release notes
   SHA256SUMS               optional checksum file
   release.env              optional metadata, only RELEASE_ID is read
+
+The frontend package must not contain an environment-specific
+frontend/runtime/oa-runtime-config.js. The target server generates it from
+${RUNTIME_ENV_FILE} during apply.
 
 The script manages the isolated OA installation under ${OA_ROOT}.
 It never imports the 103 state snapshot and never modifies KodBox.
@@ -71,6 +88,84 @@ require_root() {
 
 require_command() {
   command -v "$1" >/dev/null 2>&1 || die "缺少命令：$1"
+}
+
+read_env_value() {
+  local file="$1"
+  local key="$2"
+  [[ -r "$file" ]] || return 0
+  awk -v key="$key" '
+    BEGIN { pattern = "^[[:space:]]*(export[[:space:]]+)?" key "[[:space:]]*=" }
+    $0 ~ pattern {
+      value = $0
+      sub(/^[^=]*=[[:space:]]*/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      if (value ~ /^".*"$/ || value ~ /^'"'"'.*'"'"'$/) {
+        value = substr(value, 2, length(value) - 2)
+      }
+    }
+    END { if (value != "") print value }
+  ' "$file"
+}
+
+runtime_value() {
+  local key="$1"
+  local value="${!key-}"
+  if [[ -z "$value" ]]; then
+    value="$(read_env_value "$RUNTIME_ENV_FILE" "$key")"
+  fi
+  printf '%s' "$value"
+}
+
+validate_runtime_boolean() {
+  local key="$1"
+  local value="$2"
+  [[ "$value" == true || "$value" == false ]] || die "${key} 必须是 true 或 false：${value}"
+}
+
+load_runtime_config() {
+  RUNTIME_PREVIEW_URL="$(runtime_value OA_FILE_PREVIEW_URL)"
+  RUNTIME_PREVIEW_FETCH_ORIGIN="$(runtime_value OA_FILE_PREVIEW_FETCH_ORIGIN)"
+  RUNTIME_CAPTCHA_ENABLE="$(runtime_value OA_CAPTCHA_ENABLE)"
+  RUNTIME_INTRANET_DEPLOYMENT="$(runtime_value OA_INTRANET_DEPLOYMENT)"
+  RUNTIME_API_ENCRYPT_ENABLE="$(runtime_value OA_API_ENCRYPT_ENABLE)"
+  RUNTIME_API_ENCRYPT_HEADER="$(runtime_value OA_API_ENCRYPT_HEADER)"
+  RUNTIME_API_ENCRYPT_ALGORITHM="$(runtime_value OA_API_ENCRYPT_ALGORITHM)"
+  RUNTIME_API_ENCRYPT_REQUEST_KEY="$(runtime_value OA_API_ENCRYPT_REQUEST_KEY)"
+  RUNTIME_API_ENCRYPT_RESPONSE_KEY="$(runtime_value OA_API_ENCRYPT_RESPONSE_KEY)"
+  RUNTIME_STORE_SECURE_KEY="$(runtime_value OA_STORE_SECURE_KEY)"
+  RUNTIME_BAIDU_MAP_KEY="$(runtime_value OA_BAIDU_MAP_KEY)"
+  RUNTIME_BAIDU_ANALYTICS_CODE="$(runtime_value OA_BAIDU_ANALYTICS_CODE)"
+
+  RUNTIME_CAPTCHA_ENABLE="${RUNTIME_CAPTCHA_ENABLE:-false}"
+  RUNTIME_INTRANET_DEPLOYMENT="${RUNTIME_INTRANET_DEPLOYMENT:-true}"
+  RUNTIME_API_ENCRYPT_ENABLE="${RUNTIME_API_ENCRYPT_ENABLE:-false}"
+  RUNTIME_API_ENCRYPT_ALGORITHM="${RUNTIME_API_ENCRYPT_ALGORITHM:-AES}"
+
+  [[ "$RUNTIME_PREVIEW_URL" =~ ^https?://[^[:space:]\"\'\\]+/onlinePreview$ ]] \
+    || die "OA_FILE_PREVIEW_URL 必须是以 /onlinePreview 结尾的 http(s) 地址：${RUNTIME_PREVIEW_URL:-<空>}"
+  if [[ -n "$RUNTIME_PREVIEW_FETCH_ORIGIN" ]]; then
+    [[ "$RUNTIME_PREVIEW_FETCH_ORIGIN" =~ ^https?://[^[:space:]\"\'\\]+$ ]] \
+      || die "OA_FILE_PREVIEW_FETCH_ORIGIN 必须是 http(s) 地址：${RUNTIME_PREVIEW_FETCH_ORIGIN}"
+  fi
+  validate_runtime_boolean OA_CAPTCHA_ENABLE "$RUNTIME_CAPTCHA_ENABLE"
+  validate_runtime_boolean OA_INTRANET_DEPLOYMENT "$RUNTIME_INTRANET_DEPLOYMENT"
+  validate_runtime_boolean OA_API_ENCRYPT_ENABLE "$RUNTIME_API_ENCRYPT_ENABLE"
+  [[ "$RUNTIME_CONFIG_FILE" == "$HTML_ROOT"/* ]] \
+    || die "运行时配置文件必须位于 OA 前端目录内：$RUNTIME_CONFIG_FILE"
+  [[ ! -e "$RELEASE_DIR/frontend/runtime/oa-runtime-config.js" ]] \
+    || die "更新包不能携带环境专属 frontend/runtime/oa-runtime-config.js；请由目标服务器生成。"
+  [[ ! -e "$RELEASE_DIR/frontend/dist/oa-runtime-config.js" ]] \
+    || die "更新包不能携带环境专属 frontend/dist/oa-runtime-config.js；请由目标服务器生成。"
+}
+
+js_quote() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\r'/\\r}"
+  value="${value//$'\n'/\\n}"
+  printf '"%s"' "$value"
 }
 
 safe_release_path() {
@@ -120,6 +215,7 @@ collect_release_files() {
   fi
   if (( HAS_FRONTEND )); then
     [[ -f "$RELEASE_DIR/frontend/dist/index.html" ]] || die "前端 dist 缺少 index.html。"
+    load_runtime_config
   fi
 }
 
@@ -237,6 +333,35 @@ replace_frontend() {
   log "已更新 OA 前端 dist。"
 }
 
+render_runtime_config() {
+  (( HAS_FRONTEND )) || return 0
+  local temporary_file="${RUNTIME_CONFIG_FILE}.new.$$"
+
+  umask 022
+  install -d -m 0755 "$(dirname "$RUNTIME_CONFIG_FILE")"
+  {
+    printf '%s\n' 'window.__OA_RUNTIME_CONFIG__ = Object.freeze({'
+    printf '  filePreviewURL: '; js_quote "$RUNTIME_PREVIEW_URL"; printf ',\n'
+    printf '  filePreviewFetchOrigin: '; js_quote "$RUNTIME_PREVIEW_FETCH_ORIGIN"; printf ',\n'
+    printf '  captchaEnable: %s,\n' "$RUNTIME_CAPTCHA_ENABLE"
+    printf '  intranetDeployment: %s,\n' "$RUNTIME_INTRANET_DEPLOYMENT"
+    printf '  apiEncrypt: {\n'
+    printf '    enable: %s,\n' "$RUNTIME_API_ENCRYPT_ENABLE"
+    printf '    header: '; js_quote "$RUNTIME_API_ENCRYPT_HEADER"; printf ',\n'
+    printf '    algorithm: '; js_quote "$RUNTIME_API_ENCRYPT_ALGORITHM"; printf ',\n'
+    printf '    requestKey: '; js_quote "$RUNTIME_API_ENCRYPT_REQUEST_KEY"; printf ',\n'
+    printf '    responseKey: '; js_quote "$RUNTIME_API_ENCRYPT_RESPONSE_KEY"; printf '\n'
+    printf '  },\n'
+    printf '  storeSecureKey: '; js_quote "$RUNTIME_STORE_SECURE_KEY"; printf ',\n'
+    printf '  baiduMapKey: '; js_quote "$RUNTIME_BAIDU_MAP_KEY"; printf ',\n'
+    printf '  baiduAnalyticsCode: '; js_quote "$RUNTIME_BAIDU_ANALYTICS_CODE"; printf '\n'
+    printf '%s\n' '});'
+  } > "$temporary_file"
+  install -m 0644 "$temporary_file" "$RUNTIME_CONFIG_FILE"
+  rm -f -- "$temporary_file"
+  log "已根据服务器环境变量生成 OA 运行时配置：$RUNTIME_CONFIG_FILE"
+}
+
 reload_nginx_if_needed() {
   (( FRONTEND_CHANGED )) || return 0
   log "校验并重新加载 OA Nginx。"
@@ -316,6 +441,7 @@ apply_release() {
   apply_sql
   replace_app
   replace_frontend
+  render_runtime_config
   reload_nginx_if_needed
   start_app
   if (( HAS_FRONTEND )); then

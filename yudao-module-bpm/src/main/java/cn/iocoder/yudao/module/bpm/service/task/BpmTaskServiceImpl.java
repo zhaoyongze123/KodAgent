@@ -116,8 +116,8 @@ public class BpmTaskServiceImpl implements BpmTaskService {
                 .taskAssignee(String.valueOf(userId)) // 分配给自己
                 .active()
                 .includeProcessVariables()
-                .taskTenantId(FlowableUtils.getTenantId())
                 .orderByTaskCreateTime().desc(); // 创建时间倒序
+        FlowableUtils.applyTenantFilter(taskQuery);
         if (StrUtil.isNotBlank(pageVO.getName())) {
             taskQuery.taskNameLike("%" + pageVO.getName() + "%");
         }
@@ -260,8 +260,8 @@ public class BpmTaskServiceImpl implements BpmTaskService {
     public PageResult<HistoricTaskInstance> getTaskPage(Long userId, BpmTaskPageReqVO pageVO) {
         HistoricTaskInstanceQuery taskQuery = historyService.createHistoricTaskInstanceQuery()
                 .includeTaskLocalVariables()
-                .taskTenantId(FlowableUtils.getTenantId())
                 .orderByHistoricTaskInstanceEndTime().desc(); // 审批时间倒序
+        FlowableUtils.applyTenantFilter(taskQuery);
         if (StrUtil.isNotBlank(pageVO.getName())) {
             taskQuery.taskNameLike("%" + pageVO.getName() + "%");
         }

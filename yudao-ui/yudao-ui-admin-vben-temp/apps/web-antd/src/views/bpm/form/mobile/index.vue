@@ -15,6 +15,7 @@ import { computed, nextTick, onMounted, ref, toRaw } from 'vue';
 import { useRoute } from 'vue-router';
 
 import { BpmFieldPermissionType, BpmModelFormType } from '@vben/constants';
+import { isIntranetDeployment } from '@vben/hooks';
 import { updatePreferences } from '@vben/preferences';
 import { useAccessStore } from '@vben/stores';
 
@@ -256,7 +257,7 @@ onMounted(() => {
 
   // The pure intranet build does not support WeChat Mini Program integration.
   // Avoid loading its public-network SDKs while retaining the regular OA form flow.
-  if (import.meta.env.VITE_INTRANET_DEPLOYMENT === 'true') {
+  if (isIntranetDeployment()) {
     initApp();
     return;
   }

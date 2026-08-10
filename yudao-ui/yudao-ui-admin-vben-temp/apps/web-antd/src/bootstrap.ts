@@ -3,6 +3,7 @@ import VueDOMPurifyHTML from 'vue-dompurify-html';
 
 import { registerAccessDirective } from '@vben/access';
 import { registerLoadingDirective } from '@vben/common-ui/es/loading';
+import { useAppConfig } from '@vben/hooks';
 import { preferences } from '@vben/preferences';
 import { initStores } from '@vben/stores';
 import '@vben/styles';
@@ -19,6 +20,10 @@ import App from './app.vue';
 import { router } from './router';
 
 async function bootstrap(namespace: string) {
+  const { storeSecureKey } = useAppConfig(
+    import.meta.env,
+    import.meta.env.PROD,
+  );
   // 初始化组件适配器
   await initComponentAdapter();
 
@@ -47,7 +52,7 @@ async function bootstrap(namespace: string) {
   await setupI18n(app);
 
   // 配置 pinia-store
-  await initStores(app, { namespace });
+  await initStores(app, { encryptionSecret: storeSecureKey, namespace });
 
   // 安装权限指令
   registerAccessDirective(app);

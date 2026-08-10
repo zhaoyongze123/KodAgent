@@ -101,6 +101,15 @@ public class NoticeController {
         return success(noticeService.getNoticeDetail(id));
     }
 
+    @GetMapping("/attachment/preview-url")
+    @Operation(summary = "申请通知公告附件的本地预览地址")
+    @PreAuthorize("@ss.hasPermission('system:notice:query')")
+    public CommonResult<String> getAttachmentPreviewUrl(@RequestParam("id") Long id,
+                                                        @RequestParam("fileId") Long fileId) {
+        return success(noticeService.getNoticeAttachmentPreviewUrl(id, fileId,
+                SecurityFrameworkUtils.getLoginUserId()));
+    }
+
     @PostMapping("/read")
     @Operation(summary = "记录通知公告已读")
     @Parameter(name = "id", description = "编号", required = true, example = "1024")

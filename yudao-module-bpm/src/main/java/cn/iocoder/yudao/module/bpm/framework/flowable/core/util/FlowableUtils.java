@@ -11,6 +11,7 @@ import cn.iocoder.yudao.framework.tenant.core.util.TenantUtils;
 import cn.iocoder.yudao.module.bpm.controller.admin.definition.vo.form.BpmFormFieldVO;
 import cn.iocoder.yudao.module.bpm.dal.dataobject.definition.BpmProcessDefinitionInfoDO;
 import cn.iocoder.yudao.module.bpm.enums.definition.BpmModelFormTypeEnum;
+import cn.iocoder.yudao.module.bpm.framework.flowable.config.BpmFlowableProperties;
 import cn.iocoder.yudao.module.bpm.framework.flowable.core.enums.BpmnVariableConstants;
 import lombok.extern.slf4j.Slf4j;
 import lombok.SneakyThrows;
@@ -22,10 +23,15 @@ import org.flowable.common.engine.impl.variable.MapDelegateVariableContainer;
 import org.flowable.engine.ManagementService;
 import org.flowable.engine.ProcessEngineConfiguration;
 import org.flowable.engine.history.HistoricProcessInstance;
+import org.flowable.engine.history.HistoricProcessInstanceQuery;
 import org.flowable.engine.impl.cfg.ProcessEngineConfigurationImpl;
 import org.flowable.engine.impl.util.CommandContextUtil;
+import org.flowable.engine.repository.ModelQuery;
+import org.flowable.engine.repository.ProcessDefinitionQuery;
 import org.flowable.engine.runtime.ProcessInstance;
 import org.flowable.task.api.TaskInfo;
+import org.flowable.task.api.TaskQuery;
+import org.flowable.task.api.history.HistoricTaskInstanceQuery;
 
 import java.util.HashMap;
 import java.util.List;
@@ -66,11 +72,88 @@ public class FlowableUtils {
     }
 
     public static String getTenantId() {
+        if (isSingleTenantMode()) {
+            return getSingleTenantId();
+        }
         Long tenantId = TenantContextHolder.getTenantId();
         return tenantId != null ? String.valueOf(tenantId) : ProcessEngineConfiguration.NO_TENANT_ID;
     }
 
+    /**
+     * 单租户模式下，Flowable 的租户字段只作为兼容性元数据，不参与查询隔离。
+     * 这样既能读取历史上 tenant_id 为空的流程，也能读取当前租户 1 的流程。
+     */
+    public static boolean isSingleTenantMode() {
+        BpmFlowableProperties properties = getBpmFlowableProperties();
+        return properties == null || properties.isSingleTenantEnabled();
+    }
+
+    public static String getSingleTenantId() {
+        BpmFlowableProperties properties = getBpmFlowableProperties();
+        if (properties == null || StrUtil.isBlank(properties.getSingleTenantId())) {
+            return "1";
+        }
+        return properties.getSingleTenantId();
+    }
+
+    private static Long getSingleTenantIdAsLong() {
+        try {
+            return Long.valueOf(getSingleTenantId());
+        } catch (NumberFormatException ex) {
+            log.warn("[getSingleTenantIdAsLong][Flowable 单租户编号非法，回退到 1：{}]", getSingleTenantId());
+            return 1L;
+        }
+    }
+
+    private static BpmFlowableProperties getBpmFlowableProperties() {
+        try {
+            return SpringUtil.getBean(BpmFlowableProperties.class);
+        } catch (Exception ignored) {
+            // 单元测试或 Spring 尚未完成初始化时，使用单租户默认值。
+            return null;
+        }
+    }
+
+    public static ModelQuery applyTenantFilter(ModelQuery query) {
+        if (!isSingleTenantMode()) {
+            query.modelTenantId(getTenantId());
+        }
+        return query;
+    }
+
+    public static ProcessDefinitionQuery applyTenantFilter(ProcessDefinitionQuery query) {
+        if (!isSingleTenantMode()) {
+            query.processDefinitionTenantId(getTenantId());
+        }
+        return query;
+    }
+
+    public static HistoricProcessInstanceQuery applyTenantFilter(HistoricProcessInstanceQuery query) {
+        if (!isSingleTenantMode()) {
+            query.processInstanceTenantId(getTenantId());
+        }
+        return query;
+    }
+
+    public static TaskQuery applyTenantFilter(TaskQuery query) {
+        if (!isSingleTenantMode()) {
+            query.taskTenantId(getTenantId());
+        }
+        return query;
+    }
+
+    public static HistoricTaskInstanceQuery applyTenantFilter(HistoricTaskInstanceQuery query) {
+        if (!isSingleTenantMode()) {
+            query.taskTenantId(getTenantId());
+        }
+        return query;
+    }
+
     public static void execute(String tenantIdStr, Runnable runnable) {
+        if (isSingleTenantMode()) {
+            TenantUtils.execute(getSingleTenantIdAsLong(), runnable);
+            return;
+        }
         if (ObjectUtil.isEmpty(tenantIdStr)
                 || Objects.equals(tenantIdStr, ProcessEngineConfiguration.NO_TENANT_ID)) {
             runnable.run();
@@ -82,6 +165,9 @@ public class FlowableUtils {
 
     @SneakyThrows
     public static <V> V execute(String tenantIdStr, Callable<V> callable) {
+        if (isSingleTenantMode()) {
+            return TenantUtils.execute(getSingleTenantIdAsLong(), callable);
+        }
         if (ObjectUtil.isEmpty(tenantIdStr)
                 || Objects.equals(tenantIdStr, ProcessEngineConfiguration.NO_TENANT_ID)) {
             return callable.call();

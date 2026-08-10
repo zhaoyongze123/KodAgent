@@ -1,5 +1,6 @@
 <script lang="ts" setup>
 import type { FileUploadProps } from './typing';
+import type { UploadFile } from 'ant-design-vue';
 
 import { ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
@@ -13,8 +14,10 @@ import {
   getCurrentUserPartyFileKodFiles,
   getCurrentUserPartyFileKodFolderChildren,
   getPartyFileAttachmentAccessUrl,
+  getPartyFileAttachmentPreviewUrlByFileId,
   selectCurrentUserPartyFileKodFiles,
 } from '#/api/system/party-file';
+import { normalizeOaAssetUrl } from '#/utils';
 
 import FileUpload from './file-upload.vue';
 
@@ -261,6 +264,20 @@ function handleFileValueChange(value: FileUploadValue) {
   emitValue(normalizeValue(value));
 }
 
+async function resolveKodPreviewSource(file: UploadFile) {
+  const rawUrl = String(file.url || (file.response as any)?.url || '');
+  const fileId = Number(
+    (file as UploadFile & { id?: number }).id ||
+      (file.response as any)?.id ||
+      (file.response as any)?.data?.id ||
+      0,
+  );
+  if (fileId > 0 && rawUrl.includes('/system/party-file/attachment/access')) {
+    return getPartyFileAttachmentPreviewUrlByFileId(fileId);
+  }
+  return normalizeOaAssetUrl(rawUrl);
+}
+
 watch(
   () => props.modelValue,
   (value) => {
@@ -279,6 +296,7 @@ watch(
       :max-size="maxSize"
       :model-value="fileValue"
       :multiple="multiple"
+      :preview-url-resolver="resolveKodPreviewSource"
       @update:model-value="handleFileValueChange"
     />
 

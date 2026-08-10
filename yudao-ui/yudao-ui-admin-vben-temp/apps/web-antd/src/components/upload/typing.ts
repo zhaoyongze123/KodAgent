@@ -1,4 +1,5 @@
 import type { AxiosResponse } from '@vben/request';
+import type { UploadFile } from 'ant-design-vue';
 
 import type { AxiosProgressEvent } from '#/api/infra/file';
 
@@ -35,6 +36,7 @@ export interface FileUploadProps {
   maxSize?: number; // 文件最大多少MB
   multiple?: boolean; // 是否支持多选
   extraActions?: FileUploadExtraAction[]; // 额外操作按钮
+  previewUrlResolver?: (file: UploadFile) => string | Promise<string>;
   resultField?: string; // support xxx.xxx.xx
   showDescription?: boolean; // 是否显示下面的描述
   uploadText?: string; // 上传按钮文案

@@ -9,10 +9,16 @@ echo "===== 前端启动脚本 ====="
 # 进入项目目录
 cd "$PROJECT_ROOT"
 
+LOCAL_ENV_FILE="/Users/mac/项目/若伊部署/脚本/.local-dev.env"
+if [ -r "$LOCAL_ENV_FILE" ]; then
+    # shellcheck disable=SC1090
+    source "$LOCAL_ENV_FILE"
+fi
+
 # 要检查和杀掉的进程关键字
 PROCESS_KEYWORDS=("vite" "node.*web-antd")
 # 前端端口
-FRONTEND_PORT=5666
+FRONTEND_PORT=7700
 
 # 杀掉已启动的前端进程
 echo "[1/3] 检查并停止已运行的前端进程..."
@@ -36,7 +42,9 @@ fi
 # 启动前端
 echo "[3/3] 启动前端 (端口: $FRONTEND_PORT)..."
 cd "$PROJECT_ROOT"
-nohup pnpm --filter @vben/web-antd dev > /tmp/yudao-frontend.log 2>&1 &
+VITE_GLOB_FILE_PREVIEW_URL="${OA_FILE_PREVIEW_URL:-}" \
+VITE_GLOB_FILE_PREVIEW_FETCH_ORIGIN="${OA_FILE_PREVIEW_FETCH_ORIGIN:-}" \
+    nohup pnpm --filter @vben/web-antd dev -- --host 0.0.0.0 --port "$FRONTEND_PORT" > /tmp/yudao-frontend.log 2>&1 &
 FRONTEND_PID=$!
 
 echo ""

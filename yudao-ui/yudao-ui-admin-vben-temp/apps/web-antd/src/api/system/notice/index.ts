@@ -68,6 +68,12 @@ export function getNotice(id: number) {
   );
 }
 
+export function getNoticeAttachmentPreviewUrl(id: number, fileId: number) {
+  return requestClient.get<string>('/system/notice/attachment/preview-url', {
+    params: { id, fileId },
+  });
+}
+
 /** 记录公告已读 */
 export function readNotice(id: number) {
   return requestClient.post(`/system/notice/read?id=${id}`);

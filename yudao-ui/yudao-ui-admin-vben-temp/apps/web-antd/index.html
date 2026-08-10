@@ -15,18 +15,6 @@
     <title>%VITE_APP_TITLE%</title>
     <link rel="icon" href="%VITE_BASE%favicon.ico" />
     <script>
-      var HM_ID = '<%= VITE_APP_BAIDU_CODE %>';
-      if (HM_ID) {
-        var _hmt = _hmt || [];
-        (function () {
-          var hm = document.createElement('script');
-          hm.src = 'https://hm.baidu.com/hm.js?' + HM_ID;
-          var s = document.getElementsByTagName('script')[0];
-          s.parentNode.insertBefore(hm, s);
-        })();
-      }
-    </script>
-    <script>
       (function () {
         var base = '%VITE_BASE%' || '/';
         if (base.charAt(base.length - 1) !== '/') {

@@ -17,7 +17,7 @@ import { Button, message, Upload } from 'ant-design-vue';
 import { UploadResultStatus } from './typing';
 import { useUpload, useUploadType } from './use-upload';
 
-import { normalizeOaAssetUrl } from '#/utils';
+import { getOaFilePreviewUrl, normalizeOaAssetUrl } from '#/utils';
 
 defineOptions({ name: 'FileUpload', inheritAttrs: false });
 
@@ -166,13 +166,34 @@ async function handleRemove(file: UploadFile) {
   }
 }
 
-/** 处理文件预览 */
-function handlePreview(file: UploadFile) {
+/** 处理文件预览。需要登录态的文件先向 OA 申请短时源地址。 */
+async function handlePreview(file: UploadFile) {
   const url = normalizeOaAssetUrl(
     String(file.url || (file.response as any)?.url || ''),
   );
   if (url && typeof window !== 'undefined') {
-    window.open(url, '_blank', 'noopener,noreferrer');
+    let previewWindow: Window | null = null;
+    try {
+      if (props.previewUrlResolver) {
+        previewWindow = window.open('about:blank', '_blank', 'noopener,noreferrer');
+      }
+      const sourceUrl = props.previewUrlResolver
+        ? await props.previewUrlResolver(file)
+        : url;
+      const previewUrl = getOaFilePreviewUrl(sourceUrl);
+      if (previewUrl) {
+        if (previewWindow) {
+          previewWindow.location.href = previewUrl;
+        } else {
+          window.open(previewUrl, '_blank', 'noopener,noreferrer');
+        }
+      } else {
+        previewWindow?.close();
+      }
+    } catch {
+      previewWindow?.close();
+      message.error('文件预览地址获取失败');
+    }
   }
   emit('preview', file);
 }

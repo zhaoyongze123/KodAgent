@@ -27,6 +27,7 @@ import {
 } from '#/api/bpm/processInstance';
 import { withdrawTask } from '#/api/bpm/task';
 import { getSimpleUserList } from '#/api/system/user';
+import { getPartyFileAttachmentPreviewUrlByFileId } from '#/api/system/party-file';
 import { setConfAndFields2 } from '#/components/form-create';
 import {
   getOaFilePreviewUrl,
@@ -157,6 +158,7 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs = 15_000) {
 
 interface OaLiteAttachment {
   extension: string;
+  fileId?: number;
   name: string;
   size?: number;
   url: string;
@@ -268,6 +270,10 @@ function normalizeAttachments(value: unknown): OaLiteAttachment[] {
         return null;
       }
       const name = getAttachmentName(item, url);
+      const fileId =
+        item && typeof item === 'object'
+          ? Number((item as Record<string, any>).id || (item as Record<string, any>).fileId || 0)
+          : 0;
       const size =
         item && typeof item === 'object'
           ? Number(
@@ -278,6 +284,7 @@ function normalizeAttachments(value: unknown): OaLiteAttachment[] {
           : 0;
       return {
         extension: getFileExtension(name),
+        fileId: fileId > 0 ? fileId : undefined,
         name,
         size: size > 0 ? size : undefined,
         url,
@@ -299,8 +306,22 @@ function formatFileSize(size?: number) {
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function getAttachmentPreviewUrl(file: OaLiteAttachment) {
-  return getOaFilePreviewUrl(file.url, file.name);
+async function handleAttachmentPreview(file: OaLiteAttachment) {
+  const previewWindow = window.open('about:blank', '_blank', 'noopener,noreferrer');
+  try {
+    const sourceUrl = file.fileId && file.url.includes('/system/party-file/attachment/access')
+      ? await getPartyFileAttachmentPreviewUrlByFileId(file.fileId)
+      : file.url;
+    const previewUrl = getOaFilePreviewUrl(sourceUrl);
+    if (previewWindow) {
+      previewWindow.location.href = previewUrl;
+    } else {
+      window.open(previewUrl, '_blank', 'noopener,noreferrer');
+    }
+  } catch {
+    previewWindow?.close();
+    message.error('文件预览地址获取失败');
+  }
 }
 
 function flattenNormalRules(rules: any[], fields: any[] = []) {
@@ -758,9 +779,9 @@ watch(
                         <span class="oa-lite-normal-attachment-actions">
                           <a
                             class="oa-lite-normal-attachment-action"
-                            :href="getAttachmentPreviewUrl(file)"
-                            target="_blank"
+                            href="#"
                             rel="noopener noreferrer"
+                            @click.prevent="handleAttachmentPreview(file)"
                           >
                             预览
                           </a>

@@ -10,19 +10,18 @@ import { Button, Empty, Modal as AntModal, Tag } from 'ant-design-vue';
 import {
   downloadMyPartyFileAttachment,
   downloadPartyFileAttachment,
-  getMyPartyFileAttachment,
+  getMyPartyFileAttachmentPreviewUrl,
   getMyPartyFile,
+  getPartyFileAttachmentPreviewUrl,
   getPartyFile,
-  previewMyPartyFileAttachment,
-  previewPartyFileAttachment,
 } from '#/api/system/party-file';
-import PdfPreview from '#/components/pdf-preview/pdf-preview.vue';
+import { getOaFilePreviewUrl, normalizeOaAssetUrl } from '#/utils';
 
 const detail = ref<SystemPartyFileApi.PartyFile>();
 const isMine = ref(false);
 const previewOpen = ref(false);
 const previewLoading = ref(false);
-const previewSource = ref<BlobPart>();
+const previewUrl = ref('');
 const previewTitle = ref('附件预览');
 
 const [Modal, modalApi] = useVbenModal({
@@ -112,12 +111,6 @@ function formatFileSize(size?: number) {
   return `${current >= 100 ? current.toFixed(0) : current.toFixed(2).replace(/\.?0+$/, '')} ${units[unitIndex]}`;
 }
 
-function markAttachmentAction(fileId: number, action: 'download' | 'preview' = 'download') {
-  if (isMine.value && detail.value?.id) {
-    void getMyPartyFileAttachment(detail.value.id, fileId, action);
-  }
-}
-
 async function handleDownload(fileId: number) {
   if (!detail.value?.id) {
     return;
@@ -138,14 +131,12 @@ async function handlePreview(fileId: number) {
   previewTitle.value = attachment?.name || '附件预览';
   previewOpen.value = true;
   previewLoading.value = true;
-  previewSource.value = undefined;
+  previewUrl.value = '';
   try {
-    if (isMine.value) {
-      previewSource.value = await previewMyPartyFileAttachment(detail.value.id, fileId);
-    } else {
-      markAttachmentAction(fileId, 'preview');
-      previewSource.value = await previewPartyFileAttachment(detail.value.id, fileId);
-    }
+    const sourceUrl = isMine.value
+      ? await getMyPartyFileAttachmentPreviewUrl(detail.value.id, fileId)
+      : await getPartyFileAttachmentPreviewUrl(detail.value.id, fileId);
+    previewUrl.value = getOaFilePreviewUrl(normalizeOaAssetUrl(sourceUrl));
   } finally {
     previewLoading.value = false;
   }
@@ -321,7 +312,12 @@ async function handlePreview(fileId: number) {
     destroy-on-close
   >
     <div v-if="previewLoading" class="party-file-preview-loading">正在加载预览...</div>
-    <PdfPreview v-else :source="previewSource" />
+    <iframe
+      v-else-if="previewUrl"
+      :src="previewUrl"
+      :title="`预览 ${previewTitle}`"
+      class="party-file-preview-frame"
+    />
   </AntModal>
 </template>
 
@@ -559,6 +555,13 @@ async function handlePreview(fileId: number) {
   min-height: 420px;
   place-items: center;
   color: #64748b;
+}
+
+.party-file-preview-frame {
+  display: block;
+  width: 100%;
+  height: 70vh;
+  border: 0;
 }
 
 @media (max-width: 960px) {

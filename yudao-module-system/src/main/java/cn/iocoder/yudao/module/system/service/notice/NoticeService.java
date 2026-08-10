@@ -68,6 +68,16 @@ public interface NoticeService {
     NoticeRespVO getNoticeDetail(Long id);
 
     /**
+     * 申请通知公告附件的短时本地预览地址。
+     *
+     * @param id     公告编号
+     * @param fileId 附件编号
+     * @param userId 当前用户编号
+     * @return 预览源地址
+     */
+    String getNoticeAttachmentPreviewUrl(Long id, Long fileId, Long userId);
+
+    /**
      * 标记通知公告为已读
      *
      * @param id 编号

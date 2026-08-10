@@ -8,6 +8,7 @@ set -e
 PROJECT_ROOT="/Users/mac/项目/若伊部署"
 BACKEND_DIR="$PROJECT_ROOT"
 FRONTEND_DIR="$PROJECT_ROOT/yudao-ui/yudao-ui-admin-vben-temp"
+ENV_FILE="$PROJECT_ROOT/脚本/.local-dev.env"
 
 # 颜色定义
 RED='\033[0;31m'
@@ -81,24 +82,36 @@ start_backend() {
 
     cd "$BACKEND_DIR"
 
+    if [ ! -r "$ENV_FILE" ]; then
+        print_error "缺少本地开发配置: $ENV_FILE"
+        print_info "请先执行: cp 脚本/.local-dev.env.example 脚本/.local-dev.env"
+        exit 1
+    fi
+    set -a
+    # shellcheck disable=SC1090
+    source "$ENV_FILE"
+    set +a
+
     print_info "刷新 Maven 依赖..."
     mvn clean install -DskipTests -q
     print_success "Maven 依赖已更新"
 
-    print_info "编译后端项目..."
-    mvn clean package -pl yudao-server -DskipTests -q
-    print_success "后端编译成功"
+    print_info "安装当前工作区后端模块..."
+    mvn -pl yudao-server -am install -DskipTests -q
+    print_success "后端模块已更新"
 
     print_separator
     print_info "启动 Spring Boot 应用..."
-    print_info "后端地址: http://localhost:8080"
-    print_info "API 文档: http://localhost:8080/doc.html"
+    print_info "后端地址: http://localhost:7800"
+    print_info "API 文档: http://localhost:7800/doc.html"
     print_info "默认用户: admin"
     print_info "默认密码: admin123"
     print_separator
 
-    cd "$BACKEND_DIR/yudao-server"
-    java -jar target/yudao-server.jar
+    cd "$BACKEND_DIR"
+    mvn -pl yudao-server spring-boot:run \
+        -Dspring-boot.run.profiles="${SPRING_PROFILES_ACTIVE:-local}" \
+        -Dspring-boot.run.arguments="--server.address=${SERVER_ADDRESS:-127.0.0.1} --server.port=7800"
 }
 
 start_frontend() {
@@ -123,11 +136,11 @@ start_frontend() {
 
     print_separator
     print_info "启动前端开发服务..."
-    print_info "前端地址: http://localhost:5173"
-    print_info "后端 API: http://localhost:8080"
+    print_info "前端地址: http://localhost:7700"
+    print_info "后端 API: http://localhost:7800"
     print_separator
 
-    pnpm --filter @vben/web-antd dev
+    pnpm --filter @vben/web-antd dev -- --host 0.0.0.0 --port 7700
 }
 
 main() {

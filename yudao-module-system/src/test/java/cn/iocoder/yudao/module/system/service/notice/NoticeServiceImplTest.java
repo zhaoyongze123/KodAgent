@@ -3,14 +3,22 @@ package cn.iocoder.yudao.module.system.service.notice;
 import cn.iocoder.yudao.framework.common.enums.CommonStatusEnum;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import cn.iocoder.yudao.framework.test.core.ut.BaseDbUnitTest;
+import cn.iocoder.yudao.module.infra.service.file.FileService;
 import cn.iocoder.yudao.module.system.controller.admin.notice.vo.NoticePageReqVO;
 import cn.iocoder.yudao.module.system.controller.admin.notice.vo.NoticeSaveReqVO;
 import cn.iocoder.yudao.module.system.dal.dataobject.notice.NoticeDO;
 import cn.iocoder.yudao.module.system.dal.mysql.notice.NoticeMapper;
+import cn.iocoder.yudao.module.system.service.filepreview.AttachmentPreviewTokenService;
+import cn.iocoder.yudao.module.system.service.dept.DeptService;
+import cn.iocoder.yudao.module.system.service.permission.PermissionService;
+import cn.iocoder.yudao.module.system.service.permission.RoleService;
+import cn.iocoder.yudao.module.system.service.user.AdminUserService;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.Import;
 
 import javax.annotation.Resource;
+import java.util.Collections;
 
 import static cn.iocoder.yudao.framework.common.util.object.ObjectUtils.cloneIgnoreId;
 import static cn.iocoder.yudao.framework.test.core.util.AssertUtils.assertPojoEquals;
@@ -28,6 +36,24 @@ class NoticeServiceImplTest extends BaseDbUnitTest {
 
     @Resource
     private NoticeMapper noticeMapper;
+
+    @MockBean
+    private FileService fileService;
+
+    @MockBean
+    private AttachmentPreviewTokenService attachmentPreviewTokenService;
+
+    @MockBean
+    private AdminUserService adminUserService;
+
+    @MockBean
+    private DeptService deptService;
+
+    @MockBean
+    private RoleService roleService;
+
+    @MockBean
+    private PermissionService permissionService;
 
     @Test
     public void testGetNoticePage_success() {
@@ -71,8 +97,11 @@ class NoticeServiceImplTest extends BaseDbUnitTest {
     @Test
     public void testCreateNotice_success() {
         // 准备参数
-        NoticeSaveReqVO reqVO = randomPojo(NoticeSaveReqVO.class)
-                .setId(null); // 避免 id 被赋值
+        NoticeSaveReqVO reqVO = randomPojo(NoticeSaveReqVO.class, o -> {
+            o.setId(null); // 避免 id 被赋值
+            o.setTargets(Collections.emptyList());
+            o.setPublishTarget("全体后台用户");
+        });
 
         // 调用
         Long noticeId = noticeService.createNotice(reqVO);
@@ -89,7 +118,11 @@ class NoticeServiceImplTest extends BaseDbUnitTest {
         noticeMapper.insert(dbNoticeDO);
 
         // 准备更新参数
-        NoticeSaveReqVO reqVO = randomPojo(NoticeSaveReqVO.class, o -> o.setId(dbNoticeDO.getId()));
+        NoticeSaveReqVO reqVO = randomPojo(NoticeSaveReqVO.class, o -> {
+            o.setId(dbNoticeDO.getId());
+            o.setTargets(Collections.emptyList());
+            o.setPublishTarget("全体后台用户");
+        });
 
         // 更新
         noticeService.updateNotice(reqVO);

@@ -4,6 +4,7 @@ import type { SystemPartyFileApi } from '#/api/system/party-file';
 import type { SystemRoleApi } from '#/api/system/role';
 import type { SystemUserApi } from '#/api/system/user';
 
+import dayjs from 'dayjs';
 import { computed, onMounted, ref } from 'vue';
 
 import { useVbenModal } from '@vben/common-ui';
@@ -131,8 +132,6 @@ function getTargetOptions(targetType: number) {
 const getTitle = computed(() =>
   formData.value?.id ? $t('ui.actionTitle.edit', ['党务文件']) : $t('ui.actionTitle.create', ['党务文件']),
 );
-
-const isKodStorageSelected = computed(() => Number(storageTypeValue.value) === 2);
 
 function handleKodFileSelectionChange(
   keys: Array<number | string>,
@@ -337,7 +336,7 @@ const [Modal, modalApi] = useVbenModal({
       kodFolderPathValue.value = undefined;
       await formApi.setValues({
         storageType: 1,
-        publishTime: new Date().toISOString().slice(0, 19).replace('T', ' '),
+        publishTime: dayjs().format('YYYY-MM-DD HH:mm:ss'),
         status: 0,
       });
       return;

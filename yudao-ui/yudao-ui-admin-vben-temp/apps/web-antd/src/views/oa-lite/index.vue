@@ -2914,6 +2914,7 @@ onUnmounted(() => {
 }
 
 .oa-lite-approval-table {
+  width: 100%;
   min-width: 1120px;
   overflow: hidden;
   border: 1px solid var(--oa-shell-border);

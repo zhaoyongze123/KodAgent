@@ -19,6 +19,8 @@ import cn.iocoder.yudao.module.system.controller.admin.partyfile.vo.file.PartyFi
 import cn.iocoder.yudao.module.system.controller.admin.partyfile.vo.file.PartyFileRespVO;
 import cn.iocoder.yudao.module.system.controller.admin.partyfile.vo.file.PartyFileSaveReqVO;
 import cn.iocoder.yudao.module.system.enums.partyfile.PartyFileReadSourceEnum;
+import cn.iocoder.yudao.module.system.service.filepreview.AttachmentPreviewTokenService;
+import cn.iocoder.yudao.module.system.service.filepreview.FilePreviewConverter;
 import cn.iocoder.yudao.module.system.service.partyfile.PartyFileAttachmentService;
 import cn.iocoder.yudao.module.system.service.partyfile.PartyFileService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -33,7 +35,6 @@ import javax.servlet.http.HttpServletResponse;
 import javax.validation.Valid;
 import java.io.IOException;
 import java.util.List;
-import java.util.Locale;
 import java.util.Objects;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -51,6 +52,10 @@ public class PartyFileController {
     private PartyFileService partyFileService;
     @Resource
     private PartyFileAttachmentService partyFileAttachmentService;
+    @Resource
+    private AttachmentPreviewTokenService attachmentPreviewTokenService;
+    @Resource
+    private FilePreviewConverter filePreviewConverter;
 
     @PostMapping("/create")
     @Operation(summary = "创建党务文件")
@@ -187,6 +192,19 @@ public class PartyFileController {
         response.getOutputStream().flush();
     }
 
+    @GetMapping("/attachment/preview-url-by-file")
+    @Operation(summary = "申请可道云附件的本地预览地址")
+    @PreAuthorize("@ss.hasAnyPermissions('system:party-file:query', 'bpm:oa-leave:create', 'bpm:process-instance:query')")
+    public CommonResult<String> getAttachmentPreviewUrlByFile(@RequestParam("fileId") Long fileId) {
+        FileDO file = partyFileAttachmentService.getFile(fileId);
+        if (file == null) {
+            throw exception(PARTY_FILE_ATTACHMENT_NOT_FOUND);
+        }
+        return success(attachmentPreviewTokenService.createPreviewUrl(
+                AttachmentPreviewTokenService.PreviewSource.PARTY_FILE,
+                fileId, fileId, SecurityFrameworkUtils.getLoginUserId(), file.getName()));
+    }
+
     @GetMapping("/attachment/download")
     @Operation(summary = "下载党务文件附件")
     @PreAuthorize("@ss.hasPermission('system:party-file:query')")
@@ -229,26 +247,55 @@ public class PartyFileController {
         writePartyFileAttachmentPreview(detail, fileId, response);
     }
 
+    @GetMapping("/attachment/preview-url")
+    @Operation(summary = "申请党务文件附件的本地预览地址")
+    @PreAuthorize("@ss.hasPermission('system:party-file:query')")
+    public CommonResult<String> getAttachmentPreviewUrl(@RequestParam("id") Long id,
+                                                        @RequestParam("fileId") Long fileId) {
+        PartyFileRespVO detail = partyFileService.getPartyFileDetail(id);
+        PartyFileAttachmentRespVO attachment = findAttachment(detail, fileId);
+        return success(attachmentPreviewTokenService.createPreviewUrl(
+                AttachmentPreviewTokenService.PreviewSource.PARTY_FILE,
+                id, fileId, SecurityFrameworkUtils.getLoginUserId(), attachment.getName()));
+    }
+
+    @GetMapping("/my-attachment/preview-url")
+    @Operation(summary = "申请我的党务文件附件的本地预览地址，并记录预览")
+    public CommonResult<String> getMyAttachmentPreviewUrl(@RequestParam("id") Long id,
+                                                          @RequestParam("fileId") Long fileId) {
+        Long userId = SecurityFrameworkUtils.getLoginUserId();
+        PartyFileRespVO detail = partyFileService.getMyPartyFileAttachment(id, fileId, userId,
+                SecurityFrameworkUtils.getLoginUserNickname(), PartyFileReadSourceEnum.PREVIEW.getSource());
+        PartyFileAttachmentRespVO attachment = findAttachment(detail, fileId);
+        return success(attachmentPreviewTokenService.createPreviewUrl(
+                AttachmentPreviewTokenService.PreviewSource.PARTY_FILE,
+                id, fileId, userId, attachment.getName()));
+    }
+
     private void writePartyFileAttachment(PartyFileRespVO detail, Long fileId, HttpServletResponse response) throws Exception {
-        PartyFileAttachmentRespVO attachment = detail.getAttachments().stream()
-                .filter(item -> Objects.equals(item.getId(), fileId))
-                .findFirst()
-                .orElseThrow(() -> exception(PARTY_FILE_ATTACHMENT_NOT_FOUND));
+        PartyFileAttachmentRespVO attachment = findAttachment(detail, fileId);
         byte[] content = partyFileAttachmentService.getAttachmentContent(fileId);
         ServletUtils.writeAttachment(response, attachment.getName(), content);
     }
 
     private void writePartyFileAttachmentPreview(PartyFileRespVO detail, Long fileId, HttpServletResponse response) throws Exception {
-        PartyFileAttachmentRespVO attachment = detail.getAttachments().stream()
+        PartyFileAttachmentRespVO attachment = findAttachment(detail, fileId);
+        byte[] content = partyFileAttachmentService.getAttachmentPreviewContent(
+                fileId, SecurityFrameworkUtils.getLoginUserId());
+        writeInline(response,
+                filePreviewConverter.getPreviewFileName(attachment.getName()),
+                filePreviewConverter.getPreviewContentType(attachment.getName(), attachment.getType()),
+                content);
+    }
+
+    private PartyFileAttachmentRespVO findAttachment(PartyFileRespVO detail, Long fileId) {
+        if (detail == null || detail.getAttachments() == null) {
+            throw exception(PARTY_FILE_ATTACHMENT_NOT_FOUND);
+        }
+        return detail.getAttachments().stream()
                 .filter(item -> Objects.equals(item.getId(), fileId))
                 .findFirst()
                 .orElseThrow(() -> exception(PARTY_FILE_ATTACHMENT_NOT_FOUND));
-        byte[] content = partyFileAttachmentService.getAttachmentPreviewContent(fileId);
-        boolean officeDocument = isOfficeDocument(attachment.getName());
-        writeInline(response,
-                officeDocument ? replaceExtension(attachment.getName(), ".pdf") : attachment.getName(),
-                officeDocument ? "application/pdf" : attachment.getType(),
-                content);
     }
 
     private void writeInline(HttpServletResponse response, String filename, String contentType, byte[] content) throws IOException {
@@ -258,13 +305,4 @@ public class PartyFileController {
         response.getOutputStream().flush();
     }
 
-    private boolean isOfficeDocument(String filename) {
-        String lowerName = filename == null ? "" : filename.toLowerCase(Locale.ROOT);
-        return lowerName.endsWith(".doc") || lowerName.endsWith(".docx");
-    }
-
-    private String replaceExtension(String filename, String extension) {
-        int index = filename.lastIndexOf('.');
-        return (index > 0 ? filename.substring(0, index) : filename) + extension;
-    }
 }

@@ -26,6 +26,7 @@ import cn.iocoder.yudao.module.system.dal.mysql.notice.NoticeReadMapper;
 import cn.iocoder.yudao.module.system.dal.mysql.notice.NoticeTargetMapper;
 import cn.iocoder.yudao.module.system.enums.partyfile.PartyFileTargetTypeEnum;
 import cn.iocoder.yudao.module.system.service.dept.DeptService;
+import cn.iocoder.yudao.module.system.service.filepreview.AttachmentPreviewTokenService;
 import cn.iocoder.yudao.module.system.service.permission.PermissionService;
 import cn.iocoder.yudao.module.system.service.permission.RoleService;
 import cn.iocoder.yudao.module.system.service.user.AdminUserService;
@@ -48,6 +49,7 @@ import static cn.iocoder.yudao.framework.common.exception.util.ServiceExceptionU
 import static cn.iocoder.yudao.module.system.enums.ErrorCodeConstants.NOTICE_TARGET_ALL_CONFLICT;
 import static cn.iocoder.yudao.module.system.enums.ErrorCodeConstants.NOTICE_TARGET_ID_REQUIRED;
 import static cn.iocoder.yudao.module.system.enums.ErrorCodeConstants.NOTICE_TARGET_TYPE_INVALID;
+import static cn.iocoder.yudao.module.system.enums.ErrorCodeConstants.NOTICE_ATTACHMENT_NOT_FOUND;
 import static cn.iocoder.yudao.module.system.enums.ErrorCodeConstants.NOTICE_NOT_FOUND;
 
 /**
@@ -69,6 +71,9 @@ public class NoticeServiceImpl implements NoticeService {
 
     @Resource
     private FileService fileService;
+
+    @Resource
+    private AttachmentPreviewTokenService attachmentPreviewTokenService;
 
     @Resource
     private AdminUserService adminUserService;
@@ -159,6 +164,21 @@ public class NoticeServiceImpl implements NoticeService {
         detail.setUnreadList(buildUnreadRespList(targetUsers, deptMap, readMap));
         detail.setAttachments(buildAttachments(notice.getAttachmentFileIds()));
         return detail;
+    }
+
+    @Override
+    public String getNoticeAttachmentPreviewUrl(Long id, Long fileId, Long userId) {
+        NoticeDO notice = noticeMapper.selectById(id);
+        if (notice == null) {
+            throw exception(NOTICE_NOT_FOUND);
+        }
+        if (!parseFileIds(notice.getAttachmentFileIds()).contains(fileId)) {
+            throw exception(NOTICE_ATTACHMENT_NOT_FOUND);
+        }
+        FileDO file = fileService.getFile(fileId);
+        return attachmentPreviewTokenService.createPreviewUrl(
+                AttachmentPreviewTokenService.PreviewSource.NOTICE,
+                id, fileId, userId, file.getName());
     }
 
     @Override

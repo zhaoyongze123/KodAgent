@@ -66,10 +66,11 @@ fi
   exit 1
 }
 
-frontend_preview="$(sed -n 's/^VITE_FILE_PREVIEW_URL=//p' "${frontend_file}" | tail -n 1)"
+frontend_preview="$(sed -nE 's/^VITE_(GLOB_)?FILE_PREVIEW_URL=//p' "${frontend_file}" | tail -n 1)"
 expected_preview="${PREVIEW_PUBLIC_URL%/}/onlinePreview"
-[[ "${FILE_PREVIEW_URL}" == "${expected_preview}" && "${frontend_preview}" == "${expected_preview}" ]] || {
-  echo "[错误] 文件预览地址不一致：profile=${FILE_PREVIEW_URL}, frontend=${frontend_preview}, expected=${expected_preview}" >&2
+[[ "${FILE_PREVIEW_URL}" == "${expected_preview}" && -z "${frontend_preview}" ]] || {
+  echo "[错误] 文件预览配置不符合运行时注入约定：profile=${FILE_PREVIEW_URL}, frontend=${frontend_preview}, expected=${expected_preview}" >&2
+  echo "[提示] 前端构建环境文件不得配置 VITE_FILE_PREVIEW_URL 或 VITE_GLOB_FILE_PREVIEW_URL，具体地址由目标服务器生成 oa-runtime-config.js。" >&2
   exit 1
 }
 

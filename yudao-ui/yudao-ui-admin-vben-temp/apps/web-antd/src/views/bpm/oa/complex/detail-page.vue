@@ -14,6 +14,7 @@ import { IconifyIcon } from '@vben/icons';
 import { getDictOptions } from '@vben/hooks';
 import { DICT_TYPE } from '@vben/constants';
 
+import { getPartyFileAttachmentPreviewUrlByFileId } from '#/api/system/party-file';
 import { getOaFilePreviewUrl, normalizeOaAssetUrl } from '#/utils';
 import { getComplexModuleViewConfig, parseJsonArray } from './config';
 
@@ -28,7 +29,8 @@ const route = useRoute();
 const config = getComplexModuleViewConfig(props.moduleKey);
 const loading = ref(false);
 const detailData = ref<Record<string, any>>({});
-const previewFile = ref<null | { name: string; previewUrl: string; url: string }>(null);
+type DetailFile = { id?: number; name: string; size: number; url: string };
+const previewFile = ref<null | (DetailFile & { previewUrl: string })>(null);
 
 const queryId = computed(() => Number(props.id || route.query.id));
 
@@ -98,22 +100,22 @@ function getFileName(rawValue: unknown) {
 
 function getDetailFiles(field: ComplexFieldConfig) {
   return parseJsonArray(detailData.value[field.field])
-    .map((rawValue) => ({
-      name: getFileName(rawValue),
-      size:
-        rawValue && typeof rawValue === 'object'
-          ? Number((rawValue as Record<string, unknown>).size || 0)
-          : 0,
-      url: normalizeOaAssetUrl(
-        rawValue && typeof rawValue === 'object'
-          ? String(
-              (rawValue as Record<string, unknown>).url ||
-                (rawValue as Record<string, unknown>).fileUrl ||
-                '',
-            )
-          : String(rawValue || ''),
-      ),
-    }))
+    .map((rawValue) => {
+      const record = rawValue && typeof rawValue === 'object'
+        ? (rawValue as Record<string, unknown>)
+        : undefined;
+      const id = Number(record?.id || record?.fileId || 0);
+      return {
+        id: id > 0 ? id : undefined,
+        name: getFileName(rawValue),
+        size: Number(record?.size || 0),
+        url: normalizeOaAssetUrl(
+          record
+            ? String(record.url || record.fileUrl || '')
+            : String(rawValue || ''),
+        ),
+      };
+    })
     .filter((file) => file.url);
 }
 
@@ -161,17 +163,24 @@ function getFileIcon(name: string) {
   return 'lucide:file';
 }
 
-function getPreviewUrl(file: { name: string; url: string }) {
-  return getOaFilePreviewUrl(file.url, file.name);
+async function getPreviewUrl(file: DetailFile) {
+  const sourceUrl = file.id && file.url.includes('/system/party-file/attachment/access')
+    ? await getPartyFileAttachmentPreviewUrlByFileId(file.id)
+    : file.url;
+  return getOaFilePreviewUrl(sourceUrl);
 }
 
-function openFilePreview(file: { name: string; url: string }) {
-  previewFile.value = { ...file, previewUrl: getPreviewUrl(file) };
+async function openFilePreview(file: DetailFile) {
+  try {
+    previewFile.value = { ...file, previewUrl: await getPreviewUrl(file) };
+  } catch {
+    previewFile.value = null;
+  }
 }
 
 function openFileInNewWindow() {
   if (previewFile.value && typeof window !== 'undefined') {
-    window.open(previewFile.value.url, '_blank', 'noopener,noreferrer');
+    window.open(previewFile.value.previewUrl, '_blank', 'noopener,noreferrer');
   }
 }
 
@@ -188,7 +197,7 @@ function downloadFile(file: { name: string; url: string }) {
   link.remove();
 }
 
-function handleAttachmentKeydown(event: KeyboardEvent, file: { name: string; url: string }) {
+function handleAttachmentKeydown(event: KeyboardEvent, file: DetailFile) {
   if (event.key === 'Enter' || event.key === ' ') {
     event.preventDefault();
     openFilePreview(file);

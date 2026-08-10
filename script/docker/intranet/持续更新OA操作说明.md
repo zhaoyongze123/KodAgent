@@ -21,6 +21,9 @@ oa-update-20260805-01/
 └── release.env                # 可选，仅支持 RELEASE_ID=...
 ```
 
+更新包不得包含 `frontend/runtime/oa-runtime-config.js`。该文件包含环境地址，
+由目标服务器从 `/data/oa-manual/app/.env` 生成，保证同一个更新包可以部署到本地、103 和正式环境。
+
 只改后端时只提供 `app/app.jar`；只改前端时只提供 `frontend/dist/`。不能把全量初始化 SQL、103 快照或 `ruoyi-vue-pro.sql` 放入更新包。首次安装和新环境初始化只使用仓库唯一基线 `sql/mysql/ruoyi-vue-pro.sql`；已有环境如果确实发生结构变化，才在该次发布包中临时提供经过审核、可回滚评估的前向 SQL，发布完成后不把它追加回仓库的初始化目录。
 
 ## 二、生成发布文件
@@ -45,6 +48,17 @@ cd ../..
 ```
 
 只改其中一端时，不需要在发布包中放另一端。完成后填写 `CHANGELOG.md`，再上传整个发布目录。
+
+目标服务器需预先配置文件预览地址。例如正式环境执行：
+
+```bash
+sudo sh -c 'grep -q "^OA_FILE_PREVIEW_URL=" /data/oa-manual/app/.env \
+  && sed -i "s#^OA_FILE_PREVIEW_URL=.*#OA_FILE_PREVIEW_URL=http://192.168.2.10:18112/onlinePreview#" /data/oa-manual/app/.env \
+  || printf "\\nOA_FILE_PREVIEW_URL=http://192.168.2.10:18112/onlinePreview\\n" >> /data/oa-manual/app/.env'
+```
+
+103 将地址中的主机改为 `192.168.1.103`，本地开发在 `脚本/.local-dev.env` 中配置
+`http://127.0.0.1:18112/onlinePreview`。前端代码和更新包无需随环境更换。
 
 ## 三、上传更新包
 

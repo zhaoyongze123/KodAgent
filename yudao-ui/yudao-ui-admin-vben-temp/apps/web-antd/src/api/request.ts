@@ -20,9 +20,18 @@ import { useAuthStore } from '#/store';
 
 import { refreshTokenApi } from './core';
 
-const { apiURL } = useAppConfig(import.meta.env, import.meta.env.PROD);
+const { apiURL, apiEncrypt: apiEncryptConfig } = useAppConfig(
+  import.meta.env,
+  import.meta.env.PROD,
+);
 const tenantEnable = isTenantEnable();
-const apiEncrypt = createApiEncrypt(import.meta.env);
+const apiEncrypt = createApiEncrypt({
+  VITE_APP_API_ENCRYPT_ENABLE: String(apiEncryptConfig.enable),
+  VITE_APP_API_ENCRYPT_HEADER: apiEncryptConfig.header,
+  VITE_APP_API_ENCRYPT_ALGORITHM: apiEncryptConfig.algorithm,
+  VITE_APP_API_ENCRYPT_REQUEST_KEY: apiEncryptConfig.requestKey,
+  VITE_APP_API_ENCRYPT_RESPONSE_KEY: apiEncryptConfig.responseKey,
+});
 
 function createRequestClient(baseURL: string, options?: RequestClientOptions) {
   const client = new RequestClient({

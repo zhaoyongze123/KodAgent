@@ -33,6 +33,11 @@ public interface PartyFileAttachmentService {
 
     byte[] getAttachmentContent(Long fileId) throws Exception;
 
+    byte[] getAttachmentContent(Long fileId, Long userId) throws Exception;
+
     /** 获取用于在线预览的内容，Office 文档会先转换为 PDF。 */
     byte[] getAttachmentPreviewContent(Long fileId) throws Exception;
+
+    /** 获取用于在线预览的内容，并显式指定读取可道云用户文件时使用的用户。 */
+    byte[] getAttachmentPreviewContent(Long fileId, Long userId) throws Exception;
 }

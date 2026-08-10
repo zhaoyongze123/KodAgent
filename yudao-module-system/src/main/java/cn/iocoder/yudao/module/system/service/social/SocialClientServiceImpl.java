@@ -91,7 +91,7 @@ public class SocialClientServiceImpl implements SocialClientService {
      * 2. trial：体验版
      * 3. developer：开发版
      */
-    @Value("${yudao.wxa-code.env-version:release}")
+    @Value("${yudao.wxa-code.env-version}")
     public String envVersion;
     /**
      * 订阅消息跳转小程序类型
@@ -100,7 +100,7 @@ public class SocialClientServiceImpl implements SocialClientService {
      * 2. trial：体验版
      * 3. formal：正式版
      */
-    @Value("${yudao.wxa-subscribe-message.miniprogram-state:formal}")
+    @Value("${yudao.wxa-subscribe-message.miniprogram-state}")
     public String miniprogramState;
 
     /**
@@ -116,9 +116,9 @@ public class SocialClientServiceImpl implements SocialClientService {
     @Autowired(required = false) // 由于 justauth.enable 配置项，可以关闭 AuthRequestFactory 的功能，所以这里只能不强制注入
     private AuthRequestFactory authRequestFactory;
 
-    @Resource
+    @Autowired(required = false) // OA 默认不启用微信 Starter，保留已配置微信客户端的兼容能力
     private WxMpService wxMpService;
-    @Resource
+    @Autowired(required = false)
     private WxMpProperties wxMpProperties;
     @Resource
     private StringRedisTemplate stringRedisTemplate; // WxMpService 需要使用到，所以在 Service 注入了它
@@ -142,9 +142,9 @@ public class SocialClientServiceImpl implements SocialClientService {
 
             });
 
-    @Resource
+    @Autowired(required = false)
     private WxMaService wxMaService;
-    @Resource
+    @Autowired(required = false)
     private WxMaProperties wxMaProperties;
     /**
      * 缓存 WxMaService 对象

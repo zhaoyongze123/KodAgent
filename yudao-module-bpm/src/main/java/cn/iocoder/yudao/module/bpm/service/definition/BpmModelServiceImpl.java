@@ -94,16 +94,15 @@ public class BpmModelServiceImpl implements BpmModelService {
         if (StrUtil.isNotEmpty(name)) {
             modelQuery.modelNameLike("%" + name + "%");
         }
-        modelQuery.modelTenantId(FlowableUtils.getTenantId());
+        FlowableUtils.applyTenantFilter(modelQuery);
         return modelQuery.list();
     }
 
     @Override
     public Long getModelCountByCategory(String category) {
-        return repositoryService.createModelQuery()
-                .modelCategory(category)
-                .modelTenantId(FlowableUtils.getTenantId())
-                .count();
+        ModelQuery modelQuery = repositoryService.createModelQuery().modelCategory(category);
+        FlowableUtils.applyTenantFilter(modelQuery);
+        return modelQuery.count();
     }
 
     @Override
@@ -174,8 +173,9 @@ public class BpmModelServiceImpl implements BpmModelService {
     @Transactional(rollbackFor = Exception.class)
     public void updateModelSortBatch(Long userId, List<String> ids) {
         // 1.1 校验流程模型存在
-        List<Model> models = repositoryService.createModelQuery()
-                .modelTenantId(FlowableUtils.getTenantId()).list();
+        ModelQuery modelQuery = repositoryService.createModelQuery();
+        FlowableUtils.applyTenantFilter(modelQuery);
+        List<Model> models = modelQuery.list();
         models.removeIf(model -> !ids.contains(model.getId()));
         if (ids.size() != models.size()) {
             throw exception(MODEL_NOT_EXISTS);
@@ -470,9 +470,9 @@ public class BpmModelServiceImpl implements BpmModelService {
     }
 
     private Model getModelByKey(String key) {
-        return repositoryService.createModelQuery()
-                .modelTenantId(FlowableUtils.getTenantId())
-                .modelKey(key).singleResult();
+        ModelQuery modelQuery = repositoryService.createModelQuery().modelKey(key);
+        FlowableUtils.applyTenantFilter(modelQuery);
+        return modelQuery.singleResult();
     }
 
     @Override

@@ -1,4 +1,6 @@
 /* eslint-disable @typescript-eslint/no-dynamic-delete */
+import { useAppConfig } from '@vben/hooks';
+
 /**
  * 百度地图 SDK 加载工具
  */
@@ -12,6 +14,7 @@ declare global {
 
 // 全局回调名称
 const CALLBACK_NAME = '__BAIDU_MAP_LOAD_CALLBACK__';
+const { baiduMapKey } = useAppConfig(import.meta.env, import.meta.env.PROD);
 
 // SDK 加载状态
 let loadPromise: null | Promise<void> = null;
@@ -48,7 +51,7 @@ export const loadBaiduMapSdk = (timeout = 10_000): Promise<void> => {
     // 创建 script 标签
     const script = document.createElement('script');
     script.src = `https://api.map.baidu.com/api?v=1.0&type=webgl&ak=${
-      import.meta.env.VITE_BAIDU_MAP_KEY
+      baiduMapKey
     }&callback=${CALLBACK_NAME}`;
     script.addEventListener('onerror', () => {
       clearTimeout(timeoutId);

@@ -1,5 +1,6 @@
 server:
-  port: 48080
+  address: ${SERVER_ADDRESS:}
+  port: ${SERVER_PORT:}
 
 yudao:
   security:
@@ -15,34 +16,18 @@ yudao:
       - /admin-api/system/auth/kod-sso/direct-login
       - /admin-api/system/auth/kod-sso/exchange
   kod-sso:
-    enabled: ${KOD_SSO_ENABLED:true}
-    base-url: ${KOD_SSO_BASE_URL:http://replace-with-kodbox-host}
+    enabled: ${KOD_SSO_ENABLED:}
+    base-url: ${KOD_SSO_BASE_URL:}
     server-base-url: ${KOD_SSO_SERVER_BASE_URL:}
-    app-name: ${KOD_SSO_APP_NAME:user:all}
-    redirect-uri: ${KOD_SSO_REDIRECT_URI:http://replace-with-frontend-host/#/auth/kod-sso-login?tenantId=1}
-    callback-base-url: ${KOD_SSO_CALLBACK_BASE_URL:http://replace-with-backend-host}
-    tenant-id: ${KOD_SSO_TENANT_ID:1}
-    auto-create-user: ${KOD_SSO_AUTO_CREATE_USER:false}
-    organization-sync-enabled: ${KOD_ORGANIZATION_SYNC_ENABLED:false}
+    app-name: ${KOD_SSO_APP_NAME:}
+    redirect-uri: ${KOD_SSO_REDIRECT_URI:}
+    callback-base-url: ${KOD_SSO_CALLBACK_BASE_URL:}
+    tenant-id: ${KOD_SSO_TENANT_ID:}
+    auto-create-user: ${KOD_SSO_AUTO_CREATE_USER:}
+    organization-sync-enabled: ${KOD_ORGANIZATION_SYNC_ENABLED:}
     organization-sync-username: ${KOD_ORGANIZATION_SYNC_USERNAME:}
     organization-sync-password: ${KOD_ORGANIZATION_SYNC_PASSWORD:}
     organization-sync-access-token: ${KOD_ORGANIZATION_SYNC_ACCESS_TOKEN:}
     organization-sync-endpoint: ${KOD_ORGANIZATION_SYNC_ENDPOINT:}
-    organization-sync-root-group-id: ${KOD_ORGANIZATION_SYNC_ROOT_GROUP_ID:1}
-    organization-sync-cron: ${KOD_ORGANIZATION_SYNC_CRON:-}
-
-wx:
-  mp:
-    app-id: ${WX_MP_APP_ID:}
-    secret: ${WX_MP_SECRET:}
-    config-storage:
-      type: RedisTemplate
-      key-prefix: wx
-      http-client-type: HttpClient
-  miniapp:
-    appid: ${WX_MINIAPP_APP_ID:}
-    secret: ${WX_MINIAPP_SECRET:}
-    config-storage:
-      type: RedisTemplate
-      key-prefix: wa
-      http-client-type: HttpClient
+    organization-sync-root-group-id: ${KOD_ORGANIZATION_SYNC_ROOT_GROUP_ID:}
+    organization-sync-cron: ${KOD_ORGANIZATION_SYNC_CRON:}

@@ -2,7 +2,7 @@
 set -e
 
 # 后端端口
-BACKEND_PORT=48080
+BACKEND_PORT=7800
 
 echo "===== 后端进程检查脚本 ====="
 
@@ -29,7 +29,7 @@ fi
 
 # 检查是否有残留的java后端进程
 echo "[2/2] 检查残留的 Java 后端进程..."
-JAVA_PIDS=$(ps aux | grep "yudao" | grep -E "java.*48080|admin-api" | grep -v grep | awk '{print $2}' | sort -u || true)
+JAVA_PIDS=$(ps aux | grep "yudao" | grep -E "java.*7800|admin-api" | grep -v grep | awk '{print $2}' | sort -u || true)
 
 if [ -n "$JAVA_PIDS" ]; then
     echo "  发现残留进程: $JAVA_PIDS"

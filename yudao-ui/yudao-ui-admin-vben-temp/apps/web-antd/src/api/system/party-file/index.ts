@@ -317,3 +317,21 @@ export function previewMyPartyFileAttachment(id: number, fileId: number) {
     params: { id, fileId },
   });
 }
+
+export function getPartyFileAttachmentPreviewUrl(id: number, fileId: number) {
+  return requestClient.get<string>('/system/party-file/attachment/preview-url', {
+    params: { id, fileId },
+  });
+}
+
+export function getMyPartyFileAttachmentPreviewUrl(id: number, fileId: number) {
+  return requestClient.get<string>('/system/party-file/my-attachment/preview-url', {
+    params: { id, fileId },
+  });
+}
+
+export function getPartyFileAttachmentPreviewUrlByFileId(fileId: number) {
+  return requestClient.get<string>('/system/party-file/attachment/preview-url-by-file', {
+    params: { fileId },
+  });
+}

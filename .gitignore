@@ -62,6 +62,9 @@ application-my.yaml
 /script/docker/env/.stage.ci.env
 /script/docker/env/targets/*.secrets.env
 
+# Local development environment (contains database and Redis credentials)
+/脚本/.local-dev.env
+
 ######################################################################
 # Generated artifacts, local caches and process files
 
@@ -93,6 +96,11 @@ application-my.yaml
 *.iso
 *.dmg
 /script/docker/env/targets/*.env
+!/script/docker/env/targets/local.env
+!/script/docker/env/targets/local.frontend.env
+!/script/docker/env/targets/local.runtime.env
+!/script/docker/env/targets/103.env
+!/script/docker/env/targets/production.env
 
 # The Maven wrapper is source-controlled and must remain tracked.
 !.mvn/wrapper/maven-wrapper.jar

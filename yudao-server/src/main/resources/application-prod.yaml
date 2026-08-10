@@ -1,5 +1,33 @@
 server:
-  port: 48080
+  address: ${SERVER_ADDRESS:}
+  port: ${SERVER_PORT:}
+
+mybatis-plus:
+  global-config:
+    db-config:
+      # 生产环境使用 MySQL 自增主键，不能依赖启动时的数据源探测才能拿到 ID。
+      id-type: ${MYBATIS_PLUS_GLOBAL_CONFIG_DB_CONFIG_ID_TYPE:AUTO}
+
+spring:
+  datasource:
+    dynamic:
+      primary: master
+      datasource:
+        master:
+          url: ${MASTER_DATASOURCE_URL:}
+          username: ${MASTER_DATASOURCE_USERNAME:}
+          password: ${MASTER_DATASOURCE_PASSWORD:}
+        slave:
+          lazy: true
+          url: ${SLAVE_DATASOURCE_URL:}
+          username: ${SLAVE_DATASOURCE_USERNAME:}
+          password: ${SLAVE_DATASOURCE_PASSWORD:}
+  redis:
+    host: ${REDIS_HOST:}
+    port: ${REDIS_APP_PORT:}
+    # Redis 的逻辑库使用标准默认值 0；服务器可用 REDIS_DATABASE 覆盖。
+    database: ${REDIS_DATABASE:0}
+    password: ${REDIS_PASSWORD:}
 
 yudao:
   security:
@@ -15,34 +43,21 @@ yudao:
       - /admin-api/system/auth/kod-sso/direct-login
       - /admin-api/system/auth/kod-sso/exchange
   kod-sso:
-    enabled: ${KOD_SSO_ENABLED:true}
-    base-url: ${KOD_SSO_BASE_URL:http://replace-with-kodbox-host}
+    enabled: ${KOD_SSO_ENABLED:}
+    base-url: ${KOD_SSO_BASE_URL:}
     server-base-url: ${KOD_SSO_SERVER_BASE_URL:}
-    app-name: ${KOD_SSO_APP_NAME:user:all}
-    redirect-uri: ${KOD_SSO_REDIRECT_URI:http://replace-with-frontend-host/#/auth/kod-sso-login?tenantId=1}
-    callback-base-url: ${KOD_SSO_CALLBACK_BASE_URL:http://replace-with-backend-host}
-    tenant-id: ${KOD_SSO_TENANT_ID:1}
-    auto-create-user: ${KOD_SSO_AUTO_CREATE_USER:false}
-    organization-sync-enabled: ${KOD_ORGANIZATION_SYNC_ENABLED:false}
+    app-name: ${KOD_SSO_APP_NAME:}
+    redirect-uri: ${KOD_SSO_REDIRECT_URI:}
+    callback-base-url: ${KOD_SSO_CALLBACK_BASE_URL:}
+    tenant-id: ${KOD_SSO_TENANT_ID:}
+    auto-create-user: ${KOD_SSO_AUTO_CREATE_USER:}
+    organization-sync-enabled: ${KOD_ORGANIZATION_SYNC_ENABLED:}
     organization-sync-username: ${KOD_ORGANIZATION_SYNC_USERNAME:}
     organization-sync-password: ${KOD_ORGANIZATION_SYNC_PASSWORD:}
     organization-sync-access-token: ${KOD_ORGANIZATION_SYNC_ACCESS_TOKEN:}
     organization-sync-endpoint: ${KOD_ORGANIZATION_SYNC_ENDPOINT:}
-    organization-sync-root-group-id: ${KOD_ORGANIZATION_SYNC_ROOT_GROUP_ID:1}
-    organization-sync-cron: ${KOD_ORGANIZATION_SYNC_CRON:-}
+    organization-sync-root-group-id: ${KOD_ORGANIZATION_SYNC_ROOT_GROUP_ID:}
+    organization-sync-cron: ${KOD_ORGANIZATION_SYNC_CRON:}
 
-wx:
-  mp:
-    app-id: ${WX_MP_APP_ID:}
-    secret: ${WX_MP_SECRET:}
-    config-storage:
-      type: RedisTemplate
-      key-prefix: wx
-      http-client-type: HttpClient
-  miniapp:
-    appid: ${WX_MINIAPP_APP_ID:}
-    secret: ${WX_MINIAPP_SECRET:}
-    config-storage:
-      type: RedisTemplate
-      key-prefix: wa
-      http-client-type: HttpClient
+  captcha:
+    enable: ${CAPTCHA_ENABLE:}
