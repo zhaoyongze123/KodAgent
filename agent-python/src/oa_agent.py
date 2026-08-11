@@ -1,6 +1,5 @@
 import os
 from datetime import datetime
-from pathlib import Path
 
 from deepagents.backends.utils import create_file_data
 from deepagents import create_deep_agent
@@ -9,7 +8,7 @@ from .tools.common import (
     AGENT_TIMEZONE,
     apply_tool_contracts,
 )
-from .llm.runtime import DynamicModelMiddleware, RunLifecycleMiddleware
+from .runtime.model_runtime import DynamicModelMiddleware, RunLifecycleMiddleware
 from .middleware import (
     MeetingApprovalAutoConfirmMiddleware,
     ApprovalBatchAutoConfirmMiddleware,
@@ -43,6 +42,7 @@ from .orchestration.phase_prompt import (
     classify_main_agent_phase,
     system_prompt,
 )
+from .orchestration.skill_registry import skill_registry
 from .orchestration.plan_projection import PlanToolProjectionMiddleware
 from .orchestration.policies import (
     CurrentUserMessageMiddleware,
@@ -54,14 +54,11 @@ from .orchestration.graph import build_checkpointer
 from .subagents.registry import build_subagents
 from .orchestration.tool_registry import business_tools, main_tools, meeting_workflow_enabled
 
-SKILL_FILE = Path(__file__).resolve().parents[1] / "skills/meeting-room-booking/SKILL.md"
-
 def skill_files() -> dict[str, dict[str, str]]:
-    """为默认 StateBackend 提供项目 Skill 文件。"""
+    """Expose Skill resources to StateBackend without globally loading them."""
     return {
-        "/skills/meeting-room-booking/SKILL.md": create_file_data(
-            SKILL_FILE.read_text(encoding="utf-8")
-        ),
+        path: create_file_data(content)
+        for path, content in skill_registry.files().items()
     }
 
 
@@ -155,10 +152,9 @@ def build_agent(*, use_checkpointer: bool = True):
             },
         },
         subagents=subagents,
-        skills=["/skills/"],
-        # The parent starts with the compact common prompt. The phase
-        # middleware replaces it for each model call, so child agents keep
-        # their own domain prompts and are never affected by parent phases.
+        # The parent intentionally has no global Skill source.  The phase
+        # middleware injects only the Skill selected after capability routing;
+        # child agents declare their own domain source in the registry.
         system_prompt=MAIN_AGENT_COMMON_PROMPT,
         checkpointer=build_checkpointer() if use_checkpointer else None,
         name="oa-main-agent",

@@ -16,6 +16,7 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import ToolMessage
 
 from ..tools.common.events import current_agent_context, turn_id_from_context
+from ..orchestration.route_policy import workflow_delegate_agent
 from ..orchestration.route_state import (
     current_turn_messages,
     is_terminal_structured_failure,
@@ -102,6 +103,15 @@ def _guard(state: dict[str, Any]) -> dict[str, Any] | None:
             return None
         if status == "FALLBACK" and strategy in {"fallback", "delegate"}:
             return None
+        # 架构拆分后：RESOLVED 的确定性写工作流委托给领域子 Agent 执行
+        # （主 Agent 只路由、交接，由子 Agent 调用 run_meeting_booking_workflow /
+        # run_personal_schedule_workflow）。因此当路由已选定委托目标、且本轮
+        # task 调用只发往该子 Agent 时，这是受控的委托执行，不再拦截。
+        delegate_agent = workflow_delegate_agent(route)
+        if delegate_agent:
+            targets = {_task_target(call) for call in _tool_calls(messages[-1])}
+            if targets and targets <= {delegate_agent}:
+                return None
         if not (
             route_requires_action_selection(route)
             or is_terminal_structured_failure(route)

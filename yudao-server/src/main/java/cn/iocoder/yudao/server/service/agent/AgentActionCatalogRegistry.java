@@ -217,7 +217,8 @@ public class AgentActionCatalogRegistry {
                 "metadata_query", "QUERY", true, false, "schedule:read",
                 fields(field("date", "date", false, "查询日期", "user_input"),
                         field("start_time", "datetime", false, "开始时间", "user_input"),
-                        field("end_time", "datetime", false, "结束时间", "user_input"))));
+                        field("end_time", "datetime", false, "结束时间", "user_input"),
+                        field("time_range", "object", false, "结构化时间范围", "user_input"))));
         actions.add(action("schedule.create", "schedule", "创建个人日程草稿",
                 "workflow", "CREATE", false, true, "schedule:write",
                 fields(field("title", "string", true, "日程标题", "user_input"),
@@ -342,7 +343,8 @@ public class AgentActionCatalogRegistry {
         constraints(actions, "reporting.party_file", constraint("interval", "start", "start_time", "end", "end_time"));
         constraints(actions, "schedule.query",
                 constraint("exclusive_groups", "groups", Arrays.asList(
-                        Arrays.asList("date"), Arrays.asList("start_time", "end_time"))));
+                        Arrays.asList("date"), Arrays.asList("start_time", "end_time"),
+                        Arrays.asList("time_range"))));
         constraints(actions, "approval.write.batch",
                 constraint("non_empty_unique", "field", "taskIds"));
         constraints(actions, "party_file.create",

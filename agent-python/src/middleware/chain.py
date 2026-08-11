@@ -4,13 +4,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..llm.runtime import DynamicModelMiddleware, RunLifecycleMiddleware
+from ..runtime.model_runtime import DynamicModelMiddleware, RunLifecycleMiddleware
 from ..orchestration.plan_projection import PlanToolProjectionMiddleware
 from ..orchestration.phase_prompt import MainAgentPhasePromptMiddleware
-from ..orchestration.policies import CurrentUserMessageMiddleware, main_approval_tool_limit_middleware
+from ..orchestration.policies import (
+    CurrentUserMessageMiddleware,
+    PendingPlanMiddleware,
+    main_approval_tool_limit_middleware,
+)
 from .approval_batch_approval import ApprovalBatchAutoConfirmMiddleware
 from .approval_request_approval import ApprovalRequestAutoConfirmMiddleware
+from .approval_resume_gate import ApprovalResumeGateMiddleware
 from .approval_task_approval import ApprovalTaskAutoConfirmMiddleware
+from .duplicate_tool_message_guard import DuplicateToolMessageGuardMiddleware
 from .meeting_approval import MeetingApprovalAutoConfirmMiddleware
 from .meeting_approval_resume import MeetingApprovalResumeMiddleware
 from .meeting_task_guard import MeetingTaskCallGuardMiddleware
@@ -34,6 +40,8 @@ def build_middleware_chain(*, dynamic_model: Any | None = None, phase_prompt: An
     """
     items = [
         CurrentUserMessageMiddleware(trusted_source=True),
+        PendingPlanMiddleware(),
+        DuplicateToolMessageGuardMiddleware(),
         dynamic_model or DynamicModelMiddleware(),
         phase_prompt or MainAgentPhasePromptMiddleware(),
         PlanToolProjectionMiddleware(),
@@ -47,6 +55,7 @@ def build_middleware_chain(*, dynamic_model: Any | None = None, phase_prompt: An
         ApprovalRequestAutoConfirmMiddleware(),
         PartyFileApprovalAutoConfirmMiddleware(),
         PersonalScheduleApprovalArgsMiddleware(),
+        ApprovalResumeGateMiddleware(),
         MeetingApprovalResumeMiddleware(),
         PersonalScheduleApprovalResumeMiddleware(),
         main_approval_tool_limit_middleware(),
@@ -56,10 +65,13 @@ def build_middleware_chain(*, dynamic_model: Any | None = None, phase_prompt: An
         raise MiddlewareOrderError(f"中间件名称重复: {names}")
     required_order = (
         ("CurrentUserMessageMiddleware", "PlanToolProjectionMiddleware"),
+        ("CurrentUserMessageMiddleware", "PendingPlanMiddleware"),
+        ("PendingPlanMiddleware", "MainAgentPhasePromptMiddleware"),
         ("DynamicModelMiddleware", "MainAgentPhasePromptMiddleware"),
         ("PlanToolProjectionMiddleware", "MeetingTaskCallGuardMiddleware"),
         ("ToolAuditMiddleware", "MeetingApprovalAutoConfirmMiddleware"),
         ("MeetingApprovalAutoConfirmMiddleware", "MeetingApprovalResumeMiddleware"),
+        ("ApprovalResumeGateMiddleware", "MeetingApprovalResumeMiddleware"),
         ("PersonalScheduleApprovalArgsMiddleware", "PersonalScheduleApprovalResumeMiddleware"),
     )
     positions = {name: index for index, name in enumerate(names)}

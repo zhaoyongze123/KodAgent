@@ -32,11 +32,11 @@ _CHINESE_DIGITS = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
 # the exact phrase used in the prompt.  They all resolve to the same canonical
 # value before request keys are built and before any Java user lookup happens.
 _SELF_REFERENT_PATTERN = (
-    r"(?:当前用户本人|用户本人|本用户|我本人|当前用户|我|本人|自己|申请人|操作者)"
+    r"(?:当前用户本人|用户本人|本用户|我本人|我自己|当前用户|我|本人|自己|申请人|操作者)"
 )
 
 SELF_REFERENTS = frozenset({
-    "我", "本人", "自己", "我本人", "当前用户", "用户", "用户本人", "发起人",
+    "我", "本人", "自己", "我本人", "我自己", "当前用户", "用户", "用户本人", "发起人",
     "当前用户本人", "本用户", "申请人", "操作者",
     # OpenAI-compatible providers sometimes emit a typed English marker for
     # the user's self-only attendee constraint.  It is a transport alias, not

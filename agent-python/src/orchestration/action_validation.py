@@ -18,10 +18,13 @@ from .capabilities import ActionFieldSpec, ActionSpec, action_constraints, actio
 class ActionValidationResult:
     def __init__(self, *, missing: list[str] | None = None,
                  invalid: list[str] | None = None,
-                 forbidden: list[str] | None = None):
+                 forbidden: list[str] | None = None,
+                 formats: dict[str, str] | None = None):
         self.missing_fields = list(missing or [])
         self.invalid_fields = list(invalid or [])
         self.forbidden_fields = list(forbidden or [])
+        # field name -> declared format hint (e.g. "yyyy-MM-dd HH:mm:ss").
+        self.field_formats = dict(formats or {})
 
     @property
     def ok(self) -> bool:
@@ -31,9 +34,16 @@ class ActionValidationResult:
     def issues(self) -> list[str]:
         issues: list[str] = []
         issues.extend(f"缺少必填字段：{name}" for name in self.missing_fields)
-        issues.extend(f"字段值无效：{name}" for name in self.invalid_fields)
+        issues.extend(self._invalid_issue(name) for name in self.invalid_fields)
         issues.extend(f"禁止传入执行字段：{name}" for name in self.forbidden_fields)
         return issues
+
+    def _invalid_issue(self, name: str) -> str:
+        # Composite constraint labels already carry their own explanation.
+        fmt = self.field_formats.get(name)
+        if fmt:
+            return f"字段值无效：{name}（需要格式 {fmt}）"
+        return f"字段值无效：{name}"
 
 
 _FORBIDDEN_KEYS = {
@@ -340,6 +350,8 @@ def validate_action_payload(action: ActionSpec, payload: dict[str, Any] | None,
             continue
         if field.name in values and values[field.name] is not None and not _type_ok(values[field.name], field):
             result.invalid_fields.append(field.name)
+            if field.format:
+                result.field_formats[field.name] = field.format
             continue
         if field.name in values and field.enum and str(values[field.name]).upper() not in field.enum:
             result.invalid_fields.append(field.name)

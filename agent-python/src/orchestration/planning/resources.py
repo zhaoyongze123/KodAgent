@@ -9,6 +9,7 @@ from ...workflows.registry import workflow_registry
 from ..capabilities import ACTION_SPECS, action_field_specs, resolve_action
 from .common import int_or_none, plan_id, present
 from .contracts import CompileContext
+from .time_semantics import resolve_schedule_time_range
 
 
 _WORKFLOW_TYPES = {"meeting": "meeting_booking", "schedule": "personal_schedule"}
@@ -105,7 +106,22 @@ def _metadata_plan(context: CompileContext) -> CompiledTaskPlan:
         date = str(payload.get("date") or "").strip()
         start_time = str(payload.get("start_time") or payload.get("startTime") or "").strip()
         end_time = str(payload.get("end_time") or payload.get("endTime") or "").strip()
-        if date and not start_time and not end_time:
+        time_range = payload.get("time_range")
+        if time_range is not None:
+            resolved_range = resolve_schedule_time_range(time_range)
+            if resolved_range.error:
+                canonical = {
+                    "entity": "personal_schedule", "operation": "QUERY",
+                    "timeRange": time_range,
+                }
+                return CompiledTaskPlan(
+                    plan_id=plan_id(context.capability_id, "metadata_query", canonical), status="CLARIFY",
+                    capability_id=context.capability_id, execution_class="metadata_query", canonical=canonical,
+                    issues=[resolved_range.error], missing_fields=["time_range"],
+                    clarification_question="请按 time_range 相对时间范围契约补充或修正查询时间。",
+                )
+            start_time, end_time = resolved_range.start_time or "", resolved_range.end_time or ""
+        elif date and not start_time and not end_time:
             start_time, end_time = f"{date} 00:00:00", f"{date} 23:59:59"
         if not start_time or not end_time:
             canonical = {"entity": "personal_schedule", "operation": "QUERY"}
@@ -116,6 +132,8 @@ def _metadata_plan(context: CompileContext) -> CompiledTaskPlan:
                 clarification_question="请提供要查询的日期或开始、结束时间范围。",
             )
         canonical = {"entity": "personal_schedule", "operation": "QUERY", "startTime": start_time, "endTime": end_time}
+        if time_range is not None:
+            canonical["timeRange"] = time_range
         return CompiledTaskPlan(
             plan_id=plan_id(context.capability_id, "metadata_query", canonical), status="RESOLVED",
             capability_id=context.capability_id, execution_class="metadata_query", execution_tool="get_my_calendar",

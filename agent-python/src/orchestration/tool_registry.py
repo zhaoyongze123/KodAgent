@@ -65,6 +65,8 @@ from ..tools.common import (
 )
 from ..tools.workflows.meeting_booking import run_meeting_booking_workflow
 from ..tools.workflows.personal_schedule import run_personal_schedule_workflow
+from ..tools.workflows.approval import run_approval_write_workflow
+from ..tools.workflows.party_file_write import run_party_file_write_workflow
 from ..workflows.registry import workflow_registry
 
 
@@ -157,6 +159,8 @@ def business_tools() -> list:
         check_approval_against_party_file,
         run_meeting_booking_workflow,
         run_personal_schedule_workflow,
+        run_approval_write_workflow,
+        run_party_file_write_workflow,
         meeting_report,
         schedule_report,
         party_file_report,
@@ -165,51 +169,23 @@ def business_tools() -> list:
 
 
 def main_tools() -> list:
-    """Tools exposed directly on the parent graph; domains stay in children."""
-    tools = [
+    """Return control-plane tools exposed on the parent graph.
+
+    A normal business executor belongs to its domain child and is reached only
+    through a code-owned WorkOrder.  Root confirmation tools are the one
+    deliberate exception: LangGraph's interrupt/resume lifecycle is a shared
+    control-plane boundary, not an action the parent model may freely choose.
+    """
+    return [
         report_progress,
         route_conversation,
-        list_my_meeting_bookings,
-        get_my_meeting_booking,
-        create_meeting_booking_cancellation_draft,
         confirm_meeting_booking,
         confirm_personal_schedule,
-        create_party_file_draft,
-        update_party_file_draft,
-        delete_party_file_draft,
+        confirm_approval_request_action,
+        confirm_approval_withdraw_action,
+        confirm_approval_batch_action,
+        confirm_approval_task_action,
         confirm_create_party_file,
         confirm_update_party_file,
         confirm_delete_party_file,
-        confirm_approval_batch_action,
-        confirm_approval_task_action,
-        # Simple, read-only approval queries stay on the parent path. This
-        # prevents a single structured filter from depending on delegation.
-        list_my_pending_approvals,
-        search_my_pending_approvals,
-        analyze_my_pending_approvals,
-        run_approval_query_plan,
-        list_my_approval_applications,
-        get_my_approval_application,
-        list_my_approval_history,
-        # Calendar reads have a typed metadata plan and therefore remain on
-        # the parent graph; complex coordination still delegates to the
-        # schedules_agent.
-        get_my_calendar,
-        get_party_file_attachments,
-        execute_party_file_metadata_plan,
-        meeting_report,
-        schedule_report,
-        party_file_report,
-        approval_report,
     ]
-    if meeting_workflow_enabled():
-        tools.append(run_meeting_booking_workflow)
-    if personal_schedule_workflow_enabled():
-        tools.append(run_personal_schedule_workflow)
-    if party_knowledge_workflow_enabled():
-        tools.append(run_party_file_understanding)
-    if party_compare_workflow_enabled():
-        tools.append(run_party_file_compare)
-    if party_approval_check_enabled():
-        tools.append(check_approval_against_party_file)
-    return tools

@@ -19,6 +19,11 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, ToolMessage
 
+from ..orchestration.delegated_receipt import (
+    DelegatedMeetingDraftReceipt,
+    parse_meeting_draft_receipt,
+)
+
 
 def _messages_from_request(request: Any) -> list[Any]:
     state = getattr(request, "state", None)
@@ -153,4 +158,40 @@ def is_delegated_draft_projection_turn(request: Any, delegate_agents: set[str]) 
     return str(args.get("subagent_type") or args.get("subagentType") or "") in delegate_agents
 
 
-__all__ = ["is_draft_projection_turn", "is_delegated_draft_projection_turn"]
+def delegated_meeting_draft_receipt(request: Any) -> DelegatedMeetingDraftReceipt | None:
+    """Return the validated receipt from the immediate meeting ``task`` result.
+
+    The task call id proves which parent call owns the ToolMessage; the child
+    type pins its domain; and the strict receipt schema proves the result was
+    emitted by the meeting execution middleware.  No model-authored text and
+    no pending-operation lookup participates in this decision.
+    """
+    messages = _messages_from_request(request)
+    if not messages or not (isinstance(messages[-1], ToolMessage) or isinstance(messages[-1], dict)):
+        return None
+    last = messages[-1]
+    if not _tool_succeeded(last):
+        return None
+    call = _tool_call_for_message(messages, last)
+    if not isinstance(call, dict) or str(call.get("name") or "") not in {"task", "task_tool"}:
+        return None
+    args = call.get("args") or {}
+    if not isinstance(args, dict):
+        return None
+    if str(args.get("subagent_type") or args.get("subagentType") or "") != "meeting_rooms_agent":
+        return None
+    content = last.get("content", "") if isinstance(last, dict) else last.content
+    return parse_meeting_draft_receipt(content)
+
+
+def is_delegated_meeting_draft_projection_turn(request: Any) -> bool:
+    """Whether this frame contains one trusted meeting draft receipt."""
+    return delegated_meeting_draft_receipt(request) is not None
+
+
+__all__ = [
+    "delegated_meeting_draft_receipt",
+    "is_delegated_draft_projection_turn",
+    "is_delegated_meeting_draft_projection_turn",
+    "is_draft_projection_turn",
+]

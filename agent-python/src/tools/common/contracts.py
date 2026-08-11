@@ -106,6 +106,8 @@ TOOL_CONTRACTS = {
     "confirm_meeting_booking": ToolContract("confirm_meeting_booking", "提交会议室预约", False, True, True, permission="meeting:booking:create", timeout_seconds=15, idempotency="draft-id", sensitive_fields=("identityTicket",)),
     "run_meeting_booking_workflow": ToolContract("run_meeting_booking_workflow", "按固定顺序整理会议预约、检查冲突并生成草稿", False, True, False, permission="meeting:booking:create", timeout_seconds=60, retryable=True, max_retries=1, idempotency="request-key"),
     "run_personal_schedule_workflow": ToolContract("run_personal_schedule_workflow", "按固定顺序校验个人日程并生成草稿", False, True, False, permission="schedule:write", timeout_seconds=45, retryable=True, max_retries=1, idempotency="request-key"),
+    "run_approval_write_workflow": ToolContract("run_approval_write_workflow", "按已编译操作生成审批申请、撤回或待办处理预览", False, True, False, permission="approval:write", timeout_seconds=30, retryable=True, max_retries=1, idempotency="request-key"),
+    "run_party_file_write_workflow": ToolContract("run_party_file_write_workflow", "按已编译操作生成党务文件创建、修改或删除草稿", False, True, False, permission="party-file:write", timeout_seconds=30, retryable=True, max_retries=1, idempotency="request-key"),
     # These are Agent-internal Java calls. They still need a contract so a
     # support operation cannot silently fall back to report_progress.
     "get_meeting_booking_draft": ToolContract("get_meeting_booking_draft", "读取已保存的会议预约草稿", True, False, False, permission="meeting:booking:create", timeout_seconds=10),

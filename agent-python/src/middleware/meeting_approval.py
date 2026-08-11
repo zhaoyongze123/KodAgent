@@ -17,7 +17,10 @@ from ..services.meeting_approval import (
 )
 from ..services.approval_core import PROJECTION_METADATA_KEY, approval_projection_metadata
 from ..workflows.registry import confirmation_route
-from .approval_projection import is_delegated_draft_projection_turn, is_draft_projection_turn
+from .approval_projection import (
+    is_delegated_meeting_draft_projection_turn,
+    is_draft_projection_turn,
+)
 from ..hitl.auto_confirm import ConfiguredApprovalProjectionMiddleware
 
 
@@ -30,7 +33,6 @@ _DRAFT_SOURCE_TOOLS = {
     "create_meeting_booking_cancellation_draft",
     "run_meeting_booking_workflow",
 }
-_DRAFT_DELEGATE_AGENTS = {"meeting_rooms_agent"}
 
 
 def _replace_response_messages(response: Any, messages: list[Any]) -> Any:
@@ -109,7 +111,7 @@ def _upsert_pending_confirmation(request: Any, response: Any) -> Any:
     """Project only the immediately preceding draft result into official HITL."""
     if not (
         is_draft_projection_turn(request, _DRAFT_SOURCE_TOOLS)
-        or is_delegated_draft_projection_turn(request, _DRAFT_DELEGATE_AGENTS)
+        or is_delegated_meeting_draft_projection_turn(request)
     ):
         return _enrich_model_response(response)
     context, error = load_pending_approval_context(request)

@@ -76,7 +76,7 @@ class ApprovalPlanCompiler:
             "APPLICATIONS": "list_my_approval_applications",
             "APPLICATION_DETAIL": "get_my_approval_application",
             "HISTORY": "list_my_approval_history",
-            "WITHDRAW": "create_approval_withdraw_draft",
+            "WITHDRAW": "run_approval_write_workflow",
         }
         canonical: dict[str, Any] = {"operation": operation}
         if operation == "WITHDRAW":

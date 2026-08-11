@@ -85,8 +85,12 @@ def has_trusted_approval_projection(
     if not isinstance(messages, (list, tuple)):
         return False
     for message in reversed(messages):
-        calls = getattr(message, "tool_calls", None)
-        metadata = getattr(message, "additional_kwargs", None)
+        # LangGraph Server may rehydrate checkpoint messages as plain dicts.
+        # Treat them identically to in-process AIMessage objects; otherwise a
+        # valid projected PENDING call looks untrusted, the HITL ``when``
+        # predicate returns False, and the framework fail-opens into ToolNode.
+        calls = message.get("tool_calls") if isinstance(message, Mapping) else getattr(message, "tool_calls", None)
+        metadata = message.get("additional_kwargs") if isinstance(message, Mapping) else getattr(message, "additional_kwargs", None)
         if not isinstance(calls, list) or not isinstance(metadata, Mapping):
             continue
         if not any(isinstance(call, Mapping) and str(call.get("id") or "") == call_id for call in calls):

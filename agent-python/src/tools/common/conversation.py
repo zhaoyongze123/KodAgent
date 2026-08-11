@@ -1,6 +1,7 @@
 """Conversation tools that do not call business systems."""
 
 import ast
+from copy import deepcopy
 import json
 import re
 from typing import Any, Literal
@@ -15,10 +16,16 @@ from ...orchestration.routing.recovery import (
     party_metadata_fallback_plan,
     recover_party_file_write_candidate,
     recover_party_file_write_intent,
+    normalize_schedule_query_candidate,
     schedule_metadata_fallback_plan,
+    meeting_metadata_fallback_plan,
+    normalize_meeting_query_candidate,
+    recover_meeting_write_action,
 )
 from ...orchestration.capabilities import (
     APPROVAL_PROCESS_CAPABILITY_ID,
+    CAPABILITIES,
+    GENERAL_CAPABILITY,
     action_catalog_prompt,
     action_description,
     action_execution_class,
@@ -27,10 +34,19 @@ from ...orchestration.capabilities import (
     action_read_only,
     action_requires_confirmation,
     actions_for_capability,
+    canonical_capability_id,
     capability_routing_enabled,
+    is_non_action_reference,
     resolve_action,
+    resolve_registered_action_alias,
     resolve_capability,
+    resolve_typed_read_action,
+    suggest_action_id_from_payload,
 )
+from ...orchestration.action_catalog_runtime import runtime_action_catalog_meta
+from ...orchestration.prompts import PROMPT_VERSION
+from ...orchestration.routing_trace import current_model_trace
+from ...orchestration.skill_registry import skill_registry
 from ...orchestration.query_canonicalizer import canonicalize_approval_query
 from ...orchestration.action_selection import (
     recover_approval_process_action,
@@ -39,7 +55,7 @@ from ...orchestration.action_selection import (
 from ...orchestration.compiler import compile_plan
 from ...orchestration.planning.party_file import normalize_party_file_operation
 from ...orchestration.planning.resources import infer_workflow_capability
-from .events import emit
+from .events import current_agent_context, emit
 from langgraph.config import get_stream_writer
 from .contracts import ToolResponse, tool_failure, tool_success
 
@@ -55,19 +71,41 @@ class RouteConversationInput(BaseModel):
     """
 
     message: str
+    continuation_mode: Literal["resume", "new"] | None = Field(
+        default=None,
+        description=(
+            "仅表示当前输入是否续接 Thread 中待补字段的计划；这是传输提示，"
+            "不参与业务计划编译。"
+        ),
+    )
     task_complexity: Literal["simple", "complex"] = "simple"
     capability_id: str = Field(
         ...,
         description="第一阶段选择的能力域；未知请求必须传 general_agent，不能省略。",
     )
-    action_id: str | None = None
+    action_id: str | None = Field(
+        default=None,
+        description=(
+            "第二阶段才填写；必须从当前路由工具 schema 的 action_id 枚举中逐字复制。"
+            "不能填写工具名、子 Agent 名称、自然语言或历史别名。"
+        ),
+    )
     strategy: RouteStrategy | None = None
     confidence: float | None = None
     missing_fields: list[str] | None = None
     unsupported_criteria: list[str] | None = None
     query_intent: dict | str | None = None
     execution_class: ExecutionClass | None = None
-    candidate_plan: dict[str, Any] | str | None = None
+    candidate_plan: dict[str, Any] | str | None = Field(
+        default=None,
+        description=(
+            "只填写用户明确提供或真实工具返回的业务字段。更新/取消必须使用"
+            "当前授权查询事实中的 source_*_id；不能猜测或从历史上下文选目标。"
+            "键名必须使用 Action Catalog 的正式字段名，值类型与格式遵循其"
+            "字段格式约定：datetime 为 yyyy-MM-dd HH:mm:ss，date 为 yyyy-MM-dd，"
+            "integer 为纯数字，array 为字符串数组；缺失字段不要编造。"
+        ),
+    )
 
     @field_validator("missing_fields", "unsupported_criteria", mode="before")
     @classmethod
@@ -83,6 +121,79 @@ class RouteConversationInput(BaseModel):
         except (TypeError, ValueError, json.JSONDecodeError):
             return [text]
         return parsed if isinstance(parsed, list) else [str(parsed)]
+
+
+class _ModelToolSchema(dict[str, Any]):
+    """OpenAI-compatible descriptor that retains a stable tool ``name`` view.
+
+    LangChain models consume the mapping form, while middleware diagnostics
+    and tests intentionally reason about tool names.  Keeping both views
+    avoids a second ad-hoc name parser at every tool-palette boundary.
+    """
+
+    @property
+    def name(self) -> str:
+        function = self.get("function")
+        return str(function.get("name") or "") if isinstance(function, dict) else ""
+
+
+def route_conversation_model_schema(
+    capability_id: str | None = None,
+    *,
+    selected_action_id: str | None = None,
+    require_action: bool = False,
+) -> dict[str, Any]:
+    """Build the model-facing route-tool schema from the live action catalog.
+
+    The executable ``route_conversation`` tool deliberately retains a stable
+    transport schema: LangGraph's ToolNode resolves it by name after the
+    model call.  Before binding that tool to a model, the projection
+    middleware calls this factory and supplies a per-turn JSON schema instead.
+    Thus the model can choose only the *currently registered* capability and,
+    after a domain has been selected, only that domain's live ``action_id``s.
+    Java's synchronized action catalog is automatically reflected through
+    ``actions_for_capability``; no action name is copied into a prompt.
+    """
+    parameters = deepcopy(RouteConversationInput.model_json_schema())
+    properties = parameters.setdefault("properties", {})
+    required = list(parameters.get("required") or [])
+
+    selected_capability = canonical_capability_id(capability_id)
+    capability_values = (
+        [selected_capability]
+        if selected_capability and selected_capability not in {"general", "general_agent"}
+        else [item.name for item in (*CAPABILITIES, GENERAL_CAPABILITY)]
+    )
+    properties["capability_id"] = {
+        "type": "string",
+        "enum": capability_values,
+        "description": "从当前路由工具 schema 的 capability_id 枚举中选择。",
+    }
+
+    action_values = [item.action_id for item in actions_for_capability(selected_capability)]
+    if selected_action_id:
+        # A field-clarification/resume turn has an already compiled action.
+        # Its schema is narrower than the domain catalog so the model cannot
+        # turn an UPDATE into CREATE while filling a missing field.
+        action_values = [selected_action_id] if selected_action_id in action_values else []
+    if action_values:
+        properties["action_id"] = {
+            "type": "string",
+            "enum": action_values,
+            "description": "从当前 action_id 枚举中逐字选择正式动作。",
+        }
+        if require_action and "action_id" not in required:
+            required.append("action_id")
+    parameters["required"] = required
+
+    return _ModelToolSchema({
+        "type": "function",
+        "function": {
+            "name": route_conversation.name,
+            "description": route_conversation.description,
+            "parameters": parameters,
+        },
+    })
 
 
 def _coerce_object(value: Any) -> dict[str, Any] | None:
@@ -109,45 +220,130 @@ def _coerce_object(value: Any) -> dict[str, Any] | None:
     return None
 
 
-def _suggest_action_id_from_payload(
-    capability_id: str | None,
+_ACTION_FIELD_ALIASES: dict[str, dict[str, str]] = {
+    # These are transport spellings emitted by model/tool adapters. They are
+    # normalized to the catalog field only; authorization markers are never
+    # synthesized here.
+    "meeting.update": {
+        "booking_id": "source_booking_id", "bookingId": "source_booking_id",
+        "reservation_id": "source_booking_id", "reservationId": "source_booking_id",
+    },
+    "meeting.cancel": {
+        "booking_id": "source_booking_id", "bookingId": "source_booking_id",
+        "reservation_id": "source_booking_id", "reservationId": "source_booking_id",
+    },
+    "schedule.update": {
+        "schedule_id": "source_schedule_id", "scheduleId": "source_schedule_id",
+        "event_id": "source_schedule_id", "eventId": "source_schedule_id",
+    },
+    "schedule.cancel": {
+        "schedule_id": "source_schedule_id", "scheduleId": "source_schedule_id",
+        "event_id": "source_schedule_id", "eventId": "source_schedule_id",
+    },
+    "approval.process.application_detail": {
+        "process_id": "processInstanceId", "process_instance_id": "processInstanceId",
+        "processInstanceID": "processInstanceId",
+    },
+    "approval.process.withdraw": {
+        "process_id": "processInstanceId", "process_instance_id": "processInstanceId",
+        "processInstanceID": "processInstanceId",
+    },
+    "party_file.attachments": {
+        "file_id": "source_party_file_id", "fileId": "source_party_file_id",
+        "document_id": "source_party_file_id", "documentId": "source_party_file_id",
+    },
+    "party_file.update": {
+        "file_id": "source_party_file_id", "fileId": "source_party_file_id",
+        "document_id": "source_party_file_id", "documentId": "source_party_file_id",
+    },
+    "party_file.delete": {
+        "file_id": "source_party_file_id", "fileId": "source_party_file_id",
+        "document_id": "source_party_file_id", "documentId": "source_party_file_id",
+    },
+    "party_file.compare": {
+        "left_id": "left_file_id", "leftFileId": "left_file_id",
+        "right_id": "right_file_id", "rightFileId": "right_file_id",
+    },
+}
+
+_EXPLICIT_REFERENCE_PATTERNS: dict[str, re.Pattern[str]] = {
+    "meeting_source": re.compile(r"(?:预约(?:编号|号)?|booking(?:\s*id)?|会议)\s*(?:为|是)?\s*[#：:#-]?\s*(\d+)", re.I),
+    "schedule_source": re.compile(r"(?:日程(?:编号|号)?|schedule(?:\s*id)?|event(?:\s*id)?)\s*(?:为|是)?\s*[#：:#-]?\s*(\d+)", re.I),
+    "party_file_source": re.compile(r"(?:党务文件|文件|文档)(?:编号|号)?\s*(?:为|是)?\s*[#：:#-]?\s*(\d+)", re.I),
+    "process_instance": re.compile(r"流程(?:编号|号)?\s*(?:为|是)?\s*[#：:#-]?\s*([A-Za-z0-9_-]+)", re.I),
+    "approval_task": re.compile(r"任务(?:编号|号)?\s*(?:为|是)?\s*[#：:#-]?\s*([A-Za-z0-9_-]+)", re.I),
+}
+
+
+def _normalize_action_field_aliases(
+    action_id: str | None,
     candidate_plan: dict[str, Any] | None,
     query_intent: dict[str, Any] | None,
-) -> str | None:
-    """Suggest an action using the registered field schema only.
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Normalize typed transport keys without creating business authority."""
+    aliases = _ACTION_FIELD_ALIASES.get(str(action_id or "").strip(), {})
+    candidate = dict(candidate_plan or {})
+    intent = dict(query_intent or {})
+    for payload in (intent, candidate):
+        for source, target in aliases.items():
+            if target not in payload and source in payload:
+                payload[target] = payload[source]
+            if source != target:
+                payload.pop(source, None)
+    return candidate, intent if query_intent is not None else None
 
-    This is a presentation aid for the second routing stage, not a prose
-    classifier.  If the provider already extracted a field that exists in
-    exactly one action in the selected domain (for example ``limit`` in the
-    pending-approval query), expose that action as a hint while still
-    requiring the provider to submit the registered ``action_id``.
-    """
-    payload = {
-        **(query_intent if isinstance(query_intent, dict) else {}),
-        **(candidate_plan if isinstance(candidate_plan, dict) else {}),
-    }
-    ignored = {
-        "action_id", "actionId", "operation", "action", "entity", "type",
-        "domain", "execution_class", "executionClass", "_authorized_source_fields",
-        "_action_id_synthesized",
-    }
-    supplied = {str(key) for key, value in payload.items() if key not in ignored and value not in (None, "", [], {})}
-    if not supplied:
-        return None
-    matches: list[tuple[str, int]] = []
-    for action in actions_for_capability(capability_id):
-        names = {field.name for field in action_field_specs(action)}
-        overlap = supplied & names
-        # An action can accept the supplied typed fields only when every
-        # field is in its schema.  At least one overlap makes the hint
-        # meaningful; otherwise a domain-level payload remains ambiguous.
-        if overlap and supplied <= names:
-            matches.append((action.action_id, len(overlap)))
-    if not matches:
-        return None
-    best_score = max(score for _, score in matches)
-    best = [action_id for action_id, score in matches if score == best_score]
-    return best[0] if len(best) == 1 else None
+
+def _recover_explicit_reference_fields(
+    action_id: str | None,
+    message: str,
+    candidate_plan: dict[str, Any],
+) -> dict[str, Any]:
+    """Extract explicitly labelled IDs without treating them as authorized."""
+    action = str(action_id or "").strip()
+    payload = dict(candidate_plan)
+    if action in {"meeting.update", "meeting.cancel"} and "source_booking_id" not in payload:
+        match = _EXPLICIT_REFERENCE_PATTERNS["meeting_source"].search(message)
+        if match:
+            payload["source_booking_id"] = int(match.group(1))
+    elif action in {"schedule.update", "schedule.cancel"} and "source_schedule_id" not in payload:
+        match = _EXPLICIT_REFERENCE_PATTERNS["schedule_source"].search(message)
+        if match:
+            payload["source_schedule_id"] = int(match.group(1))
+    elif action in {"party_file.attachments", "party_file.update", "party_file.delete"} and "source_party_file_id" not in payload:
+        match = _EXPLICIT_REFERENCE_PATTERNS["party_file_source"].search(message)
+        if match:
+            payload["source_party_file_id"] = int(match.group(1))
+    elif action in {"approval.process.application_detail", "approval.process.withdraw"} and "processInstanceId" not in payload:
+        match = _EXPLICIT_REFERENCE_PATTERNS["process_instance"].search(message)
+        if match:
+            payload["processInstanceId"] = match.group(1)
+    elif action == "approval.write.task" and "taskId" not in payload:
+        match = _EXPLICIT_REFERENCE_PATTERNS["approval_task"].search(message)
+        if match:
+            payload["taskId"] = match.group(1)
+    elif action == "approval.write.batch" and "taskIds" not in payload:
+        values = _EXPLICIT_REFERENCE_PATTERNS["approval_task"].findall(message)
+        if values:
+            payload["taskIds"] = values
+    elif action == "party_file.compare":
+        values = _EXPLICIT_REFERENCE_PATTERNS["party_file_source"].findall(message)
+        if len(values) >= 2:
+            payload.setdefault("left_file_id", int(values[0]))
+            payload.setdefault("right_file_id", int(values[1]))
+    elif action == "party_file.compliance":
+        file_match = _EXPLICIT_REFERENCE_PATTERNS["party_file_source"].search(message)
+        task_match = _EXPLICIT_REFERENCE_PATTERNS["approval_task"].search(message)
+        if file_match:
+            payload.setdefault("file_id", int(file_match.group(1)))
+        if task_match:
+            payload.setdefault("task_id", task_match.group(1))
+    return payload
+
+
+# Backwards-compatible alias. The canonical implementation lives in the
+# orchestration capability registry so the projection middleware and the
+# route policy share exactly one copy of the inference contract.
+_suggest_action_id_from_payload = suggest_action_id_from_payload
 
 
 def _infer_typed_action_from_shape(
@@ -173,8 +369,13 @@ def _infer_typed_action_from_shape(
         candidate.get("operation") or candidate.get("action")
         or intent.get("operation") or intent.get("action") or ""
     ).strip().upper().replace("-", "_")
-    if capability_id and capability_id not in {"", "general", "general_agent"}:
-        domain = str(capability_id).strip().lower().replace("-", "_")
+    canonical_capability = canonical_capability_id(capability_id)
+    if canonical_capability and canonical_capability not in {"", "general", "general_agent"}:
+        # Capability aliases belong to the transport boundary. Typed action
+        # recovery must operate on the canonical catalog namespace or a
+        # delegate name such as ``meeting_rooms_agent`` will block a valid
+        # operation from resolving to ``meeting.create``.
+        domain = canonical_capability
     elif entity in {"my_requests", "my_applications", "approval_applications"} and re.search(
         r"我发起|我的申请|发起的审批|申请记录", str(message or "")
     ):
@@ -452,6 +653,7 @@ def _recover_typed_schedule_query_candidate(
     date = str(merged.get("date") or "").strip()
     start = str(merged.get("start_time") or merged.get("startTime") or "").strip()
     end = str(merged.get("end_time") or merged.get("endTime") or "").strip()
+    time_range = merged.get("time_range") or merged.get("timeRange")
     # ``schedule_type=personal`` is already a typed domain assertion from the
     # planner. The message check is only a secondary guard for providers that
     # omit that field; do not require the model to repeat the word ``个人`` in
@@ -459,16 +661,25 @@ def _recover_typed_schedule_query_candidate(
     explicit_schedule = schedule_type in {"personal", "personal_schedule", "schedule", "calendar"} or bool(
         re.search(r"个人日程|个人安排|我的日程|个人日历|我的日历", str(message or ""))
     )
-    if operation != "QUERY" or not explicit_schedule or schedule_type not in {"personal", "personal_schedule", "schedule", "calendar"}:
+    if operation != "QUERY" or not explicit_schedule:
         return None
-    if not date and not (start and end):
+    if schedule_type and schedule_type not in {"personal", "personal_schedule", "schedule", "calendar"}:
         return None
-    return {**candidate, **intent, "entity": "personal_schedule", "operation": "QUERY"}
+    if not date and not (start and end) and not isinstance(time_range, dict):
+        return None
+    normalized = {**candidate, **intent, "entity": "personal_schedule", "operation": "QUERY"}
+    # Providers often repeat a one-day date as both ``date`` and a full-day
+    # interval. The action contract accepts either representation, so retain
+    # the more precise interval when both describe the same calendar day.
+    if date and start and end and start[:10] == date and end[:10] == date:
+        normalized.pop("date", None)
+    return normalized
 
 
 @tool(args_schema=RouteConversationInput)
 def route_conversation(
     message: str,
+    continuation_mode: Literal["resume", "new"] | None = None,
     task_complexity: Literal["simple", "complex"] = "simple",
     capability_id: str | None = None,
     action_id: str | None = None,
@@ -492,6 +703,22 @@ def route_conversation(
     candidate_plan = _coerce_object(candidate_plan)
     explicit_candidate_supplied = isinstance(candidate_plan, dict) and bool(candidate_plan)
     query_intent = _coerce_object(query_intent)
+    # Textual schedule-date recovery is a provider-envelope compatibility
+    # path. Once the provider supplied any structured plan/intent, time
+    # semantics belong to that contract and must be compiled or clarified.
+    provider_schedule_envelope_missing = not explicit_candidate_supplied and not bool(query_intent)
+    initial_confirmation_intent = bool(
+        isinstance(candidate_plan, dict)
+        and (
+            candidate_plan.get("_confirmation_intent") is True
+            or str(candidate_plan.get("operation") or candidate_plan.get("action") or "")
+            .strip()
+            .upper()
+            in {"CONFIRM", "CONFIRM_PUBLISH", "CONFIRM_RELEASE"}
+        )
+    )
+    action_recovery: dict[str, str] | None = None
+    schedule_date_recovery: dict[str, str] | None = None
     action_id = str(
         action_id
         or (candidate_plan or {}).get("action_id")
@@ -500,6 +727,7 @@ def route_conversation(
         or (query_intent or {}).get("actionId")
         or ""
     ).strip() or None
+    requested_action_id = action_id
     # Conversation history is carried by the LangGraph checkpoint. It is not
     # a mutable business fact source, so route recovery never selects a write
     # target from a thread-wide Redis task projection. UPDATE/CANCEL plans must
@@ -534,6 +762,24 @@ def route_conversation(
         # Do not retain a provider's CREATE payload while asking for the
         # source file. Otherwise a clarification turn could mint a draft.
         explicit_candidate_supplied = False
+
+    # Normalize registered provider aliases before typed recovery runs. This
+    # keeps the compatibility boundary in the Action Catalog instead of
+    # scattering legacy names through prompts or executors.
+    action_hint = resolve_action(capability_id, action_id) if action_id else None
+    if action_hint is not None:
+        if action_id != action_hint.action_id:
+            action_recovery = {
+                "from": str(action_id),
+                "to": action_hint.action_id,
+                "reason": "registered_action_alias",
+            }
+        candidate_plan = {
+            **(candidate_plan or {}),
+            "action_id": action_hint.action_id,
+            "operation": action_hint.operation,
+        }
+        explicit_candidate_supplied = True
     # OpenAI-compatible providers occasionally omit one of the routing
     # envelope fields while still returning a typed, registered operation
     # (for example ``candidate_plan={operation: BOOK}``).  Recover only this
@@ -570,6 +816,80 @@ def route_conversation(
             candidate_plan = recovered_party_file_intent
             execution_class = "workflow"
             capability_id = "party_file"
+
+    # If the provider supplied an unregistered action id, recover only a
+    # uniquely identifiable read action from the selected domain's declared
+    # fields. Writes deliberately never use this path: they must name a
+    # registered action so an invalid model action cannot select a workflow.
+    if (
+        not initial_confirmation_intent
+        and action_id
+        and resolve_action(capability_id, action_id) is None
+        and not is_non_action_reference(action_id)
+    ):
+        recovered_process = recover_approval_process_action(message)
+        if (
+            recovered_process is not None
+            and str(capability_id or "").strip().lower()
+            in {"approval_read", "approval", "approvals", APPROVAL_PROCESS_CAPABILITY_ID}
+            and resolve_registered_action_alias(action_id) is None
+        ):
+            capability_id = "approval_process"
+            action_id = recovered_process["action_id"]
+            execution_class = recovered_process.get("execution_class") or execution_class
+            candidate_plan = dict(recovered_process.get("candidate_plan") or {})
+            explicit_candidate_supplied = True
+            action_recovery = {
+                "from": str(requested_action_id or ""),
+                "to": action_id,
+                "reason": "explicit_approval_scope_boundary",
+            }
+        registered_alias = resolve_registered_action_alias(action_id)
+        if action_id and registered_alias is not None:
+            previous_action_id = action_id
+            action_id = registered_alias.action_id
+            capability_id = registered_alias.capability_id
+            execution_class = registered_alias.execution_class
+            candidate_plan = {
+                **(query_intent or {}),
+                **(candidate_plan or {}),
+                "action_id": registered_alias.action_id,
+                "operation": registered_alias.operation,
+            }
+            action_recovery = {
+                "from": str(previous_action_id),
+                "to": registered_alias.action_id,
+                "reason": "registered_action_alias",
+            }
+            explicit_candidate_supplied = True
+        typed_read_action = resolve_typed_read_action(
+            capability_id,
+            execution_class,
+            candidate_plan=candidate_plan,
+            query_intent=query_intent,
+        )
+        if typed_read_action is not None:
+            action_recovery = {
+                "from": str(action_id),
+                "to": typed_read_action.action_id,
+                "reason": "unique_read_schema_match",
+            }
+            capability_id = typed_read_action.capability_id
+            action_id = typed_read_action.action_id
+            execution_class = typed_read_action.execution_class
+            candidate_plan = {
+                **(query_intent or {}),
+                **(candidate_plan or {}),
+                "action_id": typed_read_action.action_id,
+                "operation": typed_read_action.operation,
+            }
+            explicit_candidate_supplied = True
+            if typed_read_action.action_id == "schedule.query":
+                normalized_schedule = _recover_typed_schedule_query_candidate(
+                    message, candidate_plan, query_intent
+                )
+                if normalized_schedule is not None:
+                    candidate_plan = normalized_schedule
 
     # A confirmation is a resume signal for a persisted ApprovalCard, not a
     # new business action.  Keep it out of the ordinary action-selection
@@ -609,6 +929,40 @@ def route_conversation(
             "operation": "CONFIRM",
             "_confirmation_intent": True,
         }
+
+    # A model/provider may put a delegate name or a guessed query label in
+    # ``action_id`` even when the user request is an unmistakable read-only
+    # personal-calendar query. Repair that namespace drift only at this
+    # bounded read boundary. Never use message prose to recover a write
+    # action, a source id, or another domain's executor.
+    schedule_fallback = schedule_metadata_fallback_plan(message) if provider_schedule_envelope_missing else None
+    canonical_capability = canonical_capability_id(capability_id)
+    selected_action = resolve_action(capability_id, action_id) if action_id else None
+    if (
+        schedule_fallback is not None
+        and not confirmation_intent
+        and canonical_capability == "schedule"
+        # A provider may label a read-only calendar request as content_search,
+        # workflow or another transport class. The explicit user intent and
+        # the selected read action are the stronger contract; an explicit
+        # write action is excluded by the selected_action guard above.
+        and (selected_action is None or selected_action.action_id == "schedule.query")
+    ):
+        previous_action_id = action_id
+        capability_id = schedule_fallback["capability_id"]
+        execution_class = schedule_fallback["execution_class"]
+        candidate_plan = {
+            **(candidate_plan or {}),
+            **schedule_fallback["candidate_plan"],
+        }
+        action_id = "schedule.query"
+        explicit_candidate_supplied = True
+        if previous_action_id != action_id:
+            action_recovery = {
+                "from": str(previous_action_id or ""),
+                "to": action_id,
+                "reason": "bounded_personal_calendar_read",
+            }
 
     # A provider can select the approval-read domain while dropping the
     # second-stage action and typed query envelope. Repeating the same route
@@ -666,6 +1020,23 @@ def route_conversation(
         elif capability_id == "party_file" and execution_class == "metadata_query":
             operation_hint = str((candidate_plan or {}).get("operation") or "").upper()
             action_id = "party_file.attachments" if operation_hint in {"ATTACHMENTS", "ATTACHMENT"} else "party_file.metadata"
+        elif execution_class in {"metadata_query", "approval_query", "report"}:
+            typed_read_action = resolve_typed_read_action(
+                capability_id,
+                execution_class,
+                candidate_plan=candidate_plan,
+                query_intent=query_intent,
+            )
+            if typed_read_action is not None:
+                capability_id = typed_read_action.capability_id
+                action_id = typed_read_action.action_id
+                execution_class = typed_read_action.execution_class
+                candidate_plan = {
+                    **(query_intent or {}),
+                    **(candidate_plan or {}),
+                    "action_id": typed_read_action.action_id,
+                    "operation": typed_read_action.operation,
+                }
     typed_action = _infer_typed_action_from_shape(
         capability_id, execution_class, candidate_plan, query_intent, message
     )
@@ -708,7 +1079,26 @@ def route_conversation(
     ).strip() or None
     action_id_was_explicit = bool(action_id)
     selected_action = resolve_action(capability_id, action_id, proposed_operation)
+    if canonical_capability_id(capability_id) == "meeting":
+        recovered_meeting_action = recover_meeting_write_action(
+            message, selected_action.action_id if selected_action is not None else action_id
+        )
+        if recovered_meeting_action and recovered_meeting_action != action_id:
+            previous_action_id = action_id
+            action_id = recovered_meeting_action
+            selected_action = resolve_action(capability_id, action_id)
+            action_recovery = {
+                "from": str(previous_action_id or ""),
+                "to": recovered_meeting_action,
+                "reason": "explicit_meeting_write_boundary",
+            }
     if selected_action is not None:
+        if not action_id_was_explicit and proposed_operation:
+            action_recovery = {
+                "from": proposed_operation,
+                "to": selected_action.action_id,
+                "reason": "registered_operation_alias",
+            }
         action_id = selected_action.action_id
         execution_class = selected_action.execution_class
         candidate_plan = {
@@ -716,6 +1106,30 @@ def route_conversation(
             "action_id": selected_action.action_id,
             "operation": selected_action.operation,
         }
+        candidate_plan, query_intent = _normalize_action_field_aliases(
+            selected_action.action_id, candidate_plan, query_intent
+        )
+        candidate_plan = _recover_explicit_reference_fields(
+            selected_action.action_id, message, candidate_plan
+        )
+        if selected_action.action_id == "meeting.query":
+            normalized_meeting = normalize_meeting_query_candidate(
+                message, candidate_plan, query_intent
+            )
+            if normalized_meeting is not None:
+                candidate_plan = normalized_meeting
+        if selected_action.action_id == "schedule.query":
+            original_candidate = dict(candidate_plan)
+            normalized_schedule = normalize_schedule_query_candidate(
+                message, candidate_plan, query_intent
+            )
+            if normalized_schedule is not None:
+                candidate_plan = normalized_schedule
+                if candidate_plan != original_candidate:
+                    schedule_date_recovery = {
+                        "reason": "server_business_clock",
+                        "actionId": selected_action.action_id,
+                    }
         if not action_id_was_explicit:
             candidate_plan["_action_id_synthesized"] = True
         explicit_candidate_supplied = True
@@ -736,7 +1150,6 @@ def route_conversation(
         and not confirmation_intent
         and selected_action is None
         and not action_id
-        and query_intent is None
         and not unsupported_criteria
         and not missing_fields
         and party_file_attachment is None
@@ -753,7 +1166,13 @@ def route_conversation(
         execution_class = fallback_plan["execution_class"]
         candidate_plan = fallback_plan["candidate_plan"]
         decision = resolve_capability(capability_id, "direct", 0.9)
-    schedule_fallback_plan = schedule_metadata_fallback_plan(message)
+    meeting_fallback_plan = meeting_metadata_fallback_plan(message)
+    if meeting_fallback_plan is not None and decision["capabilityId"] == "general_agent":
+        capability_id = meeting_fallback_plan["capability_id"]
+        execution_class = meeting_fallback_plan["execution_class"]
+        candidate_plan = meeting_fallback_plan["candidate_plan"]
+        decision = resolve_capability(capability_id, "direct", 0.9)
+    schedule_fallback_plan = schedule_metadata_fallback_plan(message) if provider_schedule_envelope_missing else None
     if schedule_fallback_plan is not None and decision["capabilityId"] == "general_agent":
         capability_id = schedule_fallback_plan["capability_id"]
         execution_class = schedule_fallback_plan["execution_class"]
@@ -779,6 +1198,17 @@ def route_conversation(
             decision["strategy"] = "clarify"
         elif query_resolution is not None and query_resolution.status in {"INVALID", "UNSUPPORTED"}:
             decision["strategy"] = "clarify"
+        compiled_action_id = str(
+            ((compiled_plan.canonical or {}).get("action_id"))
+            or ((compiled_plan.canonical or {}).get("actionId"))
+            or ""
+        ).strip()
+        if compiled_action_id and not action_id:
+            # Recovery and typed-read compilation can resolve a canonical
+            # action after the model omitted the redundant envelope field.
+            # Promote that compiler-owned identity back to the route result so
+            # execution, audit, and routingTrace share the same action fact.
+            action_id = compiled_action_id
     # The main Agent supplies this two-value performance classification. The
     # router only normalizes it; safety floors in set_route_reasoning_policy
     # can still raise a simple label to low for writes or confirmations.
@@ -796,9 +1226,15 @@ def route_conversation(
     set_route_reasoning_policy(route, message)
     result = route.model_dump()
     result["routeDecision"] = decision
+    if action_recovery is not None:
+        result["routeDecision"]["actionRecovery"] = action_recovery
+        result["actionRecovery"] = action_recovery
     if action_id:
         result["routeDecision"]["actionId"] = action_id
         result["actionId"] = action_id
+    if schedule_date_recovery is not None:
+        result["routeDecision"]["scheduleDateRecovery"] = schedule_date_recovery
+        result["scheduleDateRecovery"] = schedule_date_recovery
     if action_selection_required:
         result["routePhase"] = "ACTION_SELECTION"
         result["planStatus"] = "CLARIFY"
@@ -859,26 +1295,6 @@ def route_conversation(
             "issues": ["普通文本确认不能替代党务文件 ApprovalCard"],
             "missingFields": [],
         }
-    if decision["capabilityId"] == APPROVAL_PROCESS_CAPABILITY_ID and not (
-        compiled_plan is not None and compiled_plan.status == "RESOLVED"
-    ):
-        # The capability is registered, but the model did not provide a
-        # complete operation plan.  This is a planning clarification, not a
-        # facade outage: the user must choose applications, one application,
-        # history, or withdrawal and provide the fields required by that
-        # operation.  Never claim that a supported operation is unavailable.
-        result["clarification"] = {
-            "status": "CLARIFY",
-            "question": "请说明要查看我发起的审批、某条审批详情、已办审批历史，还是撤回本人仍在运行中的流程；撤回还需要流程实例编号和理由。",
-            "issues": ["审批流程操作计划不完整"],
-            "missingFields": [],
-            "options": [
-                {"operation": "APPLICATIONS", "label": "我发起的审批"},
-                {"operation": "APPLICATION_DETAIL", "label": "某条审批详情", "requiredFields": ["processInstanceId"]},
-                {"operation": "HISTORY", "label": "已办审批历史"},
-                {"operation": "WITHDRAW", "label": "撤回本人审批", "requiredFields": ["processInstanceId", "reason"]},
-            ],
-        }
     if compiled_plan is not None:
         result["plan"] = compiled_plan.model_dump(mode="json")
         result["planStatus"] = compiled_plan.status
@@ -892,10 +1308,7 @@ def route_conversation(
         # domain compiler's lower-level wording overwrite that stable choice;
         # otherwise the UI reports a different question than the action
         # selection payload exposes.
-        if compiled_plan.status in {"CLARIFY", "UNSUPPORTED"} and not (
-            decision["capabilityId"] == APPROVAL_PROCESS_CAPABILITY_ID
-            and action_selection_required
-        ):
+        if compiled_plan.status in {"CLARIFY", "UNSUPPORTED"} and not action_selection_required:
             result["clarification"] = {
                 "status": compiled_plan.status,
                 "question": compiled_plan.clarification_question or "请补充或确认这项任务的查询条件。",
@@ -973,21 +1386,6 @@ def route_conversation(
             "summary": {"headline": "请使用党务文件确认卡完成发布"},
             "actions": [],
         }
-    elif decision["capabilityId"] == APPROVAL_PROCESS_CAPABILITY_ID and not (
-        compiled_plan is not None and compiled_plan.status == "RESOLVED"
-    ):
-        presentation = {
-            "blockType": "card",
-            "cardType": "clarification",
-            "resultKind": "clarification",
-            "summary": {"headline": "请先选择审批流程操作"},
-            "actions": [
-                {"operation": "APPLICATIONS", "label": "我发起的审批"},
-                {"operation": "APPLICATION_DETAIL", "label": "某条审批详情"},
-                {"operation": "HISTORY", "label": "已办审批历史"},
-                {"operation": "WITHDRAW", "label": "撤回本人审批"},
-            ],
-        }
     elif query_resolution is not None and query_resolution.status in {"CLARIFY", "INVALID", "UNSUPPORTED"}:
         presentation = {
             "blockType": "card",
@@ -1004,4 +1402,45 @@ def route_conversation(
             "summary": {"headline": "请先选择要核对附件的党务文件"},
             "actions": party_file_attachment.get("options", []),
         }
+    if confirmation_intent:
+        result["routeState"] = "CONFIRMATION_REQUIRED"
+    elif action_selection_required:
+        result["routeState"] = "ACTION_SELECTION"
+    elif query_resolution is not None and query_resolution.status in {"INVALID", "UNSUPPORTED"}:
+        result["routeState"] = "UNSUPPORTED" if query_resolution.status == "UNSUPPORTED" else "FIELD_CLARIFICATION"
+    elif query_resolution is not None and query_resolution.status == "CLARIFY":
+        result["routeState"] = "FIELD_CLARIFICATION"
+    elif compiled_plan is not None:
+        result["routeState"] = {
+            "RESOLVED": "RESOLVED",
+            "CLARIFY": "FIELD_CLARIFICATION",
+            "UNSUPPORTED": "UNSUPPORTED",
+            "FALLBACK": "FALLBACK",
+        }.get(compiled_plan.status, "FALLBACK")
+    elif result.get("clarification"):
+        result["routeState"] = "FIELD_CLARIFICATION"
+    else:
+        result["routeState"] = "FALLBACK"
+    catalog_meta = runtime_action_catalog_meta() or {}
+    model_trace = current_model_trace(str(current_agent_context().get("runId") or ""))
+    trace_capability_id = decision.get("capabilityId") or result.get("capability_id")
+    trace_action_id = (
+        action_id
+        or (decision.get("actionId") if isinstance(decision, dict) else None)
+        or ((compiled_plan.canonical if compiled_plan is not None else {}) or {}).get("action_id")
+        or ((compiled_plan.canonical if compiled_plan is not None else {}) or {}).get("actionId")
+    )
+    result["routingTrace"] = {
+        "model_id": model_trace.get("model_id") or "runtime-resolved",
+        "prompt_version": PROMPT_VERSION,
+        "catalog_version": catalog_meta.get("contractVersion") or "agent-actions-v1",
+        "skill_version": skill_registry.version_for(trace_capability_id, action_id=action_id),
+        "plan_revision": (
+            (candidate_plan or {}).get("plan_revision")
+            or (candidate_plan or {}).get("planRevision")
+        ),
+        "capability_id": trace_capability_id,
+        "action_id": trace_action_id,
+        "requested_action_id": requested_action_id,
+    }
     return tool_success(result, presentation)

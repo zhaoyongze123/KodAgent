@@ -1,10 +1,9 @@
-"""Server-side extraction of model and ``report_progress`` narration.
+"""Server-side extraction of ``report_progress`` narration.
 
 LangChain's agent runner invokes its model with ``ainvoke``/``invoke`` even
 when the outer LangGraph run is streamed.  This adapter consumes the bound
-model's own chunks, publishes canonical child-output and
-``report_progress.message`` snapshots, and then returns the exact merged AI
-message the agent would otherwise receive.
+model's own chunks, publishes ``report_progress.message`` snapshots, and then
+returns the exact merged AI message the agent would otherwise receive.
 The browser consequently never needs to inspect model tool-call chunks.
 """
 
@@ -22,7 +21,11 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, AIMessageChunk, message_chunk_to_message
 
-from ..tools.common.events import publish_model_narration, publish_streaming_narration
+from ..tools.common.events import (
+    narration_validation_issues,
+    publish_model_narration,
+    publish_streaming_narration,
+)
 
 
 _STREAM_MODEL_OUTPUT: ContextVar[bool] = ContextVar(
@@ -181,11 +184,19 @@ class ReportProgressChunkTracker:
             text = _partial_message(call.args)
             if text is None or text == call.last_text:
                 continue
+            if narration_validation_issues(text):
+                continue
             call.last_text = text
             self._publish(call, text)
 
     @staticmethod
     def _publish(call: _PartialToolCall, text: str) -> None:
+        # A streamed prefix may arrive before the model finishes its tool
+        # arguments. Never expose a prefix that already contains protocol
+        # fields; keep the last accepted text so a later valid snapshot can
+        # still be published on the same entry and revision sequence.
+        if narration_validation_issues(text):
+            return
         try:
             from langgraph.config import get_stream_writer
 
@@ -249,7 +260,12 @@ def _provider_safe_input(value: Any) -> Any:
 
 
 class ModelOutputChunkTracker:
-    """Stream plain final text from an opted-in sub-agent model call."""
+    """Legacy opt-in tracker for non-agent callers.
+
+    The Agent runtime never opts a generated ``task`` into this path: child
+    final text belongs only to the parent Agent's synthesis, while explicit
+    ``report_progress`` calls remain visible through their separate tracker.
+    """
 
     def __init__(self, enabled: bool) -> None:
         self.enabled = enabled

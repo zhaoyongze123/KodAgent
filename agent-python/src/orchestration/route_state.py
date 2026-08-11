@@ -10,9 +10,32 @@ hooks from drifting apart.
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Literal
 
 from .capabilities import actions_for_capability, canonical_capability_id
+
+
+RouteState = Literal[
+    "UNROUTED",
+    "ACTION_SELECTION",
+    "RESOLVED",
+    "FIELD_CLARIFICATION",
+    "UNSUPPORTED",
+    "CONFIRMATION_REQUIRED",
+    "FALLBACK",
+]
+
+_KNOWN_ROUTE_STATES = frozenset(
+    {
+        "UNROUTED",
+        "ACTION_SELECTION",
+        "RESOLVED",
+        "FIELD_CLARIFICATION",
+        "UNSUPPORTED",
+        "CONFIRMATION_REQUIRED",
+        "FALLBACK",
+    }
+)
 
 
 def message_type(message: Any) -> str:
@@ -43,7 +66,20 @@ def current_turn_messages(messages: list[Any]) -> list[Any]:
 
 
 def route_result(messages: list[Any]) -> dict[str, Any] | None:
-    """Read the latest structured route result from the current turn."""
+    """Read the latest structured route result from the current turn.
+
+    A new HumanMessage creates a hard routing boundary.  Before this turn's
+    ``route_conversation`` result exists, it is *unrouted*; a previous
+    turn's resolved WorkOrder must not be replayed against new user text.
+    Legitimate field continuation remains explicit in the new route call via
+    ``continuation_mode='resume'`` and is merged by ``pending_plan`` only at
+    that call boundary.
+    """
+    return _latest_route(current_turn_messages(list(messages or [])))
+
+
+def _latest_route(messages: list[Any]) -> dict[str, Any] | None:
+    """Read the last valid route envelope from an already-scoped sequence."""
     for message in reversed(messages):
         if message_type(message) != "tool" or message_name(message) != "route_conversation":
             continue
@@ -59,11 +95,31 @@ def route_result(messages: list[Any]) -> dict[str, Any] | None:
             try:
                 value = json.loads(content or "{}")
             except (TypeError, ValueError, json.JSONDecodeError):
-                return None
+                continue
         if isinstance(value, dict) and isinstance(value.get("data"), dict):
             value = value["data"]
         return value if isinstance(value, dict) else None
     return None
+
+
+def route_result_anywhere(messages: list[Any]) -> dict[str, Any] | None:
+    """Search the given list of messages for the latest route.
+
+    Provided as a helper for callers that need to bypass the current-turn
+    restriction (e.g. ``_route_result`` callers that have already passed the
+    current turn slice and want to fall back to the broader history).
+    """
+    return _latest_route(list(messages or []))
+
+
+def route_result_fallback_all(messages: list[Any]) -> dict[str, Any] | None:
+    """Search the entire message history for the most recent route.
+
+    Used by callers that pass only the current turn; the base
+    :func:`route_result` already walks the list it receives, so this helper
+    is the same algorithm but always scans the full message list.
+    """
+    return _latest_route(list(messages or []))
 
 
 def route_capability(route: dict[str, Any] | None) -> str:
@@ -111,33 +167,91 @@ def route_execution_class(route: dict[str, Any] | None) -> str:
     ).strip().lower()
 
 
+def route_state(route: dict[str, Any] | None) -> RouteState:
+    """Classify the route lifecycle once for every middleware boundary.
+
+    ``planStatus`` describes the compiler result, while ``routePhase``
+    describes the protocol handshake. They are different dimensions: an
+    action-selection handshake can carry ``planStatus=CLARIFY`` and must stay
+    executable by the next model turn. Consumers must use this classifier
+    instead of independently combining ``planStatus``, ``actionId`` and
+    ``executionClass``.
+
+    Explicit ``routeState`` is emitted by the route tool. The fallback parsing
+    keeps checkpointed messages from older runs readable. An unmarked legacy
+    action-selection message is recognized only when the registered capability
+    has no action/executor and the clarification carries no business-field
+    error. This keeps old checkpoints resumable without turning an actual
+    missing-field clarification into a second planning loop.
+    """
+    if not isinstance(route, dict):
+        return "UNROUTED"
+
+    explicit = str(route.get("routeState") or route.get("route_state") or "").strip().upper()
+    if explicit in _KNOWN_ROUTE_STATES:
+        return explicit  # type: ignore[return-value]
+
+    phase = str(route.get("routePhase") or route.get("route_phase") or "").strip().upper()
+    action_selection = route.get("actionSelection") or route.get("action_selection") or {}
+    clarification = route.get("clarification") or {}
+    clarification_status = str(
+        clarification.get("status") if isinstance(clarification, dict) else ""
+    ).strip().upper()
+    if phase == "ACTION_SELECTION" or (
+        isinstance(action_selection, dict) and bool(action_selection.get("required"))
+    ) or clarification_status == "ACTION_SELECTION":
+        return "ACTION_SELECTION"
+
+    status = str(route.get("planStatus") or route.get("plan_status") or "").strip().upper()
+    if status == "CLARIFY":
+        capability = route_capability(route)
+        missing_fields = clarification.get("missingFields") or clarification.get("missing_fields") or []
+        issues = clarification.get("issues") or []
+        no_business_error = not missing_fields and not issues
+        action_id_missing = set(str(value).strip() for value in missing_fields) <= {"", "action_id"}
+        if (
+            capability not in {"", "general_agent", "general"}
+            and bool(actions_for_capability(capability))
+            and not route_action_id(route)
+            and not route_execution_tool(route)
+            and (no_business_error or action_id_missing)
+        ):
+            return "ACTION_SELECTION"
+    if status == "RESOLVED":
+        return "RESOLVED" if route_execution_tool(route) else "UNSUPPORTED"
+    if status == "UNSUPPORTED":
+        return "UNSUPPORTED"
+    if status == "CLARIFY":
+        if bool(route.get("confirmationRequired") or route.get("confirmation_required")):
+            return "CONFIRMATION_REQUIRED"
+        return "FIELD_CLARIFICATION"
+    if status == "FALLBACK":
+        return "FALLBACK"
+    return "UNROUTED"
+
+
 def route_requires_action_selection(route: dict[str, Any] | None) -> bool:
     """Whether the two-stage route handshake still needs an action id."""
-    if not isinstance(route, dict):
-        return False
-    if str(route.get("routePhase") or "").upper() == "ACTION_SELECTION":
-        return True
-    if str(route.get("planStatus") or "").upper() != "CLARIFY":
-        return False
-    capability = route_capability(route)
-    if capability in {"", "general_agent", "general"}:
-        return False
-    return not route_action_id(route) and not route_execution_tool(route) and bool(actions_for_capability(capability))
+    return route_state(route) == "ACTION_SELECTION"
 
 
 def is_terminal_structured_failure(route: dict[str, Any] | None) -> bool:
-    """Whether a failed structured route must stop instead of delegating."""
-    if not isinstance(route, dict) or str(route.get("planStatus") or "").upper() not in {"CLARIFY", "UNSUPPORTED"}:
-        return False
-    if route_action_id(route):
-        return True
-    return route_capability(route) in {
-        "approval_read", "approval_process", "approval_write", "meeting", "schedule", "party_file", "reporting",
-    } and route_execution_class(route) in {"metadata_query", "approval_query", "workflow", "report"}
+    """Whether a structured route is terminal and must stop delegation.
+
+    The historical function name is retained for callers, but the boundary is
+    now lifecycle-based. In particular, ``ACTION_SELECTION`` is deliberately
+    excluded even when its compiler result is ``CLARIFY`` and its execution
+    class is ``workflow``.
+    """
+    return route_state(route) in {
+        "FIELD_CLARIFICATION",
+        "UNSUPPORTED",
+        "CONFIRMATION_REQUIRED",
+    }
 
 
 def is_resolved_route(route: dict[str, Any] | None) -> bool:
-    return bool(isinstance(route, dict) and str(route.get("planStatus") or "").upper() == "RESOLVED" and route_execution_tool(route))
+    return route_state(route) == "RESOLVED"
 
 
 __all__ = [
@@ -151,6 +265,7 @@ __all__ = [
     "route_capability",
     "route_execution_class",
     "route_execution_tool",
+    "route_state",
     "route_requires_action_selection",
     "route_result",
 ]

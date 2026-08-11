@@ -76,9 +76,10 @@ def _meeting_booking_contract() -> WorkflowContract:
             card_type="meeting_booking",
         ),
         feature_flag="OA_AGENT_MEETING_WORKFLOW_V2",
-        # Keep the new graph opt-in until Java + frontend gray verification is
-        # complete.  The orchestration tool keeps its own rollback switch.
-        feature_flag_default=False,
+        # 会议预约的唯一写入入口已经是该工作流：它会固化请求、检查可用性、
+        # 生成草稿。默认启用，避免子 Agent 落回可由模型自由拼接低层工具的
+        # 旧链路；仍可显式设置 false 作为紧急回滚开关。
+        feature_flag_default=True,
         version="1",
         runner=runner,
         description="按固定顺序整理会议预约、检查冲突并生成待确认草稿",
@@ -103,7 +104,9 @@ def _personal_schedule_contract() -> WorkflowContract:
             card_type="personal_schedule",
         ),
         feature_flag="OA_AGENT_SCHEDULE_WORKFLOW_V2",
-        feature_flag_default=False,
+        # 与会议预约一致：个人日程的创建、修改、取消都必须经过固定工作流。
+        # 保留显式 false 作为紧急回滚，而不是默认让模型拼接查询和草稿工具。
+        feature_flag_default=True,
         version="1",
         runner=runner,
         description="按固定顺序校验个人日程并生成待确认草稿",

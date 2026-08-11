@@ -19,6 +19,10 @@ from ..tools.common import (
     tool_failure,
 )
 from ..runtime.operation_runtime import OperationRuntime, action_id_for
+from ..orchestration.delegated_receipt import (
+    DelegatedMeetingDraftReceipt,
+    parse_meeting_draft_receipt,
+)
 from .approval_core import (
     ApprovalBinding, IDENTITY_FIELDS, has_trusted_approval_projection,
     identity_mismatch, resume_runtime,
@@ -291,6 +295,24 @@ def _message_id_from_draft_request(request: Any | None) -> str:
     return str(binding.get("messageId") or binding.get("message_id") or "").strip()
 
 
+def _delegated_draft_receipt_from_request(request: Any | None) -> DelegatedMeetingDraftReceipt | None:
+    """Read only the immediate, already-validated task receipt payload.
+
+    Caller-side projection verifies the parent task call and subagent type.
+    This loader only decodes its code-owned payload so it can bind the
+    durable Operation without a historical database search.
+    """
+    state = getattr(request, "state", None) if request is not None else None
+    if not isinstance(state, dict):
+        return None
+    messages = state.get("messages") or []
+    if not messages:
+        return None
+    message = messages[-1]
+    content = message.get("content", "") if isinstance(message, dict) else getattr(message, "content", "")
+    return parse_meeting_draft_receipt(content)
+
+
 def load_pending_approval_context(
     request: Any | None = None,
 ) -> tuple[PendingApprovalContext | None, ToolResponse | None]:
@@ -301,6 +323,7 @@ def load_pending_approval_context(
     here so a later model call cannot resurrect an old card.
     """
     runtime_context = current_agent_context()
+    delegated_receipt = _delegated_draft_receipt_from_request(request)
     checkpoint_message_id = _message_id_from_draft_request(request)
     if checkpoint_message_id and checkpoint_message_id != str(runtime_context.get("messageId") or "").strip():
         # The immediate draft frame is the only place where the checkpoint's
@@ -309,7 +332,10 @@ def load_pending_approval_context(
         # branch because ``is_draft_projection_turn`` rejects it upstream.
         set_message_context(checkpoint_message_id)
         runtime_context = current_agent_context()
-    operation_id = str(runtime_context.get("operationId") or "").strip()
+    # The root task boundary may run in a fresh Runnable ContextVar.  Its
+    # code-produced receipt is the source of the operation binding; do not
+    # substitute a matching pending row from a database query.
+    operation_id = delegated_receipt.operation_id if delegated_receipt else str(runtime_context.get("operationId") or "").strip()
     if not operation_id:
         operation_id = _operation_id_from_draft_request(request)
         if operation_id:
@@ -329,10 +355,14 @@ def load_pending_approval_context(
         runtime.close()
         if not approval_id:
             return None, tool_failure("APPROVAL_CONTEXT_INVALID", "会议预约 Operation 缺少 Approval 绑定")
+        if delegated_receipt and approval_id != delegated_receipt.approval_id:
+            return None, tool_failure("APPROVAL_CONTEXT_INVALID", "会议预约回执与 Operation 的 Approval 不匹配")
         approval = get_meeting_approval(approval_id)
         draft_id = str(approval.get("draftId") or "").strip() if isinstance(approval, dict) else ""
         if not draft_id:
             return None, tool_failure("APPROVAL_CONTEXT_INVALID", "会议预约 Approval 缺少 Draft 绑定")
+        if delegated_receipt and draft_id != delegated_receipt.draft_id:
+            return None, tool_failure("APPROVAL_CONTEXT_INVALID", "会议预约回执与 Approval 的 Draft 不匹配")
         context, error = load_confirmation_context(draft_id, draft_id, approval_id)
         if error or context is None:
             return None, error

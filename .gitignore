@@ -116,3 +116,158 @@ logs/
 !README.md
 !**/README.md
 !**/SKILL.md
+
+######################################################################
+# Agent source-only repository scope
+#
+# This repository only versions the code and configuration required to
+# run KodAgent. The Java files under yudao-server are integration patches
+# that are applied to an existing Yudao deployment; the full upstream
+# application is deliberately not mirrored here.
+
+# Ignore the repository by default, then explicitly keep the Agent runtime.
+/*
+!/.gitignore
+!/README.md
+!/pom.xml
+
+!/agent-python/
+!/agent-python/**
+!/agent-chat-ui/
+!/agent-chat-ui/**
+
+!/script/
+!/script/kodbox/
+!/script/kodbox/plugins/
+!/script/kodbox/plugins/agentChat/
+!/script/kodbox/plugins/agentChat/**
+!/script/kodbox/plugins/approvalCreateCenter/
+!/script/kodbox/plugins/approvalCreateCenter/**
+!/script/kodbox/plugins/meetingRoom/
+!/script/kodbox/plugins/meetingRoom/**
+!/script/kodbox/plugins/partyFile/
+!/script/kodbox/plugins/partyFile/**
+!/script/kodbox/plugins/scheduleCenter/
+!/script/kodbox/plugins/scheduleCenter/**
+
+!/scripts/
+!/scripts/migrate-agent-event-schema.sh
+!/scripts/migrate-oa-mysql-schema.sh
+!/scripts/model_lan_relay.py
+!/scripts/run-agent-runtime-outbox.py
+!/scripts/start-agent-ui.sh
+!/scripts/start-model-lan-relay.sh
+!/scripts/stop-java-backends.sh
+
+!/yudao-server/
+!/yudao-server/pom.xml
+!/yudao-server/src/
+!/yudao-server/src/main/
+!/yudao-server/src/main/**
+
+# The meeting booking policy is the only domain policy directly consumed by
+# the Agent integration; the rest of Yudao remains in the host application.
+!/yudao-module-system/
+!/yudao-module-system/src/
+!/yudao-module-system/src/main/
+!/yudao-module-system/src/main/java/
+!/yudao-module-system/src/main/java/cn/
+!/yudao-module-system/src/main/java/cn/iocoder/
+!/yudao-module-system/src/main/java/cn/iocoder/yudao/
+!/yudao-module-system/src/main/java/cn/iocoder/yudao/module/
+!/yudao-module-system/src/main/java/cn/iocoder/yudao/module/system/
+!/yudao-module-system/src/main/java/cn/iocoder/yudao/module/system/service/
+!/yudao-module-system/src/main/java/cn/iocoder/yudao/module/system/service/meetingroom/
+!/yudao-module-system/src/main/java/cn/iocoder/yudao/module/system/service/meetingroom/MeetingBookingPolicy.java
+
+# Agent routes embedded in the legacy administrative UI are retained as
+# integration patches. The standalone Agent UI lives in agent-chat-ui.
+!/yudao-ui/
+!/yudao-ui/yudao-ui-admin-vben-temp/
+!/yudao-ui/yudao-ui-admin-vben-temp/apps/
+!/yudao-ui/yudao-ui-admin-vben-temp/apps/web-antd/
+!/yudao-ui/yudao-ui-admin-vben-temp/apps/web-antd/src/
+!/yudao-ui/yudao-ui-admin-vben-temp/apps/web-antd/src/api/
+!/yudao-ui/yudao-ui-admin-vben-temp/apps/web-antd/src/api/agent/
+!/yudao-ui/yudao-ui-admin-vben-temp/apps/web-antd/src/api/agent/model.ts
+!/yudao-ui/yudao-ui-admin-vben-temp/apps/web-antd/src/router/
+!/yudao-ui/yudao-ui-admin-vben-temp/apps/web-antd/src/router/routes/
+!/yudao-ui/yudao-ui-admin-vben-temp/apps/web-antd/src/router/routes/modules/
+!/yudao-ui/yudao-ui-admin-vben-temp/apps/web-antd/src/router/routes/modules/agent.ts
+
+# Agent test suites, intent evaluations, local verification scripts, and
+# non-production collaboration metadata are never versioned here.
+/agent-python/tests/
+/agent-python/evals/
+/agent-python/scripts/
+/agent-chat-ui/test/
+/agent-chat-ui/.github/
+/yudao-server/src/test/
+/scripts/run-intent-eval.py
+/scripts/verify-agent-*.py
+/scripts/verify-java-singleton.sh
+
+# Re-apply artifact exclusions after the directory allow-list above. Git uses
+# the last matching rule, so these must live below the Agent source entries.
+/agent-python/.env
+/agent-python/.data/
+/agent-python/src/.data/
+/agent-python/.idea/
+/agent-python/.langgraph_api/
+/agent-python/.pytest_cache/
+/agent-python/.venv/
+/agent-python/**/*.egg-info/
+/agent-python/**/__pycache__/
+/agent-python/**/*.py[cod]
+/agent-python/*.whl
+
+/agent-chat-ui/.env.local
+/agent-chat-ui/.next/
+/agent-chat-ui/.next-dev/
+/agent-chat-ui/node_modules/
+/agent-chat-ui/coverage/
+/agent-chat-ui/.turbo/
+/agent-chat-ui/*.tsbuildinfo
+/agent-chat-ui/next-env.d.ts
+
+/yudao-server/target/
+/yudao-server/.flattened-pom.xml
+
+# Keep exactly one domain policy patch from the host application's module.
+/yudao-module-system/**
+!/yudao-module-system/
+!/yudao-module-system/src/
+!/yudao-module-system/src/main/
+!/yudao-module-system/src/main/java/
+!/yudao-module-system/src/main/java/cn/
+!/yudao-module-system/src/main/java/cn/iocoder/
+!/yudao-module-system/src/main/java/cn/iocoder/yudao/
+!/yudao-module-system/src/main/java/cn/iocoder/yudao/module/
+!/yudao-module-system/src/main/java/cn/iocoder/yudao/module/system/
+!/yudao-module-system/src/main/java/cn/iocoder/yudao/module/system/service/
+!/yudao-module-system/src/main/java/cn/iocoder/yudao/module/system/service/meetingroom/
+!/yudao-module-system/src/main/java/cn/iocoder/yudao/module/system/service/meetingroom/MeetingBookingPolicy.java
+
+/script/docker/
+/script/idea/
+/script/jenkins/
+/script/shell/
+/script/kodbox/.env.local.example
+/script/kodbox/docker-compose.local.yml
+/script/kodbox/sync-oa-entry-plugins.sh
+/scripts/party_files/
+
+# Keep exactly two Agent integration files from the legacy admin frontend.
+/yudao-ui/**
+!/yudao-ui/
+!/yudao-ui/yudao-ui-admin-vben-temp/
+!/yudao-ui/yudao-ui-admin-vben-temp/apps/
+!/yudao-ui/yudao-ui-admin-vben-temp/apps/web-antd/
+!/yudao-ui/yudao-ui-admin-vben-temp/apps/web-antd/src/
+!/yudao-ui/yudao-ui-admin-vben-temp/apps/web-antd/src/api/
+!/yudao-ui/yudao-ui-admin-vben-temp/apps/web-antd/src/api/agent/
+!/yudao-ui/yudao-ui-admin-vben-temp/apps/web-antd/src/api/agent/model.ts
+!/yudao-ui/yudao-ui-admin-vben-temp/apps/web-antd/src/router/
+!/yudao-ui/yudao-ui-admin-vben-temp/apps/web-antd/src/router/routes/
+!/yudao-ui/yudao-ui-admin-vben-temp/apps/web-antd/src/router/routes/modules/
+!/yudao-ui/yudao-ui-admin-vben-temp/apps/web-antd/src/router/routes/modules/agent.ts

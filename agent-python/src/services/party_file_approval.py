@@ -50,6 +50,39 @@ _CONFIRM_TOOLS = {
     "UPDATE": "confirm_update_party_file",
     "DELETE": "confirm_delete_party_file",
 }
+_DRAFT_DELEGATE_AGENTS = {"party_files_agent"}
+
+
+def _is_delegated_draft_projection_turn(request: Any) -> bool:
+    """Recognize the immediate code-owned party child gateway result.
+
+    Kept local to avoid importing the middleware package (whose public module
+    imports this service) during graph construction.
+    """
+    values = getattr(request, "state", None)
+    if not isinstance(values, dict):
+        values = request.get("state") if isinstance(request, dict) else None
+    messages = list((values or {}).get("messages") or [])
+    if not messages:
+        return False
+    last = messages[-1]
+    if not isinstance(last, (ToolMessage, dict)):
+        return False
+    call_id = str(last.get("tool_call_id") if isinstance(last, dict) else last.tool_call_id or "")
+    if not call_id:
+        return False
+    for previous in reversed(messages[:-1]):
+        calls = previous.get("tool_calls") if isinstance(previous, dict) else getattr(previous, "tool_calls", None)
+        for call in calls or []:
+            if not isinstance(call, dict) or str(call.get("id") or "") != call_id:
+                continue
+            args = call.get("args") if isinstance(call.get("args"), dict) else {}
+            return (
+                str(call.get("name") or "") in {"task", "task_tool"}
+                and str(args.get("subagent_type") or args.get("subagentType") or "")
+                in _DRAFT_DELEGATE_AGENTS
+            )
+    return False
 
 
 @dataclass(frozen=True)
@@ -219,6 +252,68 @@ def load_party_file_confirmation(
     ), None
 
 
+def load_pending_party_file_context() -> tuple[PartyFileApprovalContext | None, Any | None]:
+    """Load the one current party-file draft created by a delegated child.
+
+    A child task deliberately hides its internal ToolMessages from the root
+    graph.  Recovering the durable Operation/Approval binding here is safer
+    than trusting its final prose, and retains the same identity checks as the
+    direct-draft path.
+    """
+    runtime_context = dict(current_agent_context())
+    operation_id = str(runtime_context.get("operationId") or "").strip()
+    if not operation_id:
+        candidates = []
+        try:
+            for action in ("party_file.create", "party_file.update", "party_file.delete"):
+                candidates.extend(OperationRuntime.find_by_binding(
+                    action_id=action,
+                    statuses={"WAITING_APPROVAL"},
+                    required=True,
+                ))
+        except Exception as exc:
+            return None, tool_failure(
+                "PARTY_FILE_RUNTIME_UNAVAILABLE",
+                "党务文件确认上下文暂不可用，请稍后重试。",
+                details=str(exc), retryable=True,
+            )
+        if len(candidates) != 1:
+            return None, tool_failure(
+                "PARTY_FILE_APPROVAL_NOT_PENDING",
+                "当前没有唯一可确认的党务文件草稿。",
+            )
+        operation_id = candidates[0].operation_id
+    try:
+        runtime = OperationRuntime.open_existing(operation_id, required=True)
+    except Exception as exc:
+        return None, tool_failure(
+            "PARTY_FILE_RUNTIME_UNAVAILABLE",
+            "党务文件确认上下文暂不可用，请稍后重试。",
+            details=str(exc), retryable=True,
+        )
+    if runtime is None:
+        return None, tool_failure("PARTY_FILE_RUNTIME_UNAVAILABLE", "党务文件确认上下文暂不可用，请稍后重试。")
+    try:
+        operation = runtime.operation
+        if operation.status != "WAITING_APPROVAL" or operation.action_id not in {
+            "party_file.create", "party_file.update", "party_file.delete",
+        }:
+            return None, tool_failure("PARTY_FILE_APPROVAL_NOT_PENDING", "当前没有等待确认的党务文件草稿。")
+        approval_id = str(operation.approval_id or "").strip()
+    finally:
+        runtime.close()
+    if not approval_id:
+        return None, tool_failure("APPROVAL_CONTEXT_INVALID", "党务文件 Operation 缺少 Approval 绑定。")
+    try:
+        approval = java_get(f"/agent/approvals/{approval_id}")
+    except Exception as exc:
+        return None, tool_failure("APPROVAL_NOT_FOUND", "党务文件确认记录不存在、已过期或无权访问", details=str(exc))
+    draft_id = str((approval or {}).get("draftId") or "").strip()
+    if not draft_id:
+        return None, tool_failure("APPROVAL_CONTEXT_INVALID", "党务文件 Approval 缺少草稿绑定。")
+    return load_party_file_confirmation(draft_id, approval_id)
+
+
 def _messages(request: Any) -> list[Any]:
     state = getattr(request, "state", None)
     if not isinstance(state, dict) and isinstance(request, dict):
@@ -307,6 +402,14 @@ def _copy_message(message: AIMessage, calls: list[dict[str, Any]], proof: dict[s
 def _project(request: Any, response: Any) -> Any:
     messages = _messages(request)
     data = _parse_result(messages[-1]) if messages else None
+    if data is None and _is_delegated_draft_projection_turn(request):
+        context, error = load_pending_party_file_context()
+        if context is not None and error is None:
+            data = {
+                "draftId": context.draft.get("draftId"),
+                "approvalId": context.approval.get("approvalId"),
+                "draft": context.draft,
+            }
     if not data:
         return response
     runtime = dict(current_agent_context())
@@ -414,6 +517,7 @@ def consume_party_file_resume(context: PartyFileApprovalContext) -> bool:
 __all__ = [
     "PartyFileApprovalAutoConfirmMiddleware",
     "PartyFileApprovalContext",
+    "load_pending_party_file_context",
     "approval_status",
     "consume_party_file_resume",
     "load_party_file_confirmation",

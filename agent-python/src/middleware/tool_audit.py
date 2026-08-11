@@ -1,10 +1,9 @@
-"""Runtime audit events for parent and generated DeepAgents tools.
+"""Runtime audit events for generated DeepAgents tools.
 
 Business tools already emit their own domain-aware lifecycle events.  This
-middleware deliberately covers only the tools that do not emit events today:
-the parent conversation/task tools and DeepAgents' generated ``task`` tool.
-Keeping the allow-list explicit is important: adding a generic wrapper around
-every Tool would duplicate the meeting/approval/calendar audit stream.
+middleware deliberately covers only DeepAgents' generated ``task`` tool.
+Route and domain tools emit their own business-aware audit facts; adding a
+generic lifecycle row for them exposes implementation names in the UI.
 """
 
 from __future__ import annotations
@@ -23,21 +22,11 @@ from ..tools.common.events import (
     bind_tool_call_id,
     current_agent_context,
     emit,
-    publish_narration,
     sync_runtime_event_context,
 )
-from ..presentation.narration import stream_model_output_scope
 
 
 TASK_TOOL_NAME = "task"
-
-# These tools are present in the main graph and currently have no explicit
-# tool.started/tool.completed/tool.failed event of their own.
-PARENT_TOOL_NAMES = frozenset(
-    {
-        "route_conversation",
-    }
-)
 
 # Domain tools intentionally excluded because they already call emit().  This
 # is documentation as well as a guard against a later broadening of the
@@ -98,10 +87,10 @@ def _tool_call_id(request: Any) -> str:
 def _is_audited_tool(name: str) -> bool:
     if name in MANUAL_EVENT_TOOL_NAMES:
         return False
-    return name == TASK_TOOL_NAME or name in PARENT_TOOL_NAMES
+    return name == TASK_TOOL_NAME
 
 
-def _clean_text(value: Any, *, preserve_markdown: bool = False, max_chars: int = 300) -> str:
+def _clean_text(value: Any, *, max_chars: int = 300) -> str:
     if value is None:
         return ""
     if isinstance(value, str):
@@ -112,46 +101,38 @@ def _clean_text(value: Any, *, preserve_markdown: bool = False, max_chars: int =
         text = ""
     text = _SENSITIVE_TEXT.sub(r"\1=***REDACTED***", text)
     text = text.strip()
-    if preserve_markdown:
-        # Task results are user-facing process正文.  Keep Markdown structure
-        # while bounding the audit event size so a huge child response cannot
-        # grow the event stream without limit.
-        text = text.replace("\r\n", "\n").replace("\r", "\n")
-        return text[:max_chars].rstrip()
     return _WHITESPACE.sub(" ", text)[:max_chars].strip()
 
 
-def _summary_from_value(value: Any, *, preserve_markdown: bool = False, max_chars: int = 300) -> str:
+def _summary_from_value(value: Any, *, max_chars: int = 300) -> str:
     """Extract a short human-readable sentence without persisting raw JSON."""
     if isinstance(value, ToolMessage):
-        return _summary_from_value(value.content, preserve_markdown=preserve_markdown, max_chars=max_chars)
+        return _summary_from_value(value.content, max_chars=max_chars)
     if isinstance(value, str):
         text = value.strip()
         if text.startswith(("{", "[")):
             try:
-                return _summary_from_value(
-                    json.loads(text), preserve_markdown=preserve_markdown, max_chars=max_chars
-                )
+                return _summary_from_value(json.loads(text), max_chars=max_chars)
             except (TypeError, ValueError, json.JSONDecodeError):
                 pass
-        return _clean_text(text, preserve_markdown=preserve_markdown, max_chars=max_chars)
+        return _clean_text(text, max_chars=max_chars)
     if isinstance(value, dict):
         # Prefer fields intentionally written for user-facing summaries. Do
         # not serialize the complete ToolResponse or its arbitrary data map.
         for key in ("summary", "message", "output", "text", "content"):
             if key in value:
-                summary = _summary_from_value(value[key], preserve_markdown=preserve_markdown, max_chars=max_chars)
+                summary = _summary_from_value(value[key], max_chars=max_chars)
                 if summary:
                     return summary
         for key in ("error", "result", "data"):
             if key in value:
-                summary = _summary_from_value(value[key], preserve_markdown=preserve_markdown, max_chars=max_chars)
+                summary = _summary_from_value(value[key], max_chars=max_chars)
                 if summary:
                     return summary
         return ""
     if isinstance(value, (list, tuple)):
         for item in reversed(value):
-            summary = _summary_from_value(item, preserve_markdown=preserve_markdown, max_chars=max_chars)
+            summary = _summary_from_value(item, max_chars=max_chars)
             if summary:
                 return summary
     return ""
@@ -213,12 +194,18 @@ def _emit_started(name: str, call_id: str, request: Any) -> None:
 def _emit_finished(name: str, call_id: str, request: Any, result: Any, duration_ms: int) -> None:
     writer = get_stream_writer()
     failed = _result_failed(result)
-    preserve_markdown = name == TASK_TOOL_NAME
-    summary = _summary_from_value(result, preserve_markdown=preserve_markdown, max_chars=8000 if preserve_markdown else 300)
     if name == TASK_TOOL_NAME:
         subagent = _request_subagent_name(request)
-        has_child_summary = bool(summary)
-        summary = summary or f"子 Agent {subagent} 已完成"
+        # The child ToolMessage is an internal handoff to the parent Agent.
+        # Its natural-language final answer (or JSON) must never be copied
+        # into a user-visible event: the parent synthesis is the sole final
+        # answer owner. Keep only a content-free lifecycle checkpoint here;
+        # child report_progress and workflow events are emitted independently.
+        summary = (
+            "领域任务执行失败"
+            if failed
+            else "领域任务已完成，正在整理结果"
+        )
         emit(
             writer,
             "subagent.completed",
@@ -230,23 +217,8 @@ def _emit_finished(name: str, call_id: str, request: Any, result: Any, duration_
             durationMs=duration_ms,
             summary=summary,
         )
-        # A child model's final response is streamed through the canonical
-        # narration entry. Do not append a second generic completion row.
-        # Keep the lifecycle event above as the durable audit fact. If there
-        # is no readable child output, retain a short fallback narration.
-        if not has_child_summary:
-            try:
-                publish_narration(
-                    writer,
-                    stage="agent_message",
-                    message=f"子 Agent {subagent} 已{'失败' if failed else '完成'}",
-                    tool_call_id=f"{call_id}:completion",
-                )
-            except Exception:
-                # A post-completion narration outage must not convert a
-                # completed child workflow into a failed business tool.
-                pass
         return
+    summary = _summary_from_value(result, max_chars=300)
     summary = summary or f"工具 {name} 已完成"
     emit(
         writer,
@@ -261,12 +233,13 @@ def _emit_finished(name: str, call_id: str, request: Any, result: Any, duration_
 
 
 class ToolAuditMiddleware(AgentMiddleware):
-    """Audit lifecycle of parent tools and DeepAgents' generated ``task``.
+    """Audit lifecycle of DeepAgents' generated ``task`` only.
 
     The middleware observes the call boundary, so it also covers tools that
     return a typed response without explicitly emitting an event.  It never
-    logs arguments or full tool output; only a selected readable summary is
-    persisted through the existing event writer/Java audit path.
+    logs arguments or full tool output. In particular, a generated ``task``
+    stores only its lifecycle state; the child ToolMessage remains available
+    to parent synthesis but is never a user-visible process narration.
     """
 
     name = "ToolAuditMiddleware"
@@ -279,11 +252,7 @@ class ToolAuditMiddleware(AgentMiddleware):
         started_at = time.perf_counter()
         _emit_started(name, call_id, request)
         try:
-            if name == TASK_TOOL_NAME:
-                with stream_model_output_scope():
-                    result = handler(request)
-            else:
-                result = handler(request)
+            result = handler(request)
         except GraphBubbleUp:
             # HITL interrupts are control-flow, not failed tool executions.
             # Preserve the exception unchanged so LangGraph checkpoints and
@@ -314,11 +283,7 @@ class ToolAuditMiddleware(AgentMiddleware):
         started_at = time.perf_counter()
         _emit_started(name, call_id, request)
         try:
-            if name == TASK_TOOL_NAME:
-                with stream_model_output_scope():
-                    result = await handler(request)
-            else:
-                result = await handler(request)
+            result = await handler(request)
         except GraphBubbleUp:
             raise
         except Exception as exc:

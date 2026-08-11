@@ -20,6 +20,8 @@ services:
       # Operation/Effect runtime cannot be opened.
       OA_AGENT_RUNTIME_REQUIRED: "true"
       OA_AGENT_RUNTIME_POSTGRES_URI: postgresql://langgraph:langgraph@host.docker.internal:15432/langgraph
+      # Test-only route evaluation switch; production must leave it false.
+      OA_AGENT_INTENT_EVAL_ROUTE_ONLY: "${OA_AGENT_INTENT_EVAL_ROUTE_ONLY:-false}"
       # Redis is the shared host middleware exposed on port 16379.
       # The compose file intentionally contains only the LangGraph API.
       REDIS_URI: redis://host.docker.internal:16379
@@ -30,6 +32,8 @@ services:
     volumes:
       # 真实源码挂载：Tool、Agent、Skill 修改后由 uvicorn reload 自动加载。
       - ./src:/deps/agent-python/src
+      # Skill 是按领域动态读取的资源，不能只依赖构建镜像中的旧副本。
+      - ./skills:/deps/agent-python/skills:ro
       # Python 事件 Java 暂时不可用时先落本地 Outbox，容器重启后继续补投。
       - ./.data:/deps/agent-python/.data
     networks:
@@ -57,6 +61,7 @@ services:
       - host.docker.internal:host-gateway
     volumes:
       - ./src:/deps/agent-python/src
+      - ./skills:/deps/agent-python/skills:ro
     networks:
       - default
 

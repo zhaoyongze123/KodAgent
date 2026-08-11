@@ -11,7 +11,7 @@ from uuid import uuid4
 from langchain.tools import InjectedToolCallId, tool
 from langgraph.config import get_config, get_stream_writer
 
-from .contracts import ToolResponse, tool_success
+from .contracts import TOOL_CONTRACTS, ToolResponse, tool_failure, tool_success
 from .narration_state import current_revision, next_revision
 from .presentation import normalize_presentation
 from .run_state import claim_plan, clear_paused, is_paused, mark_paused
@@ -303,11 +303,6 @@ def turn_id_from_context(context: dict[str, Any] | None = None) -> str:
     return f"run:{str(value.get('runId') or 'local-run').strip()}"
 
 
-def set_task_context(task_id: str | None) -> None:
-    """Bind subsequent events and writes to the active business task."""
-    _TASK_ID.set(str(task_id or ""))
-
-
 def set_operation_context(operation_id: str | None) -> None:
     """Bind the durable Operation identity for the current workflow scope."""
     _OPERATION_ID.set(str(operation_id or ""))
@@ -516,6 +511,94 @@ def _narration_category(stage: str) -> str:
     }.get(stage, "progress")
 
 
+# ``report_progress.message`` is the only model-authored text that is placed
+# in the process timeline.  Keep this guard deliberately narrow: it rejects
+# protocol leakage, but never rewrites an otherwise valid model sentence into
+# a fixed server-generated progress message.
+_NARRATION_FIELD_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("field:action_id", re.compile(r"(?i)(?<![\w])action[_-]?id(?![\w])")),
+    ("field:capability_id", re.compile(r"(?i)(?<![\w])capability[_-]?id(?![\w])")),
+    ("field:execution_class", re.compile(r"(?i)(?<![\w])execution[_-]?class(?![\w])")),
+    ("field:route_state", re.compile(r"(?i)(?<![\w])route[_-]?state(?![\w])")),
+    ("field:route_phase", re.compile(r"(?i)(?<![\w])route[_-]?phase(?![\w])")),
+    ("field:execution_tool", re.compile(r"(?i)(?<![\w])execution[_-]?tool(?![\w])")),
+    ("field:delegate_agent", re.compile(r"(?i)(?<![\w])delegate[_-]?agent(?![\w])")),
+    ("field:candidate_plan", re.compile(r"(?i)(?<![\w])candidate[_-]?plan(?![\w])")),
+    ("field:query_intent", re.compile(r"(?i)(?<![\w])query[_-]?intent(?![\w])")),
+    ("field:tool_call_id", re.compile(r"(?i)(?<![\w])tool[_-]?call[_-]?id(?![\w])")),
+    ("field:confirmation_token", re.compile(r"(?i)(?<![\w])confirmation[_-]?token(?![\w])")),
+    ("field:run_id", re.compile(r"(?i)(?<![\w])run[_-]?id(?![\w])")),
+    ("field:thread_id", re.compile(r"(?i)(?<![\w])thread[_-]?id(?![\w])")),
+    ("field:operation_id", re.compile(r"(?i)(?<![\w])operation[_-]?id(?![\w])")),
+    ("field:canonical_plan", re.compile(r"(?i)(?<![\w])canonical[_-]?plan(?![\w])")),
+    ("field:work_order", re.compile(r"(?i)(?<![\w])(?:kodagent[_-]?work[_-]?order|work[_-]?order)(?![\w])|工单")),
+    ("field:allowed_executors", re.compile(r"(?i)(?<![\w])allowed[_-]?executors?(?![\w])")),
+    ("field:executor", re.compile(r"(?i)(?<![\w])executors?(?![\w])")),
+    ("status:action_selection", re.compile(r"(?i)(?<![\w])ACTION_SELECTION(?![\w])")),
+    ("status:resolved", re.compile(r"(?i)(?<![\w])RESOLVED(?![\w])")),
+    ("status:clarify", re.compile(r"(?i)(?<![\w])CLARIFY(?![\w])")),
+    ("status:field_clarification", re.compile(r"(?i)(?<![\w])FIELD[_-]?CLARIFICATION(?![\w])")),
+    ("status:needs_input", re.compile(r"(?i)(?<![\w])NEEDS[_-]?INPUT(?![\w])")),
+)
+
+_NARRATION_TOOL_NAMES = frozenset(TOOL_CONTRACTS) | frozenset({
+    "report_progress",
+    "route_conversation",
+    "invoke_tool",
+    "run_meeting_booking_workflow",
+    "run_personal_schedule_workflow",
+    "get_my_calendar",
+    "get_my_personal_calendar",
+    "executionTool",
+})
+_NARRATION_TOOL_PATTERN = re.compile(
+    r"(?<![\w])(" + "|".join(
+        re.escape(name) for name in sorted(_NARRATION_TOOL_NAMES, key=len, reverse=True)
+    ) + r")(?![\w])"
+)
+# A streaming provider can emit a truncated tool name before its final chunk,
+# or a model can abbreviate a Python executor in prose.  Progress narration is
+# never the place to name an executor, so reject this protocol-shaped prefix
+# rather than waiting for an exact registered tool name.
+_NARRATION_TOOL_PREFIX_PATTERN = re.compile(
+    r"(?i)(?<![\w])(?:run|confirm|execute|prepare|create|update|delete|list|search|get|check)_[a-z][a-z0-9_]*(?![\w])"
+)
+_NARRATION_JSON_PATTERN = re.compile(r"```(?:json|javascript|python)?\s|[{}]", re.IGNORECASE)
+_NARRATION_INTERNAL_PATH_PATTERN = re.compile(
+    r"(?i)(?:/agent(?:/|\b)|/api/(?:agent|oa)(?:/|\b)|"
+    r"java[_-]?(?:facade|gateway)|java\s*路径|x-agent-identity)"
+)
+
+
+def narration_validation_issues(text: str) -> tuple[str, ...]:
+    """Return stable issue codes when a model narration leaks runtime syntax.
+
+    This is intentionally a validator, not a formatter.  Callers must reject
+    the message and let the model produce a new user-facing sentence rather
+    than replacing it with a synthetic progress label.
+    """
+    if not isinstance(text, str) or not text.strip():
+        return ("empty",)
+
+    issues: list[str] = []
+    for code, pattern in _NARRATION_FIELD_PATTERNS:
+        if pattern.search(text):
+            issues.append(code)
+    issues.extend(
+        f"tool:{match.group(1)}"
+        for match in _NARRATION_TOOL_PATTERN.finditer(text)
+    )
+    if _NARRATION_TOOL_PREFIX_PATTERN.search(text):
+        issues.append("tool:executor_prefix")
+    if "```" in text or _NARRATION_JSON_PATTERN.search(text):
+        # Braces alone are enough to identify the common JSON/protocol form;
+        # ordinary Chinese punctuation is unaffected.
+        issues.append("json_or_code")
+    if _NARRATION_INTERNAL_PATH_PATTERN.search(text):
+        issues.append("internal_path")
+    return tuple(dict.fromkeys(issues))
+
+
 def _narration_parent_lineage(namespace: tuple[str, ...] | None = None,
                               *, tool_execution: bool = False) -> tuple[str, ...]:
     """Return the stable parent-graph lineage for a narration entry.
@@ -648,7 +731,10 @@ def publish_streaming_narration(writer: Any, *, stage: str, message: str,
     then writes the terminal ``completed`` snapshot in place.
     """
     sync_runtime_event_context()
-    text = plain_event_text(message[:300])
+    raw_text = plain_event_text(message)
+    if narration_validation_issues(raw_text):
+        return None
+    text = raw_text[:300]
     if not text:
         return None
     if stage not in {"plan", "agent_message", "draft", "confirmation_required"}:
@@ -672,11 +758,11 @@ def publish_streaming_narration(writer: Any, *, stage: str, message: str,
 
 def publish_model_narration(writer: Any, *, message: str, model_call_id: str,
                             completed: bool = False) -> dict[str, Any] | None:
-    """Publish the complete text of a sub-agent model response incrementally.
+    """Publish a legacy explicitly opted-in model narration incrementally.
 
-    Unlike ``report_progress``, this path intentionally does not cap the text:
-    the child model output is the user-requested full summary.  The same model
-    call ID addresses every revision, so the browser updates one row in place.
+    The Agent runtime does not opt generated ``task`` calls into this path:
+    their raw final text belongs to parent synthesis. The same model call ID
+    addresses every revision when an external, non-agent caller opts in.
     """
     sync_runtime_event_context()
     text = plain_event_text(message)
@@ -747,6 +833,13 @@ def report_progress(
     bind_tool_call_id(tool_call_id)
     if stage not in {"plan", "agent_message", "draft", "confirmation_required"}:
         stage = "agent_message"
+    issues = narration_validation_issues(message)
+    if issues:
+        return tool_failure(
+            "INVALID_NARRATION",
+            "请使用面向用户的自然语言重新描述当前工作进度。",
+            details={"issues": list(issues)},
+        )
     event = publish_narration(
         get_stream_writer(), stage=stage, message=message, tool_call_id=tool_call_id,
     )
