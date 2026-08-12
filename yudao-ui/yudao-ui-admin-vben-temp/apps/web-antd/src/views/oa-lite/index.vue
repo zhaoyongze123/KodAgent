@@ -121,11 +121,26 @@ const MANAGEMENT_COMPONENTS = {
   bpm: {
     category: defineAsyncComponent(() => import('#/views/bpm/category/index.vue')),
     definition: defineAsyncComponent(() => import('#/views/bpm/model/definition/index.vue')),
+    expression: defineAsyncComponent(
+      () => import('#/views/bpm/processExpression/index.vue'),
+    ),
     form: defineAsyncComponent(() => import('#/views/bpm/form/index.vue')),
+    formEditor: defineAsyncComponent(
+      () => import('#/views/bpm/form/designer/index.vue'),
+    ),
     group: defineAsyncComponent(() => import('#/views/bpm/group/index.vue')),
+    listener: defineAsyncComponent(
+      () => import('#/views/bpm/processListener/index.vue'),
+    ),
     model: defineAsyncComponent(() => import('#/views/bpm/model/index.vue')),
+    modelEditor: defineAsyncComponent(
+      () => import('#/views/bpm/model/form/index.vue'),
+    ),
     process: defineAsyncComponent(
       () => import('#/views/bpm/processInstance/manager/index.vue'),
+    ),
+    report: defineAsyncComponent(
+      () => import('#/views/bpm/processInstance/report/index.vue'),
     ),
     template: defineAsyncComponent(
       () => import('#/views/bpm/approvalTemplate/index.vue'),
@@ -204,6 +219,51 @@ const managementPage = computed(() => {
   const value = route.query.page;
   return Array.isArray(value) ? value[0] : value;
 });
+const bpmManagementView = computed(() => {
+  const value = route.query.bpmView;
+  const normalizedValue = Array.isArray(value) ? value[0] : value;
+  return normalizedValue === 'form-editor' || normalizedValue === 'model-editor'
+    ? normalizedValue
+    : null;
+});
+const managementComponentProps = computed(() => {
+  if (
+    managementSection.value !== 'bpm' ||
+    managementPage.value !== 'form' ||
+    bpmManagementView.value !== 'form-editor'
+  ) {
+    return { type: 'create' as const };
+  }
+  const readQueryValue = (key: string): string | undefined => {
+    const value = route.query[key];
+    const normalizedValue = Array.isArray(value) ? value[0] : value;
+    return typeof normalizedValue === 'string' ? normalizedValue : undefined;
+  };
+  const type = readQueryValue('type');
+  const formType: 'copy' | 'create' | 'edit' =
+    type === 'copy' || type === 'edit' || type === 'create' ? type : 'create';
+  return {
+    copyId: readQueryValue('copyId'),
+    id: readQueryValue('id'),
+    type: formType,
+  };
+});
+const managementComponentKey = computed(() => {
+  const readQueryValue = (key: string) => {
+    const value = route.query[key];
+    return Array.isArray(value) ? value[0] : value;
+  };
+  return [
+    managementSection.value || '',
+    managementPage.value || '',
+    bpmManagementView.value || '',
+    readQueryValue('id') || '',
+    readQueryValue('copyId') || '',
+    readQueryValue('modelAction') || '',
+    readQueryValue('modelId') || '',
+    readQueryValue('type') || '',
+  ].join(':');
+});
 const isCurrentUserAdmin = computed(() => isAdminUser(userStore.userRoles));
 const currentManagementComponent = computed(() => {
   if (
@@ -217,6 +277,11 @@ const currentManagementComponent = computed(() => {
     string,
     unknown
   >;
+  if (managementSection.value === 'bpm' && bpmManagementView.value) {
+    return bpmManagementView.value === 'form-editor'
+      ? components.formEditor
+      : components.modelEditor;
+  }
   return components[managementPage.value] || null;
 });
 const isManagementView = computed(() => Boolean(currentManagementComponent.value));
@@ -413,6 +478,14 @@ function buildWorkbenchQuery(view: string, extra: Record<string, string> = {}) {
   delete query[OA_LITE_DETAIL_PROCESS_QUERY_KEY];
   delete query[OA_LITE_DETAIL_TASK_QUERY_KEY];
   delete query[OA_LITE_DETAIL_ACTIVITY_QUERY_KEY];
+  // 深层 BPM 编辑器只能在对应页面中保留。切换工作台导航时必须清理，
+  // 否则“流程模型”等菜单会继续渲染上一个表单设计器。
+  delete query.bpmView;
+  delete query.copyId;
+  delete query.id;
+  delete query.modelAction;
+  delete query.modelId;
+  delete query.type;
   // 这两个参数只用于可道云首次进入发起页，不能带到工作台其它视图，
   // 否则路由监听会把待办、已办等页面再次强制切回发起审批。
   delete query.forceCreate;
@@ -1604,7 +1677,24 @@ onUnmounted(() => {
           <div class="oa-lite-home-shell" :class="{ 'is-center-mode': isCenterMode }">
             <template v-if="isManagementView && !isDetailOpen">
               <div class="oa-lite-management-view">
-                <component :is="currentManagementComponent" />
+                <!-- 编辑器与管理列表不能复用同一个异步动态组件出口。
+                     否则切换菜单后，已加载的设计器可能保留在页面上。 -->
+                <component
+                  v-if="bpmManagementView === 'form-editor'"
+                  :is="MANAGEMENT_COMPONENTS.bpm.formEditor"
+                  :key="managementComponentKey"
+                  v-bind="managementComponentProps"
+                />
+                <component
+                  v-else-if="bpmManagementView === 'model-editor'"
+                  :is="MANAGEMENT_COMPONENTS.bpm.modelEditor"
+                  :key="managementComponentKey"
+                />
+                <component
+                  v-else
+                  :is="currentManagementComponent"
+                  :key="managementComponentKey"
+                />
               </div>
             </template>
 

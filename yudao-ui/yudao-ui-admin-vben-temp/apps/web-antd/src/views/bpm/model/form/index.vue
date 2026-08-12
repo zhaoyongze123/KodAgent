@@ -57,7 +57,10 @@ const formDesignRef = ref<InstanceType<typeof FormDesign>>(); // 表单设计组
 const processDesignRef = ref<InstanceType<typeof ProcessDesign>>(); // 流程设计组件引用
 const extraSettingRef = ref<InstanceType<typeof ExtraSetting>>(); // 更多设置组件引用
 
-const actionType = route.params.type as string; // 操作类型：create、copy、update
+// 在 OA 工作台中承载时，编辑器的路由参数由 bpmView 查询参数传递；
+// 保留原始 params 读取，兼容独立路由访问。
+const actionType = (route.params.type || route.query.modelAction) as string;
+const modelId = (route.params.id || route.query.modelId) as string;
 const currentStep = ref(-1); // 步骤控制。-1 用于，一开始全部不展示等当前页面数据初始化完成
 const steps = [
   { title: '基本信息', validator: validateBasic },
@@ -136,7 +139,7 @@ async function validateExtra() {
 async function initData() {
   if (actionType === 'definition') {
     // 情况一：流程定义场景（恢复）
-    const definitionId = route.params.id as string;
+    const definitionId = modelId;
     const data = await getProcessDefinition(definitionId);
     const processDefinition: BpmProcessDefinitionType = data;
     // 将 definition => model
@@ -157,7 +160,6 @@ async function initData() {
     }
   } else if (['copy', 'update'].includes(actionType)) {
     // 情况二：修改场景/复制场景
-    const modelId = route.params.id as string;
     formData.value = await getModel(modelId);
 
     // 设置 startUserType
@@ -170,7 +172,7 @@ async function initData() {
     }
 
     // 特殊：复制场景
-    if (route.params.type === 'copy') {
+    if (actionType === 'copy') {
       delete formData.value.id;
       if (formData.value.bpmnXml) {
         formData.value.bpmnXml = formData.value.bpmnXml.replaceAll(

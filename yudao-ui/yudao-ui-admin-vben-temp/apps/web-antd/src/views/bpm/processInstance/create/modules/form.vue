@@ -13,14 +13,18 @@ import {
 import { useTabs } from '@vben/hooks';
 import { IconifyIcon } from '@vben/icons';
 
-import formCreate from '@form-create/ant-design-vue';
 import { Button, Col, message, Row, Space } from 'ant-design-vue';
 
 import {
   createProcessInstance,
   getApprovalDetail as getApprovalDetailApi,
 } from '#/api/bpm/processInstance';
-import { decodeFields, setConfAndFields2 } from '#/components/form-create';
+import {
+  decodeFields,
+  getFlowFormLayoutMode,
+  normalizeFlowFormRulesForDisplay,
+  setConfAndFields2,
+} from '#/components/form-create';
 import { router } from '#/router';
 import ProcessInstanceTimeline from '#/views/bpm/processInstance/detail/modules/time-line.vue';
 
@@ -160,35 +164,20 @@ async function initProcessInfo(row: any, formVariables?: any) {
 
     setConfAndFields2(detailForm, row.formConf, row.formFields, formVariables);
 
-    // 所有普通模板发起表单统一使用两列布局。这里在公共 form-create
-    // 发起入口处理，避免只对某一个 OA 自定义模板单独加样式。
-    const twoColumnCol = {
-      span: 12,
-      xs: 24,
-      sm: 24,
-      md: 12,
-      lg: 12,
-      xl: 12,
-    };
+    // 布局是流程表单配置的一部分：单列、两列和设计器的自定义栅格都直接生效。
+    // 不能在发起页强制改写，否则编辑器配置永远无法展示出来。
+    const layoutMode = getFlowFormLayoutMode(detailForm.value.option);
     detailForm.value.option = {
       ...detailForm.value.option,
-      col: {
-        ...(detailForm.value.option.col || {}),
-        ...twoColumnCol,
-      },
       row: {
         ...(detailForm.value.option.row || {}),
         gutter: 16,
-        show: false,
       },
     };
-    detailForm.value.rule = detailForm.value.rule.map((rule: any) => ({
-      ...rule,
-      col: {
-        ...(rule.col || {}),
-        ...twoColumnCol,
-      },
-    }));
+    detailForm.value.rule = normalizeFlowFormRulesForDisplay(
+      detailForm.value.rule,
+      layoutMode,
+    );
 
     // 在配置中禁用 form-create 自带的提交和重置按钮
     detailForm.value.option = {
@@ -326,10 +315,15 @@ defineExpose({ initProcessInfo });
 </script>
 
 <template>
-  <section class="bpm-create-form-shell" :class="{ 'is-oa-lite': isOaLiteMode }">
+  <section
+    class="bpm-create-form-shell"
+    :class="{ 'is-oa-lite': isOaLiteMode }"
+  >
     <header class="bpm-create-form-header">
       <div>
-        <div v-if="!isOaLiteMode" class="bpm-create-form-eyebrow">Process Launch</div>
+        <div v-if="!isOaLiteMode" class="bpm-create-form-eyebrow">
+          Process Launch
+        </div>
         <h2 class="bpm-create-form-title">{{ getTitle }}</h2>
       </div>
       <Space wrap>
@@ -340,7 +334,9 @@ defineExpose({ initProcessInfo });
     </header>
 
     <section class="bpm-create-form-tabs">
-      <div v-if="!isOaLiteMode" class="bpm-create-form-tab-active">表单填写</div>
+      <div v-if="!isOaLiteMode" class="bpm-create-form-tab-active">
+        表单填写
+      </div>
       <Row :gutter="[40, 16]" class="bpm-create-form-panel">
         <Col
           :xs="24"
@@ -348,7 +344,7 @@ defineExpose({ initProcessInfo });
           :md="18"
           :lg="18"
           :xl="18"
-          class="flex-1 overflow-auto"
+          class="bpm-create-form-content"
         >
           <form-create
             class="bpm-create-normal-form"
@@ -362,7 +358,6 @@ defineExpose({ initProcessInfo });
         <Col :xs="24" :sm="24" :md="6" :lg="6" :xl="6">
           <ProcessInstanceTimeline
             :activity-nodes="activityNodes"
-            :show-status-icon="false"
             @select-user-confirm="selectUserConfirm"
           />
         </Col>
@@ -443,6 +438,8 @@ defineExpose({ initProcessInfo });
   min-height: 0;
   flex: 1;
   flex-direction: column;
+  overflow: auto;
+  overscroll-behavior: contain;
   padding-top: 12px;
 }
 
@@ -463,7 +460,9 @@ defineExpose({ initProcessInfo });
 }
 
 .bpm-create-form-panel {
+  min-width: 0;
   padding-top: 8px;
+  padding-bottom: 24px;
   border-top: 1px solid var(--oa-shell-border);
   margin-top: -1px;
 }
@@ -475,6 +474,7 @@ defineExpose({ initProcessInfo });
 }
 
 .bpm-create-form-actions {
+  flex: none;
   padding: 16px 0 0;
   border-top: 1px solid var(--oa-shell-border);
 }
@@ -485,5 +485,9 @@ defineExpose({ initProcessInfo });
 
 .bpm-create-normal-form {
   width: 100%;
+}
+
+.bpm-create-form-content {
+  min-width: 0;
 }
 </style>

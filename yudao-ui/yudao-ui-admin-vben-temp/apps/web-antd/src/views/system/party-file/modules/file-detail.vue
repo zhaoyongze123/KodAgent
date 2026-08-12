@@ -4,6 +4,7 @@ import type { SystemPartyFileApi } from '#/api/system/party-file';
 import { computed, ref } from 'vue';
 
 import { useVbenModal } from '@vben/common-ui';
+import { IconifyIcon } from '@vben/icons';
 import { downloadFileFromBlobPart, formatDateTime } from '@vben/utils';
 import { Button, Empty, Modal as AntModal, Tag } from 'ant-design-vue';
 
@@ -111,6 +112,29 @@ function formatFileSize(size?: number) {
   return `${current >= 100 ? current.toFixed(0) : current.toFixed(2).replace(/\.?0+$/, '')} ${units[unitIndex]}`;
 }
 
+function getFileExtension(name: string) {
+  return name.includes('.')
+    ? name.split('.').pop()?.toUpperCase() || 'FILE'
+    : 'FILE';
+}
+
+function getFileIcon(name: string) {
+  const extension = getFileExtension(name);
+  if (extension === 'PDF') {
+    return 'lucide:file-type-2';
+  }
+  if (['DOC', 'DOCX', 'TXT'].includes(extension)) {
+    return 'lucide:file-text';
+  }
+  if (['XLS', 'XLSX', 'CSV'].includes(extension)) {
+    return 'lucide:file-spreadsheet';
+  }
+  if (['PNG', 'JPG', 'JPEG', 'GIF', 'WEBP', 'SVG'].includes(extension)) {
+    return 'lucide:image';
+  }
+  return 'lucide:file';
+}
+
 async function handleDownload(fileId: number) {
   if (!detail.value?.id) {
     return;
@@ -216,10 +240,13 @@ async function handlePreview(fileId: number) {
               :key="item.id"
               class="party-file-detail__attachment"
             >
+              <span class="party-file-detail__attachment-icon">
+                <IconifyIcon :icon="getFileIcon(item.name)" />
+              </span>
               <div class="party-file-detail__attachment-body">
                 <div class="party-file-detail__attachment-name">{{ item.name }}</div>
                 <div class="party-file-detail__attachment-meta">
-                  {{ [item.type || '未知类型', formatFileSize(item.size)].filter(Boolean).join('，') }}
+                  {{ formatFileSize(item.size) || '未知大小' }}
                 </div>
               </div>
               <div class="party-file-detail__attachment-actions">
@@ -477,6 +504,13 @@ async function handlePreview(fileId: number) {
   border-bottom: 1px solid rgb(15 23 42 / 6%);
 }
 
+.party-file-detail__attachment {
+  padding: 10px 12px;
+  border: 1px solid rgb(15 23 42 / 8%);
+  border-radius: 8px;
+  background: rgb(248 250 252);
+}
+
 .party-file-detail__attachment:last-child,
 .party-file-detail__read-item:last-child,
 .party-file-detail__unread-item:last-child {
@@ -488,6 +522,27 @@ async function handlePreview(fileId: number) {
 .party-file-detail__read-item:first-child,
 .party-file-detail__unread-item:first-child {
   padding-top: 0;
+}
+
+.party-file-detail__attachment:first-child {
+  padding-top: 10px;
+}
+
+.party-file-detail__attachment:last-child {
+  padding-bottom: 10px;
+}
+
+.party-file-detail__attachment-icon {
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: rgb(219 234 254);
+  color: rgb(37 99 235);
+  font-size: 20px;
 }
 
 .party-file-detail__attachment-body,

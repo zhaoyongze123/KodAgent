@@ -22,7 +22,9 @@ readonly DB_CONTAINER="${DB_CONTAINER:-${MYSQL_CONTAINER:-oa-manual-mysql}}"
 readonly APP_SERVICE="${APP_SERVICE:-oa-manual.service}"
 readonly NGINX_CONTAINER="${NGINX_CONTAINER:-oa-manual-nginx}"
 readonly HEALTH_URL="${HEALTH_URL:-http://127.0.0.1:48180/actuator/health}"
-readonly FRONTEND_URL="${FRONTEND_URL:-http://127.0.0.1:18080/}"
+# OA Nginx 仅绑定服务器内网 IP。未显式覆盖时，在 wait_frontend 中从
+# ${RUNTIME_ENV_FILE} 的 INTRANET_HOST 推导，避免 103 和正式环境互相串地址。
+readonly FRONTEND_URL="${FRONTEND_URL:-}"
 readonly RUNTIME_ENV_FILE="${OA_RUNTIME_ENV_FILE:-${APP_ROOT}/.env}"
 readonly RUNTIME_CONFIG_FILE="${OA_RUNTIME_CONFIG_FILE:-${HTML_ROOT}/oa-runtime-config.js}"
 readonly LOCK_FILE="${LOCK_FILE:-${UPDATE_ROOT}/.update.lock}"
@@ -48,6 +50,7 @@ RUNTIME_API_ENCRYPT_RESPONSE_KEY=""
 RUNTIME_STORE_SECURE_KEY=""
 RUNTIME_BAIDU_MAP_KEY=""
 RUNTIME_BAIDU_ANALYTICS_CODE=""
+STARTUP_SCRIPT_CHANGED=0
 
 usage() {
   cat <<EOF
@@ -123,10 +126,14 @@ validate_runtime_boolean() {
   [[ "$value" == true || "$value" == false ]] || die "${key} 必须是 true 或 false：${value}"
 }
 
+load_captcha_runtime_config() {
+  # 本 OA 的账号密码测试入口不使用验证码；前后端固定关闭，避免运行时配置漂移。
+  RUNTIME_CAPTCHA_ENABLE="false"
+}
+
 load_runtime_config() {
   RUNTIME_PREVIEW_URL="$(runtime_value OA_FILE_PREVIEW_URL)"
   RUNTIME_PREVIEW_FETCH_ORIGIN="$(runtime_value OA_FILE_PREVIEW_FETCH_ORIGIN)"
-  RUNTIME_CAPTCHA_ENABLE="$(runtime_value OA_CAPTCHA_ENABLE)"
   RUNTIME_INTRANET_DEPLOYMENT="$(runtime_value OA_INTRANET_DEPLOYMENT)"
   RUNTIME_API_ENCRYPT_ENABLE="$(runtime_value OA_API_ENCRYPT_ENABLE)"
   RUNTIME_API_ENCRYPT_HEADER="$(runtime_value OA_API_ENCRYPT_HEADER)"
@@ -137,7 +144,6 @@ load_runtime_config() {
   RUNTIME_BAIDU_MAP_KEY="$(runtime_value OA_BAIDU_MAP_KEY)"
   RUNTIME_BAIDU_ANALYTICS_CODE="$(runtime_value OA_BAIDU_ANALYTICS_CODE)"
 
-  RUNTIME_CAPTCHA_ENABLE="${RUNTIME_CAPTCHA_ENABLE:-false}"
   RUNTIME_INTRANET_DEPLOYMENT="${RUNTIME_INTRANET_DEPLOYMENT:-true}"
   RUNTIME_API_ENCRYPT_ENABLE="${RUNTIME_API_ENCRYPT_ENABLE:-false}"
   RUNTIME_API_ENCRYPT_ALGORITHM="${RUNTIME_API_ENCRYPT_ALGORITHM:-AES}"
@@ -148,7 +154,6 @@ load_runtime_config() {
     [[ "$RUNTIME_PREVIEW_FETCH_ORIGIN" =~ ^https?://[^[:space:]\"\'\\]+$ ]] \
       || die "OA_FILE_PREVIEW_FETCH_ORIGIN 必须是 http(s) 地址：${RUNTIME_PREVIEW_FETCH_ORIGIN}"
   fi
-  validate_runtime_boolean OA_CAPTCHA_ENABLE "$RUNTIME_CAPTCHA_ENABLE"
   validate_runtime_boolean OA_INTRANET_DEPLOYMENT "$RUNTIME_INTRANET_DEPLOYMENT"
   validate_runtime_boolean OA_API_ENCRYPT_ENABLE "$RUNTIME_API_ENCRYPT_ENABLE"
   [[ "$RUNTIME_CONFIG_FILE" == "$HTML_ROOT"/* ]] \
@@ -157,6 +162,21 @@ load_runtime_config() {
     || die "更新包不能携带环境专属 frontend/runtime/oa-runtime-config.js；请由目标服务器生成。"
   [[ ! -e "$RELEASE_DIR/frontend/dist/oa-runtime-config.js" ]] \
     || die "更新包不能携带环境专属 frontend/dist/oa-runtime-config.js；请由目标服务器生成。"
+}
+
+sync_backend_captcha_config() {
+  local run_script="${APP_ROOT}/run.sh"
+  [[ -f "$run_script" ]] || die "找不到 OA 后端启动脚本：$run_script"
+  grep -q -- '--yudao.captcha.enable=' "$run_script" \
+    || die "OA 启动脚本缺少验证码启动参数：$run_script"
+  if grep -q -- '--yudao.captcha.enable=true' "$run_script" \
+    || ! grep -Fq -- '--yudao.captcha.enable=false' "$run_script"; then
+    sed -E -i 's|--yudao\.captcha\.enable=[^[:space:]\\]+|--yudao.captcha.enable=false|g' "$run_script"
+    bash -n "$run_script"
+    STARTUP_SCRIPT_CHANGED=1
+    APP_NEEDS_RESTART=1
+    log "已将 OA 启动脚本中的验证码参数固定为 false。"
+  fi
 }
 
 js_quote() {
@@ -215,6 +235,9 @@ collect_release_files() {
   fi
   if (( HAS_FRONTEND )); then
     [[ -f "$RELEASE_DIR/frontend/dist/index.html" ]] || die "前端 dist 缺少 index.html。"
+  fi
+  load_captcha_runtime_config
+  if (( HAS_FRONTEND )); then
     load_runtime_config
   fi
 }
@@ -282,7 +305,7 @@ backup_current_state() {
 
   log "备份 OA 数据库。"
   docker exec -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" "$DB_CONTAINER" \
-    mysqldump -uroot --single-transaction --routines --triggers "$MYSQL_DATABASE" \
+    mysqldump -uroot --default-character-set=utf8mb4 --single-transaction --routines --triggers "$MYSQL_DATABASE" \
     | tee "$BACKUP_DIR/db/${MYSQL_DATABASE}.sql" >/dev/null
   chmod 0600 "$BACKUP_DIR/db/${MYSQL_DATABASE}.sql"
   log "备份完成：$BACKUP_DIR"
@@ -295,7 +318,7 @@ apply_sql() {
   for sql in "${SQL_FILES[@]}"; do
     log "执行增量 SQL：$(basename "$sql")"
     docker exec -i -e MYSQL_PWD="$MYSQL_ROOT_PASSWORD" "$DB_CONTAINER" \
-      mysql -uroot "$MYSQL_DATABASE" < "$sql"
+      mysql -uroot --default-character-set=utf8mb4 "$MYSQL_DATABASE" < "$sql"
   done
 }
 
@@ -382,10 +405,16 @@ wait_health() {
 }
 
 wait_frontend() {
-  local attempt
+  local attempt frontend_url intranet_host
+  frontend_url="$FRONTEND_URL"
+  if [[ -z "$frontend_url" ]]; then
+    intranet_host="$(runtime_value INTRANET_HOST)"
+    [[ -n "$intranet_host" ]] || die "未设置 FRONTEND_URL 或 INTRANET_HOST，无法检查 OA 前端。"
+    frontend_url="http://${intranet_host}:18080/"
+  fi
   for attempt in $(seq 1 15); do
-    if curl -fsS --max-time 5 "$FRONTEND_URL" -o /dev/null; then
-      log "OA 前端检查通过：$FRONTEND_URL"
+    if curl -fsS --max-time 5 "$frontend_url" -o /dev/null; then
+      log "OA 前端检查通过：$frontend_url"
       return 0
     fi
     sleep 1
@@ -404,6 +433,9 @@ restore_binaries() {
     tar -C "$HTML_ROOT" -xzf "$BACKUP_DIR/nginx/html-before.tar.gz"
     docker exec "$NGINX_CONTAINER" nginx -t && docker exec "$NGINX_CONTAINER" nginx -s reload || true
   fi
+  if (( STARTUP_SCRIPT_CHANGED )) && [[ -f "$BACKUP_DIR/app/run.sh" ]]; then
+    cp -a "$BACKUP_DIR/app/run.sh" "$APP_ROOT/run.sh"
+  fi
 }
 
 start_app() {
@@ -420,7 +452,7 @@ on_error() {
   if (( SQL_APPLIED )); then
     echo "[WARN] 增量 SQL 已执行，脚本不会自动恢复数据库；请使用发布包提供的回滚 SQL 或备份恢复方案。" >&2
   fi
-  if (( APP_CHANGED || FRONTEND_CHANGED )); then
+  if (( APP_CHANGED || FRONTEND_CHANGED || STARTUP_SCRIPT_CHANGED )); then
     log "尝试恢复已变更的 JAR/前端。"
     restore_binaries || true
   fi
@@ -437,6 +469,7 @@ apply_release() {
   acquire_lock
   backup_current_state
   trap on_error ERR
+  sync_backend_captcha_config
   stop_app
   apply_sql
   replace_app

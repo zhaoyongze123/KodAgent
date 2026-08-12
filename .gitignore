@@ -102,5 +102,10 @@ application-my.yaml
 !/script/docker/env/targets/103.env
 !/script/docker/env/targets/production.env
 
+# Runtime logs and one-off database inspection output
+/LOG_FILE_IS_UNDEFINED
+/yudao-server/LOG_FILE_IS_UNDEFINED
+/sql/mysql/ruoyi-vue-pro.sql.tables
+
 # The Maven wrapper is source-controlled and must remain tracked.
 !.mvn/wrapper/maven-wrapper.jar

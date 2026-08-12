@@ -6,11 +6,13 @@ import { useTabs } from '@vben/hooks';
 import { IconifyIcon } from '@vben/icons';
 
 import FcDesigner from '@form-create/antd-designer';
-import { Button, message, Spin } from 'ant-design-vue';
+import { Button, message, Radio, Spin, Tooltip } from 'ant-design-vue';
 
 import { getForm } from '#/api/bpm/form';
 import {
+  getFlowFormLayoutMode,
   setConfAndFields,
+  setFlowFormLayout,
   useFormCreateDesigner,
 } from '#/components/form-create';
 import { router } from '#/router';
@@ -29,6 +31,9 @@ const loading = ref(false);
 const tabs = useTabs();
 const flowFormConfig = ref();
 const designerRef = ref<InstanceType<typeof FcDesigner>>();
+const formLayoutMode = ref<'custom' | 'one-column' | 'two-column'>(
+  'one-column',
+);
 
 const [FormModal, formModalApi] = useVbenModal({
   connectedComponent: Form,
@@ -90,10 +95,22 @@ async function loadFormConfig(id: number) {
     flowFormConfig.value = formDetail;
     if (designerRef.value) {
       setConfAndFields(designerRef, formDetail.conf, formDetail.fields);
+      formLayoutMode.value = getFlowFormLayoutMode(
+        designerRef.value.getOption(),
+      );
     }
   } finally {
     loading.value = false;
   }
+}
+
+function changeFormLayout(mode: 'custom' | 'one-column' | 'two-column') {
+  if (!designerRef.value) {
+    return;
+  }
+  designerRef.value.setOption(
+    setFlowFormLayout(designerRef.value.getOption(), mode),
+  );
 }
 
 /** 初始化设计器 */
@@ -140,6 +157,22 @@ onMounted(() => {
     <Spin :spinning="loading">
       <FcDesigner ref="designerRef" height="90vh" :config="designerConfig">
         <template #handle>
+          <span
+            class="mr-3 inline-flex items-center gap-2 text-sm text-gray-600"
+          >
+            表单布局
+            <Radio.Group
+              v-model:value="formLayoutMode"
+              size="small"
+              @change="changeFormLayout(formLayoutMode)"
+            >
+              <Radio.Button value="one-column">单列</Radio.Button>
+              <Radio.Button value="two-column">两列</Radio.Button>
+              <Tooltip title="使用“布局组件 → 栅格布局”自由安排字段宽度和位置">
+                <Radio.Button value="custom">自定义</Radio.Button>
+              </Tooltip>
+            </Radio.Group>
+          </span>
           <Button size="small" type="primary" @click="handleSave">
             <IconifyIcon icon="mdi:content-save" />
             保存

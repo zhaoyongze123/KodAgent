@@ -54,7 +54,7 @@ services:
         --yudao.kod-sso.auto-create-user=true
         --yudao.kod-sso.organization-sync-enabled=false
         --yudao.kod-sso.organization-sync-cron=-
-        --yudao.captcha.enable=true
+        --yudao.captcha.enable=false
     ports:
       - "127.0.0.1:48080:48080"
     networks:

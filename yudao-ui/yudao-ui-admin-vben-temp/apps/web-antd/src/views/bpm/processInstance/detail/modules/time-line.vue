@@ -2,7 +2,7 @@
 <script lang="ts" setup>
 import type { BpmProcessInstanceApi } from '#/api/bpm/processInstance';
 
-import { ref } from 'vue';
+import { onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 
 import { useVbenModal } from '@vben/common-ui';
@@ -14,11 +14,28 @@ import {
 import { IconifyIcon } from '@vben/icons';
 import { formatDateTime, isEmpty } from '@vben/utils';
 
-import { Avatar, Button, Image, Timeline, Tooltip } from 'ant-design-vue';
+import { Button, Image, Timeline, Tooltip } from 'ant-design-vue';
 
 import { UserSelectModal } from '#/views/system/user/components';
+import { getSimpleUserList } from '#/api/system/user';
 
 defineOptions({ name: 'BpmProcessInstanceTimeline' });
+
+// 审批详情接口的候选人仅保证返回用户 ID；部门名称以用户管理数据为准。
+const timelineUserMap = ref<Record<string, any>>({});
+let loadTimelineUsersPromise: null | Promise<void> = null;
+
+async function ensureTimelineUsers() {
+  if (Object.keys(timelineUserMap.value).length > 0) {
+    return;
+  }
+  loadTimelineUsersPromise ||= getSimpleUserList().then((users) => {
+    timelineUserMap.value = Object.fromEntries(
+      users.map((user) => [String(user.id), user]),
+    );
+  });
+  await loadTimelineUsersPromise;
+}
 
 const props = withDefaults(
   defineProps<{
@@ -38,14 +55,26 @@ const emit = defineEmits<{
 
 const { push } = useRouter();
 
+onMounted(() => {
+  void ensureTimelineUsers();
+});
+
 const statusIconMap: Record<
   string,
   { animation?: string; color: string; icon: string }
 > = {
   '-2': { color: '#909398', icon: 'lucide:skip-forward' }, // 跳过
   '-1': { color: '#909398', icon: 'lucide:clock-3' }, // 审批未开始
-  '0': { color: '#ff943e', icon: 'lucide:loader-circle', animation: 'animate-spin' }, // 待审批
-  '1': { color: '#448ef7', icon: 'lucide:loader-circle', animation: 'animate-spin' }, // 审批中
+  '0': {
+    color: '#ff943e',
+    icon: 'lucide:loader-circle',
+    animation: 'animate-spin',
+  }, // 待审批
+  '1': {
+    color: '#448ef7',
+    icon: 'lucide:loader-circle',
+    animation: 'animate-spin',
+  }, // 审批中
   '2': { color: '#00b32a', icon: 'lucide:check' }, // 审批通过
   '3': { color: '#f46b6c', icon: 'lucide:x' }, // 审批不通过
   '4': { color: '#cccccc', icon: 'lucide:ban' }, // 已取消
@@ -74,7 +103,32 @@ function getApprovalNodeIcon(taskStatus: number, nodeType: BpmNodeTypeEnum) {
 
 /** 获取审批节点颜色 */
 function getApprovalNodeColor(taskStatus: number) {
-  return statusIconMap[taskStatus]?.color;
+  return statusIconMap[taskStatus]?.color || '#94a3b8';
+}
+
+function getTimelineNodeIcon(nodeType: BpmNodeTypeEnum) {
+  if (nodeType === BpmNodeTypeEnum.START_USER_NODE) {
+    return 'lucide:user-round';
+  }
+  if (nodeType === BpmNodeTypeEnum.END_EVENT_NODE) {
+    return 'lucide:power';
+  }
+  if (nodeType === BpmNodeTypeEnum.COPY_TASK_NODE) {
+    return 'lucide:copy';
+  }
+  return 'lucide:stamp';
+}
+
+function getTimelineStatusColor(
+  activity: BpmProcessInstanceApi.ApprovalNodeInfo,
+) {
+  return getApprovalNodeColor(activity.status);
+}
+
+function getTimelineStatusIcon(
+  activity: BpmProcessInstanceApi.ApprovalNodeInfo,
+) {
+  return getApprovalNodeIcon(activity.status, activity.nodeType);
 }
 
 /** 获取审批节点时间 */
@@ -92,12 +146,25 @@ function getApprovalNodeTime(node: BpmProcessInstanceApi.ApprovalNodeInfo) {
 }
 
 function getTimelineUser(task: any) {
-  return task?.assigneeUser || task?.ownerUser;
+  return enrichTimelineUser(task?.assigneeUser || task?.ownerUser);
 }
 
-function getActivityTasks(
-  activity: BpmProcessInstanceApi.ApprovalNodeInfo,
-) {
+function enrichTimelineUser(user: any) {
+  if (!user?.id) {
+    return user;
+  }
+  const fullUser = timelineUserMap.value[String(user.id)];
+  if (!fullUser) {
+    return user;
+  }
+  return {
+    ...fullUser,
+    ...user,
+    deptName: user.deptName || user.departmentName || fullUser.deptName,
+  };
+}
+
+function getActivityTasks(activity: BpmProcessInstanceApi.ApprovalNodeInfo) {
   const seen = new Set<string>();
   return (activity.tasks || []).filter((task) => {
     const user = getTimelineUser(task);
@@ -117,7 +184,7 @@ function getActivityCandidateUsers(
   activity: BpmProcessInstanceApi.ApprovalNodeInfo,
 ) {
   const seen = new Set<string>();
-  return (activity.candidateUsers || []).filter((user) => {
+  return (activity.candidateUsers || []).map(enrichTimelineUser).filter((user) => {
     const key = String(user.id || user.nickname || '');
     if (seen.has(key)) {
       return false;
@@ -144,11 +211,15 @@ function getActivityUsers(activity: BpmProcessInstanceApi.ApprovalNodeInfo) {
   });
 }
 
-function getActivityPrimaryUser(activity: BpmProcessInstanceApi.ApprovalNodeInfo) {
+function getActivityPrimaryUser(
+  activity: BpmProcessInstanceApi.ApprovalNodeInfo,
+) {
   return getActivityUsers(activity)[0];
 }
 
-function getTimelineUserPosition(user?: any) {
+function getTimelineUserPosition(
+  user: any,
+) {
   return user?.deptName || user?.departmentName || '-';
 }
 
@@ -256,30 +327,20 @@ defineExpose({ setCustomApproveUsers, batchSetCustomApproveUsers });
       >
         <template #dot>
           <div class="oa-process-timeline-dot-wrap">
-            <div v-if="isEndActivity(activity)" class="oa-process-timeline-end-icon">
-              <IconifyIcon icon="lucide:flag" />
-            </div>
-            <div v-else class="oa-process-timeline-avatar">
-              <Avatar
-                v-if="getActivityPrimaryUser(activity)?.avatar"
-                :src="getActivityPrimaryUser(activity)?.avatar"
-                :size="34"
-              />
-              <Avatar v-else :size="34">
-                {{ getActivityPrimaryUser(activity)?.nickname?.substring(0, 1) || '' }}
-              </Avatar>
+            <div class="oa-process-timeline-node-icon">
+              <IconifyIcon :icon="getTimelineNodeIcon(activity.nodeType)" />
             </div>
             <div
-              v-if="showStatusIcon && !isEndActivity(activity)"
+              v-if="showStatusIcon"
               class="oa-process-timeline-status"
               :style="{
-                backgroundColor: getApprovalNodeColor(activity.status),
+                backgroundColor: getTimelineStatusColor(activity),
               }"
             >
               <IconifyIcon
-                :icon="getApprovalNodeIcon(activity.status, activity.nodeType)"
+                :icon="getTimelineStatusIcon(activity)"
                 class="oa-process-timeline-status-icon"
-                :class="[statusIconMap[activity.status]?.animation]"
+                :class="statusIconMap[activity.status]?.animation"
               />
             </div>
           </div>
@@ -293,10 +354,19 @@ defineExpose({ setCustomApproveUsers, batchSetCustomApproveUsers });
           <div class="oa-process-timeline-head">
             <div class="oa-process-timeline-person">
               <span class="oa-process-timeline-title">
-                {{ getActivityPrimaryUser(activity)?.nickname || activity.name || '审批节点' }}
+                {{
+                  getActivityPrimaryUser(activity)?.nickname ||
+                  activity.name ||
+                  '审批节点'
+                }}
               </span>
-              <span v-if="!isEndActivity(activity)" class="oa-process-timeline-user-role">
-                （{{ getTimelineUserPosition(getActivityPrimaryUser(activity)) }}）
+              <span
+                v-if="!isEndActivity(activity)"
+                class="oa-process-timeline-user-role"
+              >
+                （{{
+                  getTimelineUserPosition(getActivityPrimaryUser(activity))
+                }}）
               </span>
               <span v-if="activity.status === BpmTaskStatusEnum.SKIP">
                 【跳过】
@@ -320,7 +390,9 @@ defineExpose({ setCustomApproveUsers, batchSetCustomApproveUsers });
               class="oa-process-timeline-extra-user"
             >
               <template v-if="!isEndActivity(activity)">
-                {{ user.nickname || '-' }}（{{ getTimelineUserPosition(user) }}）
+                {{ user.nickname || '-' }}（{{
+                  getTimelineUserPosition(user)
+                }}）
               </template>
               <template v-else>{{ user.nickname || '-' }}</template>
             </span>
@@ -362,7 +434,6 @@ defineExpose({ setCustomApproveUsers, batchSetCustomApproveUsers });
                 </template>
               </Button>
             </Tooltip>
-
           </div>
 
           <div v-else>
@@ -398,7 +469,6 @@ defineExpose({ setCustomApproveUsers, batchSetCustomApproveUsers });
                 </div>
               </teleport>
             </div>
-
           </div>
         </div>
       </Timeline.Item>
@@ -428,7 +498,7 @@ defineExpose({ setCustomApproveUsers, batchSetCustomApproveUsers });
 
 .oa-process-timeline :deep(.ant-timeline-item-tail) {
   inset-inline-start: 18px;
-  border-inline-start: 2px solid rgba(207, 223, 243, 0.92);
+  border-inline-start: 2px solid #e5e7eb;
 }
 
 .oa-process-timeline :deep(.ant-timeline-item-head) {
@@ -445,28 +515,18 @@ defineExpose({ setCustomApproveUsers, batchSetCustomApproveUsers });
   height: 34px;
 }
 
-.oa-process-timeline-avatar {
+.oa-process-timeline-node-icon {
   display: flex;
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  border: 1px solid var(--oa-shell-border);
+  border: 1px solid #9ec0ff;
   border-radius: 999px;
-  background: var(--oa-shell-surface-muted);
-}
-
-.oa-process-timeline-end-icon {
-  display: flex;
-  width: 34px;
-  height: 34px;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--oa-accent);
-  border-radius: 999px;
-  background: var(--oa-shell-surface);
-  color: var(--oa-accent);
+  background: #4f8df7;
+  box-shadow: 0 2px 7px rgb(31 111 235 / 22%);
+  color: #fff;
   font-size: 18px;
 }
 
@@ -499,11 +559,11 @@ defineExpose({ setCustomApproveUsers, batchSetCustomApproveUsers });
 
 .oa-process-timeline-status {
   position: absolute;
-  right: -4px;
-  bottom: -4px;
+  right: -5px;
+  bottom: -5px;
   display: flex;
-  width: 15px;
-  height: 15px;
+  width: 17px;
+  height: 17px;
   align-items: center;
   justify-content: center;
   border: 2px solid #fff;
@@ -523,7 +583,8 @@ defineExpose({ setCustomApproveUsers, batchSetCustomApproveUsers });
   flex-direction: column;
   gap: 10px;
   padding: 2px 0 18px;
-  border-bottom: 1px solid color-mix(in srgb, var(--oa-shell-border) 88%, transparent);
+  border-bottom: 1px solid
+    color-mix(in srgb, var(--oa-shell-border) 88%, transparent);
   background: transparent;
 }
 

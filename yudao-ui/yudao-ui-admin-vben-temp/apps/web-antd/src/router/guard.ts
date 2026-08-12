@@ -59,6 +59,80 @@ function isOaWorkbenchPath(path: string) {
   return path === '/oa-lite' || path.startsWith('/oa-lite/');
 }
 
+const OA_LITE_CENTER_PATH = '/oa-lite/center';
+
+const BPM_MANAGEMENT_PAGE_BY_PATH: Record<string, string> = {
+  '/bpm/category': 'category',
+  '/bpm/group': 'group',
+  '/bpm/manager/definition': 'definition',
+  '/bpm/manager/form': 'form',
+  '/bpm/manager/template': 'template',
+  '/bpm/manager/model': 'model',
+  '/bpm/process-expression': 'expression',
+  '/bpm/process-instance/manager': 'process',
+  '/bpm/process-instance/report': 'report',
+  '/bpm/process-listener': 'listener',
+};
+
+function resolveQueryString(value: unknown) {
+  const normalizedValue = Array.isArray(value) ? value[0] : value;
+  return typeof normalizedValue === 'string' ? normalizedValue : undefined;
+}
+
+/**
+ * BPM 管理页必须始终由 OA 工作台承载。列表页内部进入设计器时原本会跳到
+ * /bpm/...，导致 RouterView 从 oa-lite 卸载并回落为旧的通用侧栏。
+ */
+function redirectBpmManagementToWorkbench(
+  to: RouteLocationNormalized,
+  from: RouteLocationNormalized,
+) {
+  let page = BPM_MANAGEMENT_PAGE_BY_PATH[to.path];
+  let bpmView: string | undefined;
+  const query = { ...to.query } as Record<string, string | string[]>;
+
+  if (to.path === '/bpm/manager/form/edit') {
+    page = 'form';
+    bpmView = 'form-editor';
+  } else if (to.path === '/bpm/manager/model/create') {
+    page = 'model';
+    bpmView = 'model-editor';
+    query.modelAction = 'create';
+  } else if (to.path.startsWith('/bpm/manager/model/')) {
+    page = 'model';
+    bpmView = 'model-editor';
+    const action = resolveQueryString(to.params.type);
+    const id = resolveQueryString(to.params.id);
+    if (action) {
+      query.modelAction = action;
+    }
+    if (id) {
+      query.modelId = id;
+    }
+  }
+
+  if (!page) {
+    return undefined;
+  }
+
+  // 从可道云审批入口进入时，深层页面也必须保留该上下文。
+  if (!query.entry && resolveQueryString(from.query.entry) === 'approval') {
+    query.entry = 'approval';
+  }
+
+  return {
+    path: OA_LITE_CENTER_PATH,
+    query: {
+      ...query,
+      bpmView,
+      manage: 'bpm',
+      page,
+      view: 'center',
+    },
+    replace: true,
+  };
+}
+
 function resolveQueryValue(value: unknown) {
   return Array.isArray(value) ? value[0] : value;
 }
@@ -194,6 +268,13 @@ function setupAccessGuard(router: Router) {
           replace: true,
         };
       }
+      const workbenchManagementRedirect = redirectBpmManagementToWorkbench(
+        to,
+        from,
+      );
+      if (workbenchManagementRedirect) {
+        return workbenchManagementRedirect;
+      }
       accessStore.setAccessMenus(filterMenuRecords(accessStore.accessMenus));
       accessStore.setAccessRoutes(filterAccessRoutes(accessStore.accessRoutes));
       return true;
@@ -231,6 +312,14 @@ function setupAccessGuard(router: Router) {
         ),
         replace: true,
       };
+    }
+
+    const workbenchManagementRedirect = redirectBpmManagementToWorkbench(
+      to,
+      from,
+    );
+    if (workbenchManagementRedirect) {
+      return workbenchManagementRedirect;
     }
 
     // 生成菜单和路由

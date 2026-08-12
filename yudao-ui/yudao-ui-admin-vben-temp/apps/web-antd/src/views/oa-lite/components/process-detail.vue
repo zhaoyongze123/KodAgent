@@ -1,5 +1,6 @@
 <script lang="ts" setup>
 import type { BpmProcessInstanceApi } from '#/api/bpm/processInstance';
+import type { SystemDeptApi } from '#/api/system/dept';
 import type { SystemUserApi } from '#/api/system/user';
 import type { OAModuleApiKey } from '#/views/bpm/oa/shared/config';
 
@@ -17,7 +18,7 @@ import { useUserStore } from '@vben/stores';
 import { formatDateTime } from '@vben/utils';
 import { useI18n } from '@vben/locales';
 
-import { Button, Empty, message, Spin, Tag, Textarea } from 'ant-design-vue';
+import { Button, Empty, message, Modal, Spin, Tag, Textarea } from 'ant-design-vue';
 
 import {
   cancelProcessInstanceByAdmin,
@@ -26,6 +27,7 @@ import {
   getProcessInstanceBpmnModelView,
 } from '#/api/bpm/processInstance';
 import { withdrawTask } from '#/api/bpm/task';
+import { getSimpleDeptList } from '#/api/system/dept';
 import { getSimpleUserList } from '#/api/system/user';
 import { getPartyFileAttachmentPreviewUrlByFileId } from '#/api/system/party-file';
 import { setConfAndFields2 } from '#/components/form-create';
@@ -83,6 +85,7 @@ const processModelView = ref<any>({});
 const operationButtonRef = ref();
 const taskListRef = ref();
 const userOptions = ref<SystemUserApi.User[]>([]);
+const deptOptions = ref<SystemDeptApi.Dept[]>([]);
 const businessFormComponent = shallowRef<any>(null);
 const normalFormApi = ref<any>();
 const normalForm = ref({
@@ -92,6 +95,7 @@ const normalForm = ref({
 });
 const writableFields = ref<string[]>([]);
 const fieldPermissions = ref<Record<string, string>>({});
+const attachmentPreviewFile = ref<null | OaLitePreviewAttachment>(null);
 
 const processInstance = computed(() => approvalDetail.value?.processInstance);
 const processDefinition = computed(
@@ -163,6 +167,8 @@ interface OaLiteAttachment {
   size?: number;
   url: string;
 }
+
+type OaLitePreviewAttachment = OaLiteAttachment & { previewUrl: string };
 
 interface OaLiteDisplayField {
   attachments: OaLiteAttachment[];
@@ -307,19 +313,16 @@ function formatFileSize(size?: number) {
 }
 
 async function handleAttachmentPreview(file: OaLiteAttachment) {
-  const previewWindow = window.open('about:blank', '_blank', 'noopener,noreferrer');
   try {
     const sourceUrl = file.fileId && file.url.includes('/system/party-file/attachment/access')
       ? await getPartyFileAttachmentPreviewUrlByFileId(file.fileId)
       : file.url;
-    const previewUrl = getOaFilePreviewUrl(sourceUrl);
-    if (previewWindow) {
-      previewWindow.location.href = previewUrl;
-    } else {
-      window.open(previewUrl, '_blank', 'noopener,noreferrer');
-    }
+    attachmentPreviewFile.value = {
+      ...file,
+      previewUrl: getOaFilePreviewUrl(sourceUrl),
+    };
   } catch {
-    previewWindow?.close();
+    attachmentPreviewFile.value = null;
     message.error('文件预览地址获取失败');
   }
 }
@@ -351,6 +354,20 @@ function getOptionLabel(rule: any, value: unknown) {
   return matched?.label ?? matched?.name;
 }
 
+function findUserName(value: unknown) {
+  return userOptions.value.find((item) => String(item.id) === String(value))
+    ?.nickname;
+}
+
+function findDeptName(value: unknown) {
+  return deptOptions.value.find((item) => String(item.id) === String(value))
+    ?.name;
+}
+
+function isMillisecondTimestamp(value: unknown) {
+  return /^\d{12,}$/.test(String(value));
+}
+
 function formatNormalValue(rule: any, value: unknown): string {
   const parsed = parseSerializedValue(value);
   if (Array.isArray(parsed)) {
@@ -374,8 +391,18 @@ function formatNormalValue(rule: any, value: unknown): string {
     return String(optionLabel);
   }
   const ruleType = String(rule?.type || '').toLowerCase();
+  if (ruleType === 'userselect') {
+    return findUserName(parsed) || String(parsed ?? '');
+  }
+  if (ruleType === 'deptselect') {
+    return findDeptName(parsed) || String(parsed ?? '');
+  }
   if (ruleType.includes('date') || ruleType.includes('time')) {
-    return parsed ? formatDateTime(parsed as any) : '';
+    return parsed
+      ? formatDateTime(
+          isMillisecondTimestamp(parsed) ? new Date(Number(parsed)) : (parsed as any),
+        )
+      : '';
   }
   return parsed === undefined || parsed === null ? '' : String(parsed);
 }
@@ -446,6 +473,7 @@ function resetNormalForm() {
   approvalDetail.value = null;
   writableFields.value = [];
   fieldPermissions.value = {};
+  attachmentPreviewFile.value = null;
 }
 
 function setFieldPermission(field: string, permission: string) {
@@ -468,6 +496,13 @@ async function ensureUserOptions() {
     return;
   }
   userOptions.value = await getSimpleUserList();
+}
+
+async function ensureDeptOptions() {
+  if (deptOptions.value.length > 0) {
+    return;
+  }
+  deptOptions.value = await getSimpleDeptList();
 }
 
 async function loadDetail() {
@@ -530,7 +565,7 @@ async function loadDetail() {
       ));
     }
 
-    await ensureUserOptions();
+    await Promise.all([ensureUserOptions(), ensureDeptOptions()]);
     await nextTick();
     operationButtonRef.value?.loadTodoTask(data.todoTask);
   } catch (error: any) {
@@ -649,15 +684,6 @@ watch(
                       )
                     }}
                   </span>
-                </div>
-                <div class="oa-lite-process-id">
-                  {{ t('page.oaLite.processDetail.processNo') }}：{{
-                    processInstance.id || '-'
-                  }}
-                  <span class="oa-lite-process-id-divider">|</span>
-                  {{ t('page.oaLite.processDetail.businessKey') }}：{{
-                    processInstance.businessKey || '-'
-                  }}
                 </div>
               </div>
 
@@ -864,6 +890,35 @@ watch(
         <Empty :description="t('page.oaLite.processDetail.emptySelect')" />
       </div>
     </Spin>
+
+    <Modal
+      :open="attachmentPreviewFile !== null"
+      :title="attachmentPreviewFile?.name || '文件预览'"
+      :footer="null"
+      width="min(1120px, calc(100vw - 48px))"
+      destroy-on-close
+      @cancel="attachmentPreviewFile = null"
+    >
+      <div v-if="attachmentPreviewFile" class="oa-lite-attachment-preview-shell">
+        <div class="oa-lite-attachment-preview-toolbar">
+          <span class="oa-lite-attachment-preview-filename">
+            {{ attachmentPreviewFile.name }}
+          </span>
+          <a
+            class="oa-lite-normal-attachment-action"
+            :download="attachmentPreviewFile.name"
+            :href="attachmentPreviewFile.url"
+          >
+            下载
+          </a>
+        </div>
+        <iframe
+          :src="attachmentPreviewFile.previewUrl"
+          :title="`预览 ${attachmentPreviewFile.name}`"
+          class="oa-lite-attachment-preview-frame"
+        />
+      </div>
+    </Modal>
   </div>
 </template>
 
@@ -1253,6 +1308,40 @@ watch(
   display: inline-flex;
   flex: none;
   gap: 12px;
+}
+
+.oa-lite-attachment-preview-shell {
+  display: flex;
+  height: min(72dvh, 760px);
+  min-height: 440px;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.oa-lite-attachment-preview-toolbar {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.oa-lite-attachment-preview-filename {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--oa-ink);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.oa-lite-attachment-preview-frame {
+  width: 100%;
+  min-height: 0;
+  flex: 1;
+  border: 0;
+  background: var(--oa-shell-surface-subtle);
 }
 
 .oa-lite-business-form {

@@ -2,7 +2,7 @@
 import type { TableColumnsType, TablePaginationConfig } from 'ant-design-vue';
 import type { BpmFormApi } from '#/api/bpm/form';
 
-import { onActivated, reactive, ref } from 'vue';
+import { onActivated, onMounted, reactive, ref } from 'vue';
 
 import { Page, useVbenModal } from '@vben/common-ui';
 import { DICT_TYPE } from '@vben/constants';
@@ -147,9 +147,10 @@ function handleTableChange(page: TablePaginationConfig) {
   loadData();
 }
 
-onActivated(() => {
-  loadData();
-});
+// 工作台以动态组件承载此列表，首次进入会执行 mounted 而非 activated。
+// 两个生命周期都加载，兼容后续由 KeepAlive 承载的场景。
+onMounted(loadData);
+onActivated(loadData);
 </script>
 
 <template>
