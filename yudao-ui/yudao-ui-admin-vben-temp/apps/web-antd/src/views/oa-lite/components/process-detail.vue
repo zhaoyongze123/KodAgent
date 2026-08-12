@@ -15,7 +15,6 @@ import {
 } from '@vben/constants';
 import { IconifyIcon } from '@vben/icons';
 import { useUserStore } from '@vben/stores';
-import { formatDateTime } from '@vben/utils';
 import { useI18n } from '@vben/locales';
 
 import { Button, Empty, message, Modal, Spin, Tag, Textarea } from 'ant-design-vue';
@@ -30,7 +29,10 @@ import { withdrawTask } from '#/api/bpm/task';
 import { getSimpleDeptList } from '#/api/system/dept';
 import { getSimpleUserList } from '#/api/system/user';
 import { getPartyFileAttachmentPreviewUrlByFileId } from '#/api/system/party-file';
-import { setConfAndFields2 } from '#/components/form-create';
+import {
+  formatFlowFormValue,
+  setConfAndFields2,
+} from '#/components/form-create';
 import {
   getOaFilePreviewUrl,
   normalizeOaAssetUrl,
@@ -342,69 +344,11 @@ function flattenNormalRules(rules: any[], fields: any[] = []) {
   return fields;
 }
 
-function getRuleOptions(rule: any) {
-  const options = rule?.options || rule?.props?.options || rule?.props?.fieldProps?.options;
-  return Array.isArray(options) ? options : [];
-}
-
-function getOptionLabel(rule: any, value: unknown) {
-  const matched = getRuleOptions(rule).find(
-    (option: any) => String(option?.value) === String(value),
-  );
-  return matched?.label ?? matched?.name;
-}
-
-function findUserName(value: unknown) {
-  return userOptions.value.find((item) => String(item.id) === String(value))
-    ?.nickname;
-}
-
-function findDeptName(value: unknown) {
-  return deptOptions.value.find((item) => String(item.id) === String(value))
-    ?.name;
-}
-
-function isMillisecondTimestamp(value: unknown) {
-  return /^\d{12,}$/.test(String(value));
-}
-
 function formatNormalValue(rule: any, value: unknown): string {
-  const parsed = parseSerializedValue(value);
-  if (Array.isArray(parsed)) {
-    return parsed
-      .map((item) => formatNormalValue(rule, item))
-      .filter(Boolean)
-      .join('、');
-  }
-  if (parsed && typeof parsed === 'object') {
-    const item = parsed as Record<string, any>;
-    return String(item.label || item.name || item.nickname || item.value || '');
-  }
-  if (parsed === true && String(rule?.type).toLowerCase().includes('switch')) {
-    return '是';
-  }
-  if (parsed === false && String(rule?.type).toLowerCase().includes('switch')) {
-    return '否';
-  }
-  const optionLabel = getOptionLabel(rule, parsed);
-  if (optionLabel !== undefined) {
-    return String(optionLabel);
-  }
-  const ruleType = String(rule?.type || '').toLowerCase();
-  if (ruleType === 'userselect') {
-    return findUserName(parsed) || String(parsed ?? '');
-  }
-  if (ruleType === 'deptselect') {
-    return findDeptName(parsed) || String(parsed ?? '');
-  }
-  if (ruleType.includes('date') || ruleType.includes('time')) {
-    return parsed
-      ? formatDateTime(
-          isMillisecondTimestamp(parsed) ? new Date(Number(parsed)) : (parsed as any),
-        )
-      : '';
-  }
-  return parsed === undefined || parsed === null ? '' : String(parsed);
+  return formatFlowFormValue(rule, value, {
+    depts: deptOptions.value,
+    users: userOptions.value,
+  });
 }
 
 const normalDisplayFields = computed<OaLiteDisplayField[]>(() => {

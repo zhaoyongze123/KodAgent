@@ -9,6 +9,7 @@ import { DICT_TYPE } from '@vben/constants';
 import { getDictOptions } from '@vben/hooks';
 
 import { getSimpleUserList } from '#/api/system/user';
+import { formatFlowFormValue } from '#/components/form-create';
 import { getRangePickerDefaultProps } from '#/utils';
 
 interface FormField {
@@ -96,6 +97,7 @@ export function useGridFormSchema(
 /** 列表的字段 */
 export function useGridColumns(
   formFields: FormField[] = [],
+  displayContext: { depts?: any[]; users?: any[] } = {},
 ): VxeTableGridOptions['columns'] {
   // 基础列配置
   const baseColumns: VxeGridPropTypes.Columns<BpmProcessInstanceApi.ProcessInstance> =
@@ -140,7 +142,11 @@ export function useGridColumns(
     title: item.title,
     minWidth: 120,
     formatter: ({ row }: any) => {
-      return row.formVariables?.[item.field] ?? '';
+      return formatFlowFormValue(
+        item,
+        row.formVariables?.[item.field],
+        displayContext,
+      );
     },
   }));
 

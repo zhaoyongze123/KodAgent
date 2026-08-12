@@ -131,6 +131,14 @@ function getTimelineStatusIcon(
   return getApprovalNodeIcon(activity.status, activity.nodeType);
 }
 
+function shouldShowTimelineStatus(
+  activity: BpmProcessInstanceApi.ApprovalNodeInfo,
+) {
+  return (
+    props.showStatusIcon && activity.status !== BpmTaskStatusEnum.NOT_START
+  );
+}
+
 /** 获取审批节点时间 */
 function getApprovalNodeTime(node: BpmProcessInstanceApi.ApprovalNodeInfo) {
   if (node.nodeType === BpmNodeTypeEnum.START_USER_NODE && node.startTime) {
@@ -331,7 +339,7 @@ defineExpose({ setCustomApproveUsers, batchSetCustomApproveUsers });
               <IconifyIcon :icon="getTimelineNodeIcon(activity.nodeType)" />
             </div>
             <div
-              v-if="showStatusIcon"
+              v-if="shouldShowTimelineStatus(activity)"
               class="oa-process-timeline-status"
               :style="{
                 backgroundColor: getTimelineStatusColor(activity),

@@ -5,7 +5,6 @@ import { computed, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
 
 import { ContentWrap } from '@vben/common-ui';
-import { formatDateTime } from '@vben/utils';
 
 import { Button, Modal, Spin, Tag } from 'ant-design-vue';
 
@@ -15,6 +14,7 @@ import { getDictOptions } from '@vben/hooks';
 import { DICT_TYPE } from '@vben/constants';
 
 import { getPartyFileAttachmentPreviewUrlByFileId } from '#/api/system/party-file';
+import { formatFlowFormDateTime } from '#/components/form-create';
 import { getOaFilePreviewUrl, normalizeOaAssetUrl } from '#/utils';
 import { getComplexModuleViewConfig, parseJsonArray } from './config';
 
@@ -64,7 +64,7 @@ function getSelectLabel(field: ComplexFieldConfig, value: unknown) {
 function renderValue(field: ComplexFieldConfig) {
   const value = detailData.value[field.field];
   if (field.type === 'datetime') {
-    return value ? formatDateTime(value) : '-';
+    return formatFlowFormDateTime(value) || '-';
   }
   if (field.type === 'select') {
     return getSelectLabel(field, value);

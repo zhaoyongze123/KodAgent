@@ -5,11 +5,11 @@ import { computed, h, onActivated, reactive, ref } from 'vue';
 
 import { Page, prompt } from '@vben/common-ui';
 import { BpmProcessInstanceStatus } from '@vben/constants';
-import { formatDateTime } from '@vben/utils';
 
 import { Button, Col, DatePicker, Form, Input, message, Row, Select, Space, Table, Tag, Textarea } from 'ant-design-vue';
 
 import { cancelProcessInstanceByStartUser } from '#/api/bpm/processInstance';
+import { formatFlowFormDateTime } from '#/components/form-create';
 import { router } from '#/router';
 
 import { getComplexModuleViewConfig } from './config';
@@ -58,7 +58,7 @@ function renderCell(column: (typeof config.tableColumns)[number], record: Record
     return h(Tag, { color: status.color }, () => status.text);
   }
   if (column.type === 'datetime') {
-    return value ? formatDateTime(value) : '-';
+    return formatFlowFormDateTime(value) || '-';
   }
   if (column.type === 'boolean') {
     return value ? '是' : '否';

@@ -4,7 +4,10 @@ import type { DescriptionItemSchema } from '#/components/description';
 
 import { DICT_TYPE } from '@vben/constants';
 import { getDictLabel, getDictOptions } from '@vben/hooks';
-import { formatDate } from '@vben/utils';
+import {
+  formatFlowFormDate,
+  formatFlowFormDateTime,
+} from '#/components/form-create';
 import { getRangePickerDefaultProps } from '#/utils';
 
 import type { OAModuleViewConfig } from './config';
@@ -497,9 +500,9 @@ function useDetailFormSchema(
             ? '-'
             : getDictLabel(config.dictType, val) || getFallbackTypeLabel(config, val),
       },
-      { label: '加班日期', field: 'workDate', render: (val) => formatDate(val) as string },
-      { label: '开始时间', field: 'startTime', render: (val) => formatDate(val) as string },
-      { label: '结束时间', field: 'endTime', render: (val) => formatDate(val) as string },
+      { label: '加班日期', field: 'workDate', render: formatFlowFormDate },
+      { label: '开始时间', field: 'startTime', render: formatFlowFormDateTime },
+      { label: '结束时间', field: 'endTime', render: formatFlowFormDateTime },
       { label: '加班时长（小时）', field: 'durationHours' },
       { label: '加班地点', field: 'workLocation' },
       { label: '关联项目', field: 'projectName' },
@@ -525,9 +528,9 @@ function useDetailFormSchema(
             ? '-'
             : getDictLabel(config.dictType, val) || getFallbackTypeLabel(config, val),
       },
-      { label: '外出日期', field: 'outingDate', render: (val) => formatDate(val) as string },
-      { label: '开始时间', field: 'startTime', render: (val) => formatDate(val) as string },
-      { label: '结束时间', field: 'endTime', render: (val) => formatDate(val) as string },
+      { label: '外出日期', field: 'outingDate', render: formatFlowFormDate },
+      { label: '开始时间', field: 'startTime', render: formatFlowFormDateTime },
+      { label: '结束时间', field: 'endTime', render: formatFlowFormDateTime },
       { label: '外出时长（小时）', field: 'durationHours' },
       { label: '外出地点', field: 'destination' },
       {
@@ -554,12 +557,12 @@ function useDetailFormSchema(
     {
       label: '开始时间',
       field: 'startTime',
-      render: (val) => formatDate(val) as string,
+      render: formatFlowFormDateTime,
     },
     {
       label: '结束时间',
       field: 'endTime',
-      render: (val) => formatDate(val) as string,
+      render: formatFlowFormDateTime,
     },
     {
       label: `${config.title}原因`,

@@ -14,7 +14,13 @@ import { Button } from 'ant-design-vue';
 import vPrint from 'vue3-print-nb';
 
 import { getProcessInstancePrintData } from '#/api/bpm/processInstance';
-import { decodeFields } from '#/components/form-create';
+import {
+  decodeFields,
+  formatFlowFormDate,
+  formatFlowFormValue,
+} from '#/components/form-create';
+import { getSimpleDeptList } from '#/api/system/dept';
+import { getSimpleUserList } from '#/api/system/user';
 
 const userStore = useUserStore();
 
@@ -23,6 +29,8 @@ const userName = computed(() => userStore.userInfo?.nickname ?? '');
 const printTime = ref(formatDate(new Date(), 'YYYY-MM-DD HH:mm'));
 const formFields = ref<any[]>([]);
 const printDataMap = ref<Record<string, any>>({});
+const users = ref<any[]>([]);
+const depts = ref<any[]>([]);
 
 /** 打印配置 */
 const printObj = ref({
@@ -58,7 +66,14 @@ const [Modal, modalApi] = useVbenModal({
 
 /** 获取打印数据 */
 async function fetchPrintData(id: string) {
-  printData.value = await getProcessInstancePrintData(id);
+  const [data, userList, deptList] = await Promise.all([
+    getProcessInstancePrintData(id),
+    getSimpleUserList(),
+    getSimpleDeptList(),
+  ]);
+  printData.value = data;
+  users.value = userList;
+  depts.value = deptList;
   initPrintDataMap();
   parseFormFields();
 }
@@ -78,30 +93,12 @@ function parseFormFields() {
     const name = item.title;
     const fieldKey = item.field as string;
     const variable = processVariables[fieldKey];
-    let html = variable;
+    let html = formatFlowFormValue(item, variable, {
+      depts: depts.value,
+      users: users.value,
+    });
 
     switch (item.type) {
-      case 'checkbox':
-      case 'radio':
-      case 'select': {
-        const options = item.options;
-        const temp: any = [];
-        if (Array.isArray(options)) {
-          if (Array.isArray(variable)) {
-            const labels = options
-              .filter((o: any) => variable.includes(o.value))
-              .map((o: any) => o.label);
-            temp.push(...labels);
-          } else {
-            const opt = options.find((o: any) => o.value === variable);
-            if (opt) {
-              temp.push(opt.label);
-            }
-          }
-        }
-        html = temp.join(',');
-        break;
-      }
       case 'UploadImg': {
         const imgEl = document.createElement('img');
         imgEl.setAttribute('src', variable);
@@ -129,10 +126,10 @@ function initPrintDataMap() {
     printData.value.processInstance.startUser?.deptName || '';
   printDataMap.value.processName = printData.value.processInstance.name;
   printDataMap.value.processNum = printData.value.processInstance.id;
-  printDataMap.value.startTime = formatDate(
+  printDataMap.value.startTime = formatFlowFormDate(
     printData.value.processInstance.startTime,
   );
-  printDataMap.value.endTime = formatDate(
+  printDataMap.value.endTime = formatFlowFormDate(
     printData.value.processInstance.endTime,
   );
   printDataMap.value.processStatus = getDictLabel(
@@ -233,7 +230,7 @@ function getPrintTemplateHTML() {
               </td>
               <td class="w-1/4 border border-black p-1.5">发起时间</td>
               <td class="w-1/4 border border-black p-1.5">
-                {{ formatDate(printData.processInstance.startTime) }}
+                {{ formatFlowFormDate(printData.processInstance.startTime) }}
               </td>
             </tr>
             <tr>

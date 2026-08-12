@@ -16,6 +16,8 @@ import {
   getProcessInstanceManagerPage,
 } from '#/api/bpm/processInstance';
 import { parseFormFields } from '#/components/form-create';
+import { getSimpleDeptList } from '#/api/system/dept';
+import { getSimpleUserList } from '#/api/system/user';
 
 import { useGridColumns, useGridFormSchema } from './data';
 
@@ -26,6 +28,8 @@ const { query } = useRoute();
 const processDefinitionId = query.processDefinitionId as string;
 
 const formFields = ref<any[]>([]);
+const users = ref<any[]>([]);
+const depts = ref<any[]>([]);
 
 /** 获取流程定义 */
 async function getProcessDefinitionData() {
@@ -122,12 +126,25 @@ const [Grid, gridApi] = useVbenVxeGrid({
 /** 初始化 */
 onMounted(async () => {
   // 获取流程定义
-  await getProcessDefinitionData();
+  await Promise.all([
+    getProcessDefinitionData(),
+    getSimpleUserList().then((data) => {
+      users.value = data;
+    }),
+    getSimpleDeptList().then((data) => {
+      depts.value = data;
+    }),
+  ]);
   // 更新表单配置、表格列配置
   gridApi.formApi.setState({
     schema: useGridFormSchema(formFields.value),
   });
-  await gridApi.grid.reloadColumn(useGridColumns(formFields.value) as any[]);
+  await gridApi.grid.reloadColumn(
+    useGridColumns(formFields.value, {
+      depts: depts.value,
+      users: users.value,
+    }) as any[],
+  );
 });
 </script>
 

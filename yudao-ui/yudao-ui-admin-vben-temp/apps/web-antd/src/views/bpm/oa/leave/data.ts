@@ -4,7 +4,7 @@ import type { DescriptionItemSchema } from '#/components/description';
 
 import { DICT_TYPE } from '@vben/constants';
 import { getDictLabel, getDictOptions } from '@vben/hooks';
-import { formatDate } from '@vben/utils';
+import { formatFlowFormDateTime } from '#/components/form-create';
 import { getRangePickerDefaultProps } from '#/utils';
 
 function getLeaveTypeFallbackLabel(value: null | number | string | undefined) {
@@ -198,12 +198,12 @@ export function useDetailFormSchema(): DescriptionItemSchema[] {
     {
       label: '开始时间',
       field: 'startTime',
-      render: (val) => formatDate(val) as string,
+      render: formatFlowFormDateTime,
     },
     {
       label: '结束时间',
       field: 'endTime',
-      render: (val) => formatDate(val) as string,
+      render: formatFlowFormDateTime,
     },
     {
       label: '原因',
