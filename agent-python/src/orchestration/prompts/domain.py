@@ -1,4 +1,9 @@
-"""Domain-planner prompt fragment loaded only after capability selection."""
+"""领域规划阶段的提示词片段。
+
+只有主 Agent 已通过能力目录选定领域后才会加载本提示词。它指导模型从当前
+Action Catalog 中选择正式 ``action_id`` 并填写候选业务字段；不负责选择工具，
+也不负责执行或重新定义权限规则。
+"""
 
 DOMAIN_PLANNER_PROMPT = """
 当前阶段：领域规划（domain planning）。你已经进入一个确定的能力域。

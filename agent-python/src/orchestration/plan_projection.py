@@ -20,7 +20,8 @@
 
 3. 工具调用边界（wrap_tool_call / _bind_compiled_call / _inject_compiled_plan）
    把路由编译好的 canonical plan 规范化（重填参数）到工具调用上，防止模型
-   改参数、漏参数、或把 UPDATE 误变成 CREATE。
+   改参数、漏参数、或把 UPDATE 误变成 CREATE。多轮候选先走 Java 核验，不会
+   直接成为 canonical 写计划的来源。
 
 为什么需要它
 ============
@@ -62,12 +63,27 @@ from .route_policy import (
     selection_action,
 )
 from .pending_plan import merge_resume_route_call
+from .conversation_context import (
+    audit_context_decision,
+    context_candidate_for_route_call,
+    context_candidate_is_recent_for_direct_lookup,
+    context_candidate_proof,
+    context_candidate_reference_is_unambiguous,
+    context_shadow_mode,
+)
+from .target_resolution import is_target_resolution_route
 from .domain_dispatch import (
     domain_agent_for_route,
     serialize_work_order,
     work_order_from_route,
 )
-from .delegated_receipt import parse_execution_receipt, parse_meeting_draft_receipt
+from .delegated_receipt import (
+    parse_approval_draft_receipt,
+    parse_execution_receipt,
+    parse_meeting_draft_receipt,
+    parse_party_file_draft_receipt,
+    parse_personal_schedule_draft_receipt,
+)
 from .route_state import (
     current_turn_messages as _current_turn_messages,
     message_content as _content,
@@ -82,12 +98,11 @@ from ..tools.common.events import narration_validation_issues
 
 
 class PlanToolProjectionMiddleware(AgentMiddleware):
-    """Mask unrelated tools after a plan has been compiled.
+    """在计划编译完成后投影工具，并强制模型遵守计划边界。
 
-    Before ``route_conversation`` returns, the normal DeepAgents tool palette
-    is preserved. Once it returns a RESOLVED plan, only that plan's executor
-    remains visible. This keeps the existing DeepAgents loop and checkpoint
-    semantics while removing accidental cross-domain tool selection.
+    ``route_conversation`` 返回前保留 DeepAgents 的常规控制面工具；一旦返回
+    ``RESOLVED`` 计划，本中间件只向模型暴露该计划绑定的执行器。这样既保留
+    原有 ReAct 循环和 checkpoint 语义，又消除跨领域误选工具与绕过编译器的路径。
     """
 
     name = "PlanToolProjectionMiddleware"
@@ -176,6 +191,11 @@ class PlanToolProjectionMiddleware(AgentMiddleware):
         if selection is None:
             return None
         action, candidate, query = selection
+        # “预约”动词只能把模型带到 Action Catalog，不能让代码用空计划替它
+        # 提交第二阶段调用。缺少模型结构化字段时留给一次 route-only 重试，模型
+        # 仍能读取当前用户原文和字段 schema；两次都未提交才确定性澄清。
+        if not candidate and not query:
+            return None
         args = {
             "message": cls._current_user_message(request),
             "capability_id": action.capability_id,
@@ -337,6 +357,70 @@ class PlanToolProjectionMiddleware(AgentMiddleware):
         return response
 
     @classmethod
+    def _requires_initial_route(cls, request, route) -> bool:
+        """判断无路由首轮是否必须完成一次 ``route_conversation`` 协议调用。
+
+        闲聊可以直接回答，但被轻量分类器识别为需要工具的业务请求不能只生成一
+        段澄清文案就结束，否则没有结构化 ``FIELD_CLARIFICATION``，下一轮也无法
+        恢复待补计划。这里不判断具体领域或动作，只复用已有分类器判断“是否进入
+        业务路由”；真正的 capability/action 仍由模型和 Action Catalog 决定。
+        """
+
+        if route is not None:
+            return False
+        # 当前回合没有路由工具时（例如协议防火墙或最小化单测），不能凭分类器
+        # 虚构一次重试；只有正常规划 palette 实际提供了该工具才执行此规则。
+        if "route_conversation" not in {
+            cls._tool_name(tool) for tool in getattr(request, "tools", []) or []
+        }:
+            return False
+        from ..services.conversation_router import classify_message
+
+        return bool(classify_message(cls._current_user_message(request)).needs_tools)
+
+    @classmethod
+    def _enforce_initial_route(cls, request, response, handler):
+        """首轮业务请求必须提交路由工具；失败时只做一次受限重试。
+
+        重试工具列表只有 ``route_conversation``，因此这条修复不会为模型开放任
+        何领域工具或执行器。第二次仍未遵守协议时返回确定性澄清，避免无限重试。
+        """
+
+        if cls._has_any_route_tool_call(response):
+            return response
+        retry_response = handler(cls._route_only_retry(request))
+        if cls._has_any_route_tool_call(retry_response):
+            return retry_response
+        return cls._selection_clarification()
+
+    @classmethod
+    async def _enforce_initial_route_async(cls, request, response, handler):
+        if cls._has_any_route_tool_call(response):
+            return response
+        retry_response = await handler(cls._route_only_retry(request))
+        if cls._has_any_route_tool_call(retry_response):
+            return retry_response
+        return cls._selection_clarification()
+
+    @classmethod
+    def _has_any_route_tool_call(cls, response) -> bool:
+        """确认模型已进入路由协议；具体参数校验仍由 Tool Schema 负责。"""
+
+        messages = cls._response_messages(response)
+        target = next(
+            (message for message in reversed(messages) if _message_type(message) == "ai"),
+            None,
+        )
+        calls = getattr(target, "tool_calls", None) or (
+            target.get("tool_calls") if isinstance(target, dict) else []
+        )
+        return bool(calls) and all(
+            isinstance(call, dict)
+            and str(call.get("name") or "") == "route_conversation"
+            for call in calls
+        )
+
+    @classmethod
     def _executor_name(cls, route) -> str:
         return str(
             route.get("executionTool")
@@ -413,6 +497,15 @@ class PlanToolProjectionMiddleware(AgentMiddleware):
                 meeting_receipt is not None
                 and executor == "run_meeting_booking_workflow"
             ):
+                return True
+            # 写工作流生成草稿后会用领域专用回执替代通用执行回执。它不含
+            # planId（草稿卡不应暴露编译内部字段），因此必须同时受“当前 task
+            # 绑定的子 Agent + 本次编译 executor”限制，不能按 domain 猜测。
+            if executor == "run_personal_schedule_workflow" and parse_personal_schedule_draft_receipt(content):
+                return True
+            if executor == "run_party_file_write_workflow" and parse_party_file_draft_receipt(content):
+                return True
+            if executor == "run_approval_write_workflow" and parse_approval_draft_receipt(content):
                 return True
         return False
 
@@ -817,6 +910,10 @@ class PlanToolProjectionMiddleware(AgentMiddleware):
             if code_owned is not None:
                 return code_owned
         response = handler(self._override_for_policy(request, policy, route))
+        if self._requires_initial_route(request, route):
+            return self._protocol_firewall(
+                self._enforce_initial_route(request, response, handler), route
+            )
         if policy.mode == TurnMode.HANDSHAKE:
             return self._protocol_firewall(self._enforce_handshake(request, response, route, handler), route)
         if policy.mode == TurnMode.MODEL_RESPONSE:
@@ -840,6 +937,10 @@ class PlanToolProjectionMiddleware(AgentMiddleware):
             if code_owned is not None:
                 return code_owned
         response = await handler(self._override_for_policy(request, policy, route))
+        if self._requires_initial_route(request, route):
+            return self._protocol_firewall(
+                await self._enforce_initial_route_async(request, response, handler), route
+            )
         if policy.mode == TurnMode.HANDSHAKE:
             return self._protocol_firewall(
                 await self._enforce_handshake_async(request, response, route, handler), route
@@ -870,15 +971,159 @@ class PlanToolProjectionMiddleware(AgentMiddleware):
         name = str(call.get("name") or "")
         if name == "route_conversation":
             state = getattr(request, "state", {}) or {}
+            # 模型输入中的授权标记一律无效。只有本中间件从 checkpoint 找到有效
+            # 候选后，才会在下面重新写入来源字段和内部授权标记。
+            raw_args = dict(call.get("args") or {})
+            raw_plan = raw_args.get("candidate_plan")
+            if isinstance(raw_plan, str):
+                try:
+                    parsed_plan = json.loads(raw_plan)
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    parsed_plan = None
+                if isinstance(parsed_plan, dict):
+                    raw_plan = parsed_plan
+            if isinstance(raw_plan, dict):
+                raw_plan = dict(raw_plan)
+                raw_plan.pop("_authorized_source_fields", None)
+                raw_plan.pop("_context_candidate_proof", None)
+                raw_plan.pop("_context_candidate_kind", None)
+                raw_args["candidate_plan"] = raw_plan
+            call["args"] = raw_args
             call = merge_resume_route_call(call, state.get("pending_plan"))
             args = dict(call.get("args") or {})
+            candidate = context_candidate_for_route_call(
+                state, args.get("context_candidate_id"),
+            )
+            requested_action = str(args.get("action_id") or "").strip()
+            requested_capability = str(args.get("capability_id") or "").strip()
+            context_intent_supplied = "context_intent" in args
+            context_intent = str(args.get("context_intent") or "NEW_REQUEST").strip().upper()
+            context_confidence = args.get("context_confidence")
+            try:
+                confidence_is_sufficient = context_confidence is None or float(context_confidence) >= 0.70
+            except (TypeError, ValueError):
+                confidence_is_sufficient = False
+            messages = list((getattr(request, "state", {}) or {}).get("messages") or [])
+            user_message = ""
+            for message in reversed(messages):
+                if _message_type(message) in {"human", "user"}:
+                    content = _content(message)
+                    if isinstance(content, str):
+                        user_message = content
+                    break
+            # 兼容已运行中的旧模型/旧 checkpoint：过去没有 context_intent 字段，
+            # 但它已经提交了受限的 UPDATE/CANCEL + 候选 ID。仍让它通过同一份
+            # 唯一性校验恢复来源字段；新提示词和新模型调用必须显式给出 intent。
+            if (
+                not context_intent_supplied
+                and candidate is not None
+                and candidate.kind in {"authorized_resource", "authorized_query"}
+                and requested_action in candidate.action_ids
+            ):
+                context_intent = "REFER_TO_QUERY_CANDIDATE"
+                # 旧 checkpoint/模型没有显式字段时也要把兼容判定写回调用参数，
+                # 否则 route_conversation 会把它重新当作 NEW_REQUEST。
+                args["context_intent"] = context_intent
+            if (
+                candidate is not None
+                and candidate.kind in {"authorized_resource", "authorized_query"}
+                and candidate.capability_id == requested_capability
+                and requested_action in candidate.action_ids
+                and context_intent == "REFER_TO_QUERY_CANDIDATE"
+                and confidence_is_sufficient
+                and not context_shadow_mode()
+                and context_candidate_is_recent_for_direct_lookup(state, candidate)
+                and context_candidate_reference_is_unambiguous(
+                    state, candidate, user_message=user_message,
+                )
+            ):
+                # 候选只能负责“定位对象”，不能把 source ID 升级成写操作事实。
+                # 这里从 checkpoint 取出内部 ID，签发一个仅能调用 Java 详情工具的
+                # targetResolution 标记；真正 UPDATE/CANCEL 需在只读回执后由代码
+                # 二次编译。模型始终看不到 ID，也不能伪造这个标记。
+                plan = args.get("candidate_plan")
+                plan = dict(plan) if isinstance(plan, dict) else {}
+                source_key = (
+                    "source_schedule_id" if candidate.capability_id == "schedule"
+                    else "source_booking_id" if candidate.capability_id == "meeting" else ""
+                )
+                source_id = candidate.trusted_plan.get(source_key) if source_key else None
+                if source_id is None:
+                    args.pop("context_candidate_id", None)
+                    call["args"] = args
+                    return call
+                args["candidate_plan"] = {
+                    **plan,
+                    "_context_candidate_proof": context_candidate_proof(candidate.candidate_id),
+                    "_context_candidate_kind": candidate.kind,
+                    "_target_resolution": {
+                        "candidateId": candidate.candidate_id,
+                        "verificationTool": (
+                            "get_personal_schedule" if candidate.capability_id == "schedule"
+                            else "get_my_meeting_booking"
+                        ),
+                        source_key: source_id,
+                        "operation": str(plan.get("operation") or "").upper(),
+                    },
+                }
+                audit_context_decision(
+                    state,
+                    event="candidate_resolution_requested",
+                    candidateId=candidate.candidate_id,
+                    kind=candidate.kind,
+                    intent=context_intent,
+                    confidence=context_confidence,
+                )
+            elif (
+                candidate is not None
+                and candidate.kind == "pending_approval"
+                and context_intent == "LOCATE_APPROVAL_CARD"
+                and not context_shadow_mode()
+                and context_candidate_reference_is_unambiguous(
+                    state, candidate, user_message=user_message,
+                )
+            ):
+                # 审批候选只可用于定位当前确认卡。这里不暴露给编译器的业务来源
+                # 字段，也不让普通文本走确认提交；route_conversation 只会返回澄清卡。
+                plan = args.get("candidate_plan")
+                plan = dict(plan) if isinstance(plan, dict) else {}
+                args["candidate_plan"] = {
+                    **plan,
+                    "_context_candidate_proof": context_candidate_proof(candidate.candidate_id),
+                    "_context_candidate_kind": candidate.kind,
+                }
+                audit_context_decision(
+                    state,
+                    event="approval_candidate_located",
+                    candidateId=candidate.candidate_id,
+                    kind=candidate.kind,
+                    intent=context_intent,
+                    confidence=context_confidence,
+                )
+            else:
+                # 无效、过期或领域/动作不匹配的候选不应留下可被下游误解的引用。
+                args.pop("context_candidate_id", None)
+                if candidate is not None:
+                    audit_context_decision(
+                        state,
+                        event="candidate_rejected",
+                        candidateId=candidate.candidate_id,
+                        kind=candidate.kind,
+                        intent=context_intent,
+                        confidence=context_confidence,
+                        reason=(
+                            "shadow_mode" if context_shadow_mode()
+                            else "stale_direct_locator" if candidate is not None and not context_candidate_is_recent_for_direct_lookup(state, candidate)
+                            else "low_confidence" if not confidence_is_sufficient
+                            else "mismatched_or_ambiguous"
+                        ),
+                    )
             # The user turn is the only trusted source for relative dates and
             # business intent. A provider may alter the free-form ``message``
             # argument while still selecting the correct action, which would
             # let it silently change "明天" to "今天" before the server-side
             # date normalizer runs. Always bind this field to the current user
             # turn; the model owns only the typed routing fields.
-            messages = list((getattr(request, "state", {}) or {}).get("messages") or [])
             for message in reversed(messages):
                 if _message_type(message) not in {"human", "user"}:
                     continue
@@ -886,8 +1131,8 @@ class PlanToolProjectionMiddleware(AgentMiddleware):
                 if isinstance(content, str) and content.strip():
                     if args.get("message") != content:
                         args["message"] = content
-                        call["args"] = args
                     break
+            call["args"] = args
             return call
         if name == "task":
             # 委托模式下的参数规范化：子 Agent 无状态，所有上下文只能写进
@@ -909,7 +1154,7 @@ class PlanToolProjectionMiddleware(AgentMiddleware):
             args["description"] = description
             call["args"] = args
             return call
-        if name not in {"execute_party_file_metadata_plan", "run_approval_query_plan", "get_my_calendar", "list_my_meeting_bookings", "run_meeting_booking_workflow", "run_personal_schedule_workflow", "create_party_file_draft", "update_party_file_draft", "delete_party_file_draft", "create_approval_withdraw_draft", "approval_report", "meeting_report", "schedule_report", "party_file_report"}:
+        if name not in {"execute_party_file_metadata_plan", "run_approval_query_plan", "get_my_calendar", "list_my_meeting_bookings", "get_my_meeting_booking", "get_personal_schedule", "run_meeting_booking_workflow", "run_personal_schedule_workflow", "create_party_file_draft", "update_party_file_draft", "delete_party_file_draft", "create_approval_withdraw_draft", "approval_report", "meeting_report", "schedule_report", "party_file_report"}:
             return call
         messages = list((getattr(request, "state", {}) or {}).get("messages") or [])
         route = _route_result(messages)
@@ -918,6 +1163,16 @@ class PlanToolProjectionMiddleware(AgentMiddleware):
         executor = route.get("executionTool") or ((route.get("routeDecision") or {}).get("executionTool"))
         canonical = route.get("executionPlan")
         if executor != name or not isinstance(canonical, dict):
+            return call
+        if is_target_resolution_route(route):
+            # 主图直调旧路径也只能携带由代码签发的定向 ID；子 Agent 路径由
+            # WorkflowPlanBinderMiddleware 使用同一 canonical 字段重填。
+            args = dict(call.get("args") or {})
+            if name == "get_personal_schedule":
+                args["schedule_id"] = canonical.get("sourceScheduleId")
+            elif name == "get_my_meeting_booking":
+                args["booking_id"] = canonical.get("sourceBookingId")
+            call["args"] = args
             return call
         if name in {"create_party_file_draft", "update_party_file_draft", "delete_party_file_draft"}:
             args = dict(call.get("args") or {})

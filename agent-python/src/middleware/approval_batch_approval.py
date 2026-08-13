@@ -2,19 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from ..services.approval_batch_approval import confirmation_args, load_pending_approval_batch_context
 from ..services.approval_core import approval_projection_metadata
 from ..hitl.projection import project_confirmation_call
 from ..hitl.auto_confirm import ConfiguredApprovalProjectionMiddleware
+from .approval_projection import delegated_approval_draft_receipt
 
 
 CONFIRM_TOOL_NAME = "confirm_approval_batch_action"
 _PREVIEW_SOURCE_TOOLS = {"preview_approval_batch_action"}
-_PREVIEW_DELEGATE_AGENTS = {"approvals_agent"}
-
-
 class ApprovalBatchAutoConfirmMiddleware(ConfiguredApprovalProjectionMiddleware):
     """A pending batch preview is a terminal model-turn gate.
 
@@ -28,11 +24,17 @@ class ApprovalBatchAutoConfirmMiddleware(ConfiguredApprovalProjectionMiddleware)
         super().__init__(name=self.name, projector=self._inject)
 
     @staticmethod
-    def _inject(request: Any, response: Any) -> Any:
+    def _inject(request, response):
+        receipt = delegated_approval_draft_receipt(request)
+        if receipt is not None:
+            if receipt.confirmation_type != "batch":
+                return response
+            from ..tools.common import set_operation_context
+            set_operation_context(receipt.operation_id)
         return project_confirmation_call(
             request, response,
             source_tools=_PREVIEW_SOURCE_TOOLS,
-            delegate_agents=_PREVIEW_DELEGATE_AGENTS,
+            delegated_eligible=receipt is not None,
             context_loader=load_pending_approval_batch_context,
             action_name=CONFIRM_TOOL_NAME,
             args_builder=lambda context, args: confirmation_args(context, args),

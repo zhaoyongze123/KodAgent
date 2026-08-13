@@ -39,6 +39,7 @@ from ..services.approval_core import (
     identity_mismatch,
     resume_runtime,
 )
+from ..orchestration.delegated_receipt import parse_party_file_draft_receipt
 
 _DRAFT_TOOLS = frozenset({
     "create_party_file_draft",
@@ -83,6 +84,20 @@ def _is_delegated_draft_projection_turn(request: Any) -> bool:
                 in _DRAFT_DELEGATE_AGENTS
             )
     return False
+
+
+def _delegated_party_file_draft_receipt(request: Any):
+    """校验当前 party 子 Agent 返回的领域草稿回执，避免循环依赖中间件包。"""
+    if not _is_delegated_draft_projection_turn(request):
+        return None
+    values = getattr(request, "state", None)
+    if not isinstance(values, dict):
+        values = request.get("state") if isinstance(request, dict) else None
+    messages = list((values or {}).get("messages") or [])
+    if not messages:
+        return None
+    content = messages[-1].get("content", "") if isinstance(messages[-1], dict) else messages[-1].content
+    return parse_party_file_draft_receipt(content)
 
 
 @dataclass(frozen=True)
@@ -402,7 +417,11 @@ def _copy_message(message: AIMessage, calls: list[dict[str, Any]], proof: dict[s
 def _project(request: Any, response: Any) -> Any:
     messages = _messages(request)
     data = _parse_result(messages[-1]) if messages else None
-    if data is None and _is_delegated_draft_projection_turn(request):
+    delegated_receipt = _delegated_party_file_draft_receipt(request)
+    if data is None and delegated_receipt is not None:
+        # 只能用当前子 Agent 的领域回执恢复 Operation，不能从历史待确认状态
+        # 中挑一条“看起来可用”的记录。
+        set_operation_context(delegated_receipt.operation_id)
         context, error = load_pending_party_file_context()
         if context is not None and error is None:
             data = {

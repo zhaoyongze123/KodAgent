@@ -9,10 +9,7 @@ from typing import Any, Callable
 
 from langchain_core.messages import AIMessage
 
-from ..middleware.approval_projection import (
-    is_delegated_draft_projection_turn,
-    is_draft_projection_turn,
-)
+from ..middleware.approval_projection import is_draft_projection_turn
 from ..services.approval_core import PROJECTION_METADATA_KEY, approval_projection_metadata
 
 
@@ -30,7 +27,7 @@ def project_confirmation_call(
     response: Any,
     *,
     source_tools: set[str] | frozenset[str],
-    delegate_agents: set[str] | frozenset[str],
+    delegated_eligible: bool = False,
     context_loader: Callable[[], tuple[Any | None, Any | None]],
     action_name: Callable[[Any], str] | str,
     args_builder: Callable[[Any, dict[str, Any]], dict[str, Any]],
@@ -45,10 +42,9 @@ def project_confirmation_call(
     approval type cannot accidentally invent a sixth copy of the injection
     algorithm.
     """
-    if not (
-        is_draft_projection_turn(request, source_tools)
-        or is_delegated_draft_projection_turn(request, delegate_agents)
-    ):
+    # 委托场景的资格必须由领域中间件先验证强类型回执，再显式传入。这里不再
+    # 根据“任务发给了哪个子 Agent”判断，避免普通执行回执也能误生成确认卡。
+    if not (is_draft_projection_turn(request, source_tools) or delegated_eligible):
         return response
     context, error = context_loader()
     messages = getattr(response, "result", None)

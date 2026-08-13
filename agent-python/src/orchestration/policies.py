@@ -98,7 +98,12 @@ class CurrentUserMessageMiddleware(AgentMiddleware):
 
 
 class PendingPlanMiddleware(AgentMiddleware):
-    """Persist a compiler clarification in the LangGraph thread checkpoint."""
+    """把编译器的字段澄清计划持久化到 LangGraph Thread checkpoint。
+
+    ``before_model`` 覆盖同一 Run 内“路由工具返回后再次请求模型”的场景；
+    ``after_agent`` 则覆盖模型在澄清文案后直接结束 Run 的场景。两处都调用同一
+    个纯投影函数，确保下一条用户补充消息一定能看到上轮的待补计划。
+    """
 
     name = "PendingPlanMiddleware"
     state_schema = PendingPlanState
@@ -108,6 +113,12 @@ class PendingPlanMiddleware(AgentMiddleware):
 
     async def abefore_model(self, state, runtime):
         return pending_plan_state_update(state)
+
+    def after_agent(self, state, runtime):
+        return pending_plan_state_update(state)
+
+    async def aafter_agent(self, state, runtime):
+        return self.after_agent(state, runtime)
 
 
 MEETING_SINGLE_CALL_TOOL_NAMES = (

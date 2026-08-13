@@ -274,6 +274,9 @@ def _exception_failure(exc: Exception) -> ToolResponse:
         message = "请求参数不符合业务契约，请补充或修正后重试"
     else:
         message = "工具执行失败，请稍后重试"
+    user_message = getattr(exc, "user_message", None)
+    if user_message:
+        message = str(user_message)
     details: Any = None
     if hasattr(exc, "status_code"):
         details = {"statusCode": getattr(exc, "status_code")}

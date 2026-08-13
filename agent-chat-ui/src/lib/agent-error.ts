@@ -10,7 +10,7 @@ function errorText(error: unknown): string {
     .join(" ");
 }
 
-/** Convert SDK/provider failures into stable user-facing business errors. */
+/** 将 SDK/模型供应商异常转换为稳定、面向用户的业务错误。 */
 export function normalizeAgentError(error: unknown): AgentError {
   const raw = errorText(error);
   const lower = raw.toLowerCase();

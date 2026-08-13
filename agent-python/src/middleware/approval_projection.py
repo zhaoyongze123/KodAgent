@@ -20,8 +20,14 @@ from typing import Any
 from langchain_core.messages import AIMessage, ToolMessage
 
 from ..orchestration.delegated_receipt import (
+    DelegatedApprovalDraftReceipt,
     DelegatedMeetingDraftReceipt,
+    DelegatedPartyFileDraftReceipt,
+    DelegatedPersonalScheduleDraftReceipt,
+    parse_approval_draft_receipt,
     parse_meeting_draft_receipt,
+    parse_party_file_draft_receipt,
+    parse_personal_schedule_draft_receipt,
 )
 
 
@@ -158,6 +164,31 @@ def is_delegated_draft_projection_turn(request: Any, delegate_agents: set[str]) 
     return str(args.get("subagent_type") or args.get("subagentType") or "") in delegate_agents
 
 
+def _delegated_domain_receipt(request: Any, delegate_agents: set[str], parser: Any) -> Any | None:
+    """读取本回合、指定子 Agent 返回的领域草稿回执。
+
+    先用父级 ``task`` 调用绑定子 Agent 身份，再用 Pydantic 校验回执。两层都
+    通过才允许父图把该对象作为 HITL 候选，不能从通用结果或子 Agent 叙述中猜测。
+    """
+    if not is_delegated_draft_projection_turn(request, delegate_agents):
+        return None
+    messages = _messages_from_request(request)
+    content = messages[-1].get("content", "") if isinstance(messages[-1], dict) else messages[-1].content
+    return parser(content)
+
+
+def delegated_personal_schedule_draft_receipt(request: Any) -> DelegatedPersonalScheduleDraftReceipt | None:
+    return _delegated_domain_receipt(request, {"schedules_agent"}, parse_personal_schedule_draft_receipt)
+
+
+def delegated_party_file_draft_receipt(request: Any) -> DelegatedPartyFileDraftReceipt | None:
+    return _delegated_domain_receipt(request, {"party_files_agent"}, parse_party_file_draft_receipt)
+
+
+def delegated_approval_draft_receipt(request: Any) -> DelegatedApprovalDraftReceipt | None:
+    return _delegated_domain_receipt(request, {"approvals_agent"}, parse_approval_draft_receipt)
+
+
 def delegated_meeting_draft_receipt(request: Any) -> DelegatedMeetingDraftReceipt | None:
     """Return the validated receipt from the immediate meeting ``task`` result.
 
@@ -191,6 +222,8 @@ def is_delegated_meeting_draft_projection_turn(request: Any) -> bool:
 
 __all__ = [
     "delegated_meeting_draft_receipt",
+    "delegated_approval_draft_receipt", "delegated_party_file_draft_receipt",
+    "delegated_personal_schedule_draft_receipt",
     "is_delegated_draft_projection_turn",
     "is_delegated_meeting_draft_projection_turn",
     "is_draft_projection_turn",

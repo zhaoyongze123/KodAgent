@@ -1,4 +1,23 @@
-"""Construct the domain sub-agent specifications used by the OA graph."""
+"""构造 OA 图中使用的领域子 Agent 规格。
+
+文件职责
+========
+这里维护每个领域子 Agent 的完整工具目录、领域提示词和运行时中间件。完整目录
+解决“中央已编译计划但子 Agent 没有能力执行”的问题；实际某次请求能看见和调用
+哪些工具，则由 ``WorkOrderToolProjectionMiddleware`` 与
+``WorkflowPlanBinderMiddleware`` 根据中央编译的 WorkOrder 决定。
+
+调用关系
+========
+``oa_agent`` -> ``build_subagents`` -> DeepAgents 子 Agent；子 Agent 收到
+WorkOrder 后由投影中间件缩小可见工具，由绑定中间件在真实调用边界再次校验。
+
+结构导读
+========
+* 导入区：按审批、会议、党务、日程领域收集工具；
+* ``build_subagents``：组装工具目录、中间件、工作流开关和子 Agent 规格；
+* ``validate_subagent_specs``：在返回前检查规格是否可安全注册。
+"""
 
 from ..middleware import (
     ExecutionReceiptMiddleware,
@@ -65,12 +84,20 @@ from .contracts import validate_subagent_specs
 
 
 def build_subagents(current_business_time: str, *, include_meeting_agent: bool = True) -> list[dict]:
-    """Return fresh child specs; middleware instances remain run-local.
+    """构造本次运行独享的领域子 Agent 规格。
 
-    Deterministic workflows cover only a narrow set of registered operations.
-    The meeting ReAct child stays registered even while those workflows are
-    enabled, so follow-ups, changes and complex coordination retain a domain
-    executor.
+    参数：
+        current_business_time：上海时区的当前业务时间，供子 Agent 将相对日期换算
+            为明确日期，不能使用模型自行猜测的系统时间。
+        include_meeting_agent：是否注册会议领域子 Agent；默认注册，测试或受控
+            部署场景可显式关闭。
+
+    返回：
+        可直接传给 DeepAgents 的子 Agent 规格列表。中间件实例必须每次新建，避免
+        不同 Run 之间共享可变状态。
+
+    确定性工作流只覆盖已注册操作的一部分。即使工作流开启，会议 ReAct 子 Agent
+    仍需保留，以支持追问、修改和复杂协调；其真实可调用范围由 WorkOrder 决定。
     """
     # 这里是“领域完整能力目录”，不再随 feature flag 删除工具。某次请求实际
     # 可见什么，由 WorkOrderToolProjectionMiddleware 按中央执行契约投影。
@@ -129,6 +156,7 @@ def build_subagents(current_business_time: str, *, include_meeting_agent: bool =
     ]
     schedule_middleware = [
         DynamicModelMiddleware(), WorkOrderToolProjectionMiddleware(),
+        # 通用回执中间件会把 DRAFT_READY 提升为个人日程专用回执。
         WorkflowPlanBinderMiddleware(), ExecutionReceiptMiddleware(),
     ]
     if workflow_registry.enabled("personal_schedule"):

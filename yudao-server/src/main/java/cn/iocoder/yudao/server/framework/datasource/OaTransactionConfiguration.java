@@ -12,12 +12,11 @@ import javax.annotation.Resource;
 import javax.sql.DataSource;
 
 /**
- * Makes the OA MySQL transaction boundary explicit.
+ * 显式声明 OA MySQL 的主事务边界。
  *
- * <p>The Agent event store owns a separate, named PostgreSQL transaction
- * manager. Spring's unnamed {@code @Transactional} operations, Flowable and
- * MyBatis must continue to share the primary dynamic OA datasource instead of
- * accidentally resolving the Agent transaction manager.</p>
+ * <p>Agent 事件库使用独立、具名的 PostgreSQL 事务管理器；Spring 未指定名称的
+ * {@code @Transactional}、Flowable 与 MyBatis 必须继续共用主动态 OA 数据源，
+ * 不能意外解析到 Agent 事件库事务管理器。</p>
  */
 @Configuration
 public class OaTransactionConfiguration {

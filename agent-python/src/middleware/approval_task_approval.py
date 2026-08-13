@@ -1,19 +1,13 @@
 from __future__ import annotations
 
-from typing import Any
-
-from langchain_core.messages import AIMessage
-
 from ..services.approval_task_approval import confirmation_args, load_pending_approval_task_context
 from ..services.approval_core import approval_projection_metadata
 from ..hitl.projection import project_confirmation_call
 from ..hitl.auto_confirm import ConfiguredApprovalProjectionMiddleware
+from .approval_projection import delegated_approval_draft_receipt
 
 
 _PREVIEW_SOURCE_TOOLS = {"preview_approval_task_action"}
-_PREVIEW_DELEGATE_AGENTS = {"approvals_agent"}
-
-
 class ApprovalTaskAutoConfirmMiddleware(ConfiguredApprovalProjectionMiddleware):
     name = "ApprovalTaskAutoConfirmMiddleware"
 
@@ -22,10 +16,16 @@ class ApprovalTaskAutoConfirmMiddleware(ConfiguredApprovalProjectionMiddleware):
 
     @staticmethod
     def _apply(request, response):
+        receipt = delegated_approval_draft_receipt(request)
+        if receipt is not None:
+            if receipt.confirmation_type != "task":
+                return response
+            from ..tools.common import set_operation_context
+            set_operation_context(receipt.operation_id)
         return project_confirmation_call(
             request, response,
             source_tools=_PREVIEW_SOURCE_TOOLS,
-            delegate_agents=_PREVIEW_DELEGATE_AGENTS,
+            delegated_eligible=receipt is not None,
             context_loader=load_pending_approval_task_context,
             action_name="confirm_approval_task_action",
             args_builder=lambda context, args: confirmation_args(context, args),

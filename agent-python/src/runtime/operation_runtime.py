@@ -52,6 +52,22 @@ def _required_runtime() -> bool:
     }
 
 
+class AgentContextIncompleteError(RuntimeError):
+    """Raised when the request envelope lacks identity fields needed to persist an Operation."""
+
+    error_code = "AGENT_CONTEXT_MISSING"
+    user_message = "当前请求缺少必要的对话上下文（用户身份/会话/消息），无法完成写入操作，请重新发起对话。"
+
+    def __init__(self, missing: list[str]) -> None:
+        self.missing = list(missing)
+        super().__init__("Agent 上下文不完整，缺少字段: " + ", ".join(self.missing))
+
+
+def _missing_context_fields(context: dict[str, str]) -> list[str]:
+    required = ("tenantId", "userId", "threadId", "runId", "messageId")
+    return [key for key in required if not str(context.get(key) or "").strip()]
+
+
 def _deterministic_operation_id(
     context: dict[str, str], action_id: str, operation_key: str | None = None,
 ) -> str:
@@ -107,6 +123,12 @@ class OperationRuntime:
         if not dsn:
             if must_run:
                 raise RuntimeError("会议预约工作流需要配置 Agent Runtime PostgreSQL DSN")
+            return None
+
+        missing = _missing_context_fields(context)
+        if missing:
+            if must_run:
+                raise AgentContextIncompleteError(missing)
             return None
 
         try:

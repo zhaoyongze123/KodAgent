@@ -7,7 +7,10 @@ from typing import NotRequired
 from langchain.agents.middleware import AgentMiddleware, AgentState
 from langchain_core.messages import ToolMessage
 
-from ..orchestration.delegated_receipt import DelegatedExecutionReceipt
+from ..orchestration.delegated_receipt import (
+    draft_receipt_from_tool_response,
+    execution_receipt_from_tool_response,
+)
 from ..orchestration.domain_dispatch import parse_work_order
 from ..tools.common import ToolResponse
 
@@ -19,7 +22,7 @@ class ExecutionReceiptState(AgentState):
 
 
 class ExecutionReceiptMiddleware(AgentMiddleware):
-    """只在本次 WorkOrder 指定的 executor 成功后发布通用完成回执。"""
+    """把本次 WorkOrder 的唯一 executor 结果发布为通用结构化回执。"""
 
     name = "ExecutionReceiptMiddleware"
 
@@ -54,13 +57,18 @@ class ExecutionReceiptMiddleware(AgentMiddleware):
             result = ToolResponse.model_validate_json(str(messages[0].content or ""))
         except (TypeError, ValueError):
             return None
-        if not result.ok:
-            return None
-        receipt = DelegatedExecutionReceipt(
-            planId=work_order.plan_id,
-            executorTool=work_order.execution_tool,
+        # 写工作流先尝试生成领域级草稿回执。只有该回执才有资格在父图触发
+        # HITL；其他成功结果仍严格使用通用执行回执。
+        receipt = draft_receipt_from_tool_response(
+            result,
+            domain=work_order.domain,
+            operation=str(work_order.canonical_plan.get("operation") or ""),
+        ) or execution_receipt_from_tool_response(
+            result, plan_id=work_order.plan_id, executor_tool=work_order.execution_tool,
         )
-        return {"structured_response": receipt.model_dump(by_alias=True)}
+        # 省略空字段，使跨图回执只承载真实 executor 返回的业务事实；这也让
+        # “字段不存在”和“字段值为 null”在主图侧保持明确区分。
+        return {"structured_response": receipt.model_dump(by_alias=True, exclude_none=True)}
 
     async def aafter_agent(self, state, runtime):
         return self.after_agent(state, runtime)

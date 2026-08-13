@@ -1,7 +1,8 @@
 /**
- * A resume audit key is derived from the durable approval id rather than from
- * a render, click, or network attempt.  This keeps retries idempotent even if
- * the card is remounted after a refresh.
+ * 根据持久化审批 ID 生成恢复审计幂等键。
+ *
+ * 键不能依赖卡片渲染、点击次数或网络请求 ID；页面刷新后卡片可能重新挂载，
+ * 但同一审批恢复仍必须被识别为同一件业务动作。
  */
 export function getResumeIdempotencyKey(approvalId: string): string {
   const normalized = approvalId.trim();
@@ -28,10 +29,11 @@ export type ApprovalDecisionContext = {
 };
 
 /**
- * Preserve the identity of the interrupted business action when LangGraph
- * Server materializes Command(resume) as a new Run. The new Run id is a
- * transport identity; approval validation must remain bound to the original
- * user message and original Run stored with the durable approval.
+ * 在 LangGraph Server 将 ``Command(resume)`` 实体化为新 Run 时，保留被中断
+ * 业务动作的原始身份。
+ *
+ * 新 Run ID 只是传输身份；审批校验必须继续绑定到持久化审批记录中的原始用户
+ * 消息和原始 Run，不能因恢复而换成新 Run。
  */
 export function buildApprovalResumeMetadata(
   context: ApprovalDecisionContext,
@@ -54,10 +56,10 @@ export function buildApprovalResumeMetadata(
 }
 
 /**
- * Build the single durable business-state request for an approval decision.
+ * 构造一次审批决策对应的唯一持久化业务状态请求。
  *
- * Draft cancellation is deliberately not represented here: rejecting an
- * approval is the Java transaction boundary and atomically settles its draft.
+ * 不在前端单独发送草稿取消请求：驳回审批是 Java 事务边界，由后端原子地结算
+ * 它关联的草稿，避免审批状态与草稿状态分离。
  */
 export function buildApprovalDecisionRequest(
   context: ApprovalDecisionContext,
@@ -81,8 +83,7 @@ export function buildApprovalDecisionRequest(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        // A retried click after a network timeout must stay the same action,
-        // so the idempotency key is stable per decision.
+        // 网络超时后的重复点击仍是同一业务决策，因此幂等键按审批决策固定。
         idempotencyKey: `${approvalId}:${action}`,
         draftId,
         threadId: context.threadId,

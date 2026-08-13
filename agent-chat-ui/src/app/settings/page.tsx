@@ -239,6 +239,17 @@ export default function SettingsPage() {
       toast.error("新增供应商时必须填写 API Key");
       return;
     }
+    const providerName = form.name.trim();
+    const sameNameProvider = providers.find(
+      (provider) =>
+        provider.name.trim() === providerName && provider.id !== form.id,
+    );
+    if (sameNameProvider) {
+      toast.error(
+        `供应商名称“${providerName}”已存在，请编辑已有配置或使用其他名称`,
+      );
+      return;
+    }
     setSaving(true);
     try {
       await requestJson("/api/agent-settings/providers", {
@@ -296,14 +307,14 @@ export default function SettingsPage() {
   };
 
   const deleteProvider = async (id: number) => {
-    if (!window.confirm("停用这个供应商？已同步的模型将不再作为可选模型。"))
+    if (!window.confirm("删除这个供应商？关联的 API Key、已同步模型和模型绑定也会一并删除。"))
       return;
     setDeletingId(id);
     try {
       await requestJson(`/api/agent-settings/providers/${id}`, {
         method: "DELETE",
       });
-      toast.success("供应商已停用");
+      toast.success("供应商及关联模型配置已删除");
       if (form.id === id) setForm(emptyProvider);
       await loadData();
     } catch (error) {
@@ -582,7 +593,7 @@ export default function SettingsPage() {
                             className="text-destructive hover:text-destructive"
                             onClick={() => void deleteProvider(provider.id)}
                             disabled={deletingId === provider.id}
-                            aria-label={`停用 ${provider.name}`}
+                            aria-label={`删除 ${provider.name}`}
                           >
                             <Trash2 className="size-4" />
                           </Button>

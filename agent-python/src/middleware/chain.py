@@ -7,6 +7,8 @@ from typing import Any
 from ..runtime.model_runtime import DynamicModelMiddleware, RunLifecycleMiddleware
 from ..orchestration.plan_projection import PlanToolProjectionMiddleware
 from ..orchestration.phase_prompt import MainAgentPhasePromptMiddleware
+from ..orchestration.conversation_context import ContextCandidateMiddleware
+from ..orchestration.target_resolution import TargetResolutionMiddleware
 from ..orchestration.policies import (
     CurrentUserMessageMiddleware,
     PendingPlanMiddleware,
@@ -41,6 +43,11 @@ def build_middleware_chain(*, dynamic_model: Any | None = None, phase_prompt: An
     items = [
         CurrentUserMessageMiddleware(trusted_source=True),
         PendingPlanMiddleware(),
+        # 候选只从 checkpoint 中已有的待办或授权查询结果生成，必须早于提示词注入。
+        ContextCandidateMiddleware(),
+        # 候选引用先完成 Java 定向核验；成功后本中间件写入代码二次编译的路由，
+        # 让正常 PlanProjection 再派发真正写工作流，绝不直接复用候选 source ID。
+        TargetResolutionMiddleware(),
         DuplicateToolMessageGuardMiddleware(),
         dynamic_model or DynamicModelMiddleware(),
         phase_prompt or MainAgentPhasePromptMiddleware(),
@@ -66,6 +73,10 @@ def build_middleware_chain(*, dynamic_model: Any | None = None, phase_prompt: An
     required_order = (
         ("CurrentUserMessageMiddleware", "PlanToolProjectionMiddleware"),
         ("CurrentUserMessageMiddleware", "PendingPlanMiddleware"),
+        ("PendingPlanMiddleware", "ContextCandidateMiddleware"),
+        ("ContextCandidateMiddleware", "TargetResolutionMiddleware"),
+        ("TargetResolutionMiddleware", "PlanToolProjectionMiddleware"),
+        ("ContextCandidateMiddleware", "MainAgentPhasePromptMiddleware"),
         ("PendingPlanMiddleware", "MainAgentPhasePromptMiddleware"),
         ("DynamicModelMiddleware", "MainAgentPhasePromptMiddleware"),
         ("PlanToolProjectionMiddleware", "MeetingTaskCallGuardMiddleware"),

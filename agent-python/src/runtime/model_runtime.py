@@ -1,4 +1,18 @@
-"""Run-scoped dynamic model selection for DeepAgents."""
+"""DeepAgents 的按 Run 隔离动态模型运行时。
+
+文件职责
+========
+本模块在模型调用边界读取当前 Run 的模型配置、构造兼容 OpenAI 协议的客户端，
+并把供应商错误、消息结构错误和运行事件转换为稳定的 Agent 契约。模型实例、
+请求上下文和耗时统计都必须按 Run 隔离，不能泄漏到另一个用户或线程。
+
+结构导读
+========
+* 上下文变量：保存当前 Run 的模型实例和开始时间；
+* 诊断函数：定位供应商响应和消息历史协议错误；
+* 序列化适配：补回特定供应商需要的工具调用字段；
+* ``DynamicModelMiddleware``：模型调用前解析配置、调用后记录事件。
+"""
 
 from __future__ import annotations
 
@@ -25,8 +39,14 @@ from ..tools.common.events import (
 from ..tools.common.auth import _java_request_config
 from ..tools.common.http_client import persist_agent_event, resolve_agent_model
 from ..orchestration.action_catalog_sync import ActionCatalogSyncError, sync_action_catalog
+from ..orchestration.phase_prompt import classify_main_agent_phase
+from ..orchestration.route_state import route_state
 from ..orchestration.routing_trace import set_model_trace
-from ..services.conversation_router import clear_route_reasoning_policy, get_route_reasoning_policy
+from ..services.conversation_router import (
+    classify_message,
+    clear_route_reasoning_policy,
+    get_route_reasoning_policy,
+)
 from ..services.narration_stream import NarrationStreamingModel
 
 
@@ -41,7 +61,7 @@ _RUN_START_TIMES_LOCK = Lock()
 
 
 class ModelRuntimeError(RuntimeError):
-    """Stable provider error contract exposed to the Agent/UI boundary."""
+    """暴露给 Agent 和前端的稳定模型运行时错误契约。"""
 
     def __init__(self, code: str, message: str, *, details: Any = None):
         self.code = code
@@ -50,12 +70,11 @@ class ModelRuntimeError(RuntimeError):
 
 
 def _extract_provider_message(exc: Exception) -> str:
-    """Read the most informative message attached to a provider exception.
+    """从供应商异常中提取最有诊断价值的上游信息。
 
-    The OpenAI Python client stores the upstream JSON body on
-    ``exc.body`` (or ``response.text``); without surfacing it, callers see
-    only the generic HTTP status and an opaque retry counter.  Return the
-    first 400 characters so the runtime error remains bounded.
+    OpenAI Python 客户端会把上游 JSON 放在 ``exc.body`` 或 ``response.text``。
+    若不提取，调用方只能看到通用 HTTP 状态与不透明重试次数，无法定位原因。
+    返回内容限制为前 400 个字符，保证运行时错误大小可控。
     """
     body = getattr(exc, "body", None)
     if body is None:
@@ -77,16 +96,12 @@ def _extract_provider_message(exc: Exception) -> str:
 
 
 def _inspect_message_history(messages: list) -> str | None:
-    """Return a short diagnostic when the request history would fail provider validation.
+    """在消息历史会触发供应商协议校验失败时返回简短诊断。
 
-    Two repeating structural defects are common and silent: the same
-    ``tool_call_id`` appears in two ``ToolMessage`` entries, and an
-    ``assistant`` ``tool_call`` exists without any matching ``tool``
-    response. The OpenAI Chat Completions spec rejects both with the same
-    4xx, and the upstream error message ("tool messages must be preceded
-    by a tool call message") rarely points at the offending id.  Returning
-    a short hint here lets the operator see the offending message ids in
-    the log without re-running the conversation.
+    常见且隐蔽的结构错误有两类：同一个 ``tool_call_id`` 对应多条
+    ``ToolMessage``，或 ``assistant`` 的 ``tool_call`` 没有匹配的 ``tool`` 响应。
+    OpenAI Chat Completions 会用同一种 4xx 拒绝两者，上游报错通常无法指出具体
+    标识。这里把相关消息 ID 写入日志诊断，运维无需重放整段对话。
     """
     if not messages:
         return None
@@ -108,13 +123,15 @@ def _inspect_message_history(messages: list) -> str | None:
 
 
 def _format_traceback(exc: BaseException, *, limit: int = 8) -> str | None:
-    """Best-effort, length-bounded traceback dump for non-provider exceptions.
+    """尽力生成长度受限的非供应商异常堆栈。
 
-    # Provider errors carry their own diagnostic on ``exc.body``; surfacing
-    # them again would be redundant. For NameError / TypeError / AttributeError
-    # the upstream string says nothing about the call site, so we attach a
-    # short traceback to ``details`` and let it bubble up to the front end.
-    # The first and last frames matter most; keep the dump compact.
+    供应商异常已在 ``exc.body`` 中携带诊断，重复附加没有价值。``NameError``、
+    ``TypeError``、``AttributeError`` 等代码异常的上游文本通常不包含调用位置，
+    因此把精简堆栈写入 ``details`` 并传递给前端。首尾调用帧最关键，故限制长度。
+
+    参数：
+        exc：待诊断的异常。
+        limit：最多提取的堆栈帧数。
     """
     import traceback as _traceback
 
@@ -213,7 +230,42 @@ def _classify_provider_error(exc: Exception, messages: list | None = None) -> Mo
     )
 
 
-class _ReasoningReplayChatOpenAI(ChatOpenAI):
+def _strict_tool_calling_enabled() -> bool:
+    """返回是否在模型出站请求中启用 OpenAI strict function calling。
+
+    该开关只影响模型供应商的解码约束，不改变 Java 动作目录、PlanCompiler
+    或工具执行边界。默认关闭，便于先在已验证的模型网关上灰度观察 4xx 与
+    非法 action_id 的下降情况。
+    """
+
+    return os.getenv("OA_AGENT_STRICT_TOOL_CALLING", "false").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+class _StrictToolCallingChatOpenAI(ChatOpenAI):
+    """在最终 OpenAI 请求载荷中为 function 工具添加 strict 解码约束。
+
+    ``route_conversation`` 是计划投影中间件每回合构造的字典工具 Schema。
+    LangChain 对这类 ``type=function`` 字典会原样返回，``bind_tools`` 的
+    ``strict=True`` 不会自动写入其中。因此只能在本类的最终出站 payload 上
+    注入，才能同时覆盖路由工具和 Pydantic/BaseTool 业务工具。
+    """
+
+    def _get_request_payload(self, input_, *, stop=None, **kwargs):
+        payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+        if not _strict_tool_calling_enabled():
+            return payload
+        for tool in payload.get("tools") or []:
+            if not isinstance(tool, dict):
+                continue
+            function = tool.get("function")
+            if isinstance(function, dict):
+                function["strict"] = True
+        return payload
+
+
+class _ReasoningReplayChatOpenAI(_StrictToolCallingChatOpenAI):
     """Replay reasoning metadata required by thinking-mode tool protocols.
 
     LangChain retains provider reasoning in ``additional_kwargs`` but its
@@ -244,7 +296,7 @@ class _ReasoningReplayChatOpenAI(ChatOpenAI):
         return payload
 
 
-# Retain the old name for focused transport tests and downstream imports.
+# 保留旧名称，兼容既有聚焦传输测试和下游导入。
 _SiliconFlowChatOpenAI = _ReasoningReplayChatOpenAI
 
 
@@ -358,6 +410,59 @@ def _is_qwen3(model_config: dict[str, Any]) -> bool:
     return "qwen3" in normalized
 
 
+def _capability_values(model_config: dict[str, Any], *names: str) -> set[str]:
+    """读取 Java 模型能力声明中的枚举值，兼容 JDBC 的 JSON 字符串包装。
+
+    参数：
+        model_config：Java 在 Run 开始时解析出的模型配置。
+        names：可能使用的能力字段名，例如 ``reasoningEffortLevels``。
+
+    返回：规范化后的小写能力集合。未知或格式错误的配置一律返回空集合，避免
+    因猜测模型支持度而向供应商发送不兼容的 reasoning 参数。
+    """
+
+    capabilities = model_config.get("capabilities")
+    if isinstance(capabilities, dict) and isinstance(capabilities.get("value"), str):
+        capabilities = capabilities["value"]
+    if isinstance(capabilities, str):
+        try:
+            capabilities = json.loads(capabilities)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return set()
+    if not isinstance(capabilities, dict):
+        return set()
+    values: Any = None
+    for name in names:
+        if name in capabilities:
+            values = capabilities[name]
+            break
+    if isinstance(values, str):
+        values = [values]
+    if not isinstance(values, (list, tuple, set)):
+        return set()
+    return {str(value).strip().lower() for value in values if str(value).strip()}
+
+
+def _reasoning_experiment_enabled() -> bool:
+    """是否允许在规划阶段试验 medium reasoning；默认关闭以保持现网稳定。"""
+
+    return os.getenv("OA_AGENT_REASONING_EXPERIMENT", "false").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _planning_reasoning_experiment_allowed(model_config: dict[str, Any]) -> bool:
+    """仅对显式支持 medium 的非 Qwen3 模型开放规划阶段实验。"""
+
+    if not _reasoning_experiment_enabled() or _is_qwen3(model_config):
+        return False
+    levels = _capability_values(
+        model_config,
+        "reasoningEffortLevels", "reasoning_effort_levels", "reasoningLevels",
+    )
+    return "medium" in levels
+
+
 def _model_config_fingerprint(model_config: dict[str, Any]) -> str:
     """Identify the effective model without ever depending on a provider key."""
     values = "\x1f".join(
@@ -448,15 +553,93 @@ def _build_model(model_config: dict[str, Any], reasoning_effort: str = "auto") -
         # All non-Qwen models keep the existing OpenAI-compatible route-level
         # reasoning option. No Qwen/vLLM chat-template body is sent to them.
         options["reasoning_effort"] = reasoning_effort
-    model_cls = _ReasoningReplayChatOpenAI if reasoning_replay else ChatOpenAI
+    # 无论模型是否需要 reasoning 重放，都通过同一个出站 payload 适配器发送
+    # strict function calling；两种模型只在 reasoning 字段重放行为上有差异。
+    model_cls = _ReasoningReplayChatOpenAI if reasoning_replay else _StrictToolCallingChatOpenAI
     return model_cls(
         **options,
     )
 
 
-def resolve_run_model(model_id: str | None, reasoning_effort: str = "auto") -> ChatOpenAI:
+def _current_user_message(messages: list[Any]) -> str:
+    """读取本轮用户原文，只用于性能策略，绝不作为业务事实或授权来源。"""
+
+    for message in reversed(messages):
+        message_type = (
+            message.get("type") or message.get("role") if isinstance(message, dict)
+            else getattr(message, "type", "") or getattr(message, "role", "")
+        )
+        if str(message_type).lower() not in {"human", "user"}:
+            continue
+        content = message.get("content") if isinstance(message, dict) else getattr(message, "content", "")
+        return content.strip() if isinstance(content, str) else ""
+    return ""
+
+
+def _request_is_reasoning_experiment_eligible(request: Any) -> bool:
+    """判断当前模型调用是否属于可试验的复杂规划阶段。
+
+    这是性能策略，不参与权限、计划或审批决策。已编译执行、确认卡和最终汇总
+    不会进入该分支，仍由确定性执行链路处理。
+    """
+
+    state = getattr(request, "state", {}) or {}
+    messages = list(state.get("messages") or [])
+    phase = classify_main_agent_phase(messages)
+    if phase == "planning":
+        return classify_message(_current_user_message(messages)).reasoning_effort == "low"
+    if phase != "executing":
+        return False
+    # ``executing`` 中只有 ACTION_SELECTION 实际是领域规划：模型需要依据
+    # 动态 Catalog 完成动作/字段落位。RESOLVED 后的执行不交给本实验。
+    latest_route = None
+    for message in reversed(messages):
+        name = message.get("name") if isinstance(message, dict) else getattr(message, "name", "")
+        if str(name or "") != "route_conversation":
+            continue
+        content = message.get("content") if isinstance(message, dict) else getattr(message, "content", "")
+        try:
+            parsed = content if isinstance(content, dict) else json.loads(content or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            parsed = None
+        if isinstance(parsed, dict):
+            latest_route = parsed.get("data") if isinstance(parsed.get("data"), dict) else parsed
+        break
+    return route_state(latest_route) == "ACTION_SELECTION"
+
+
+def _resolve_reasoning_effort(
+    model_config: dict[str, Any],
+    requested_effort: str,
+    *,
+    experiment_eligible: bool,
+) -> str:
+    """在能力声明和显式开关都满足时，把复杂规划从 low 升到 medium。
+
+    ``reasoning_effort`` 的最终取值仅影响供应商推理预算；它不是授权字段。模型
+    未声明能力、用户明确关闭、简单请求、执行或汇总阶段都会返回原有策略。
+    """
+
+    if (
+        experiment_eligible
+        and requested_effort == "low"
+        and _planning_reasoning_experiment_allowed(model_config)
+    ):
+        return "medium"
+    return requested_effort
+
+
+def resolve_run_model(
+    model_id: str | None,
+    reasoning_effort: str = "auto",
+    *,
+    experiment_eligible: bool = False,
+) -> ChatOpenAI:
     run_id = str(current_agent_context().get("runId") or "local-run")
     requested_model_id = str(model_id or "__default__")
+    # 同一个 Run 在“普通 low”与“规划实验 low”之间可能请求不同供应商预算，
+    # 缓存键必须区分两者；否则执行阶段可能误复用规划阶段的 medium 客户端。
+    reasoning_cache_key = f"{reasoning_effort}:planning_experiment={int(experiment_eligible)}"
     cached = _MODEL_CONTEXT.get()
     # Java settings are the fact source at Run start. Keep that resolved
     # configuration stable for the rest of the Run, but never share it with a
@@ -465,7 +648,7 @@ def resolve_run_model(model_id: str | None, reasoning_effort: str = "auto") -> C
         cached
         and cached[0] == run_id
         and cached[1] == requested_model_id
-        and cached[2] == reasoning_effort
+        and cached[2] == reasoning_cache_key
     ):
         return cached[4]
 
@@ -476,16 +659,27 @@ def resolve_run_model(model_id: str | None, reasoning_effort: str = "auto") -> C
 
     model_config = resolve_agent_model(model_id, "oa-main-agent")
     _validate_model_config(model_config)
+    fingerprint = _model_config_fingerprint(model_config)
+    effective_effort = _resolve_reasoning_effort(
+        model_config,
+        reasoning_effort,
+        experiment_eligible=experiment_eligible,
+    )
+    # 评测报告必须能区分“开关已开启但模型未声明能力”和“本次规划实际升档”。
+    # 这些字段只用于可观测性，绝不作为编译、权限或确认卡的判断依据。
     set_model_trace(
         run_id=run_id,
         model_id=str(model_config.get("model_id") or ""),
         model_name=str(model_config.get("model_name") or ""),
         provider_name=str(model_config.get("provider_name") or ""),
+        requested_reasoning_effort=reasoning_effort,
+        effective_reasoning_effort=effective_effort,
+        reasoning_experiment_eligible=experiment_eligible,
+        reasoning_experiment_enabled=_reasoning_experiment_enabled(),
     )
-    fingerprint = _model_config_fingerprint(model_config)
-    model = _build_model(model_config, reasoning_effort)
+    model = _build_model(model_config, effective_effort)
     _MODEL_CONTEXT.set(
-        (run_id, requested_model_id, reasoning_effort, fingerprint, model)
+        (run_id, requested_model_id, reasoning_cache_key, fingerprint, model)
     )
     return model
 
@@ -498,13 +692,16 @@ class DynamicModelMiddleware(AgentMiddleware):
     def wrap_model_call(self, request, handler):
         model_id = _requested_model_id()
         reasoning_effort = _effective_reasoning_effort()
+        experiment_eligible = _request_is_reasoning_experiment_eligible(request)
         messages = list((getattr(request, "state", {}) or {}).get("messages") or [])
         # Model resolution errors and provider errors must remain visible to
         # the caller.  Falling back to the startup model could silently switch
         # away from the model selected in OA settings and hide the real cause.
         try:
             return handler(request.override(
-                model=_wrap_runtime_model(resolve_run_model(model_id, reasoning_effort))
+                model=_wrap_runtime_model(resolve_run_model(
+                    model_id, reasoning_effort, experiment_eligible=experiment_eligible,
+                ))
             ))
         except ModelRuntimeError as exc:
             RunLifecycleMiddleware._persist_failure(exc)
@@ -533,10 +730,13 @@ class DynamicModelMiddleware(AgentMiddleware):
     async def awrap_model_call(self, request, handler):
         model_id = _requested_model_id()
         reasoning_effort = _effective_reasoning_effort()
+        experiment_eligible = _request_is_reasoning_experiment_eligible(request)
         messages = list((getattr(request, "state", {}) or {}).get("messages") or [])
         try:
             return await handler(request.override(
-                model=_wrap_runtime_model(resolve_run_model(model_id, reasoning_effort))
+                model=_wrap_runtime_model(resolve_run_model(
+                    model_id, reasoning_effort, experiment_eligible=experiment_eligible,
+                ))
             ))
         except ModelRuntimeError as exc:
             RunLifecycleMiddleware._persist_failure(exc)

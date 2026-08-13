@@ -1,15 +1,18 @@
-"""Code-owned dispatch contract between the planner and domain agents.
+"""主 Agent 与领域子 Agent 之间由代码拥有的派发契约。
 
-The parent agent is a control-plane component: it understands a request,
-produces a typed plan and presents a verified result.  It must not select a
-business tool after a plan has been compiled.  This module is the small,
-pure data-plane boundary that turns a resolved route into an immutable work
-order for the one domain agent that owns its executor.
+文件职责
+========
+主 Agent 是控制面：理解请求、产出类型化计划、呈现已验证结果。计划编译完成后，
+它不得再挑选业务工具。本模块是小而纯的数据面边界，把 ``RESOLVED`` 路由结果
+转换为唯一执行器所属子 Agent 的不可变 WorkOrder。
 
-``task.description`` remains the transport required by DeepAgents, but it is
-no longer a natural-language instruction authored by the parent model.  It
-contains this versioned WorkOrder only; the child treats ``canonicalPlan`` as
-the authority for business fields.
+数据流
+======
+``route_conversation`` -> 编译路由 -> ``domain_agent_for_route`` 校验执行契约
+-> ``work_order_from_route`` 构造 WorkOrder -> ``task.description`` 传递给子 Agent。
+``task.description`` 仍是 DeepAgents 的传输通道，但其中只允许版本化 WorkOrder，
+不再允许主模型编写自然语言执行指令；子 Agent 只能以 ``canonicalPlan`` 作为业务
+字段的权威来源。
 """
 
 from __future__ import annotations
@@ -27,6 +30,7 @@ from .route_state import (
     route_state,
 )
 from .execution_contracts import contract_for_executor
+from .target_resolution import is_target_resolution_route, target_resolution_spec
 
 
 WORK_ORDER_MARKER = "KODAGENT_WORK_ORDER:"
@@ -34,14 +38,12 @@ WORK_ORDER_SCHEMA_VERSION = 1
 
 
 class WorkOrder(BaseModel):
-    """Immutable, versioned command passed from the control plane to a domain.
+    """从控制面传给领域子 Agent 的不可变、版本化工作指令。
 
-    The optional user request is context only.  A child may use it to phrase a
-    clarification, but may never treat it as a replacement for canonical plan
-    fields. ``allowedCapabilities`` and ``allowedActions`` preserve semantic
-    scope; ``allowedExecutors`` pins the one terminal business effect. A child
-    may use local read helpers for validation but cannot substitute a write or
-    workflow executor.
+    ``userContext`` 仅用于理解和澄清，不能替代 ``canonicalPlan`` 中的业务字段。
+    ``allowedCapabilities`` 与 ``allowedActions`` 固定语义范围；
+    ``allowedExecutors`` 固定唯一终态业务效果。子 Agent 可使用允许的只读 helper
+    核验事实，但不能替换写执行器或工作流执行器。
     """
 
     model_config = ConfigDict(frozen=True, populate_by_name=True, extra="forbid")
@@ -61,11 +63,10 @@ class WorkOrder(BaseModel):
 
 
 class ExecutionResult(BaseModel):
-    """Stable result envelope expected from a domain executor.
+    """领域执行器返回的稳定结果信封。
 
-    Existing domain tools still return their Java envelopes during migration;
-    declaring this contract here prevents presentation and tool-protocol text
-    from becoming the de-facto cross-agent API again.
+    迁移期间既有领域工具仍返回 Java 信封；在此明确跨 Agent 契约，避免把展示文本
+    或工具协议文本误当成事实 API。
     """
 
     model_config = ConfigDict(frozen=True, populate_by_name=True, extra="forbid")
@@ -79,11 +80,13 @@ class ExecutionResult(BaseModel):
 
 
 def domain_agent_for_route(route: dict[str, Any] | None) -> str | None:
-    """Return the child that owns this resolved plan's executor.
+    """返回已解析计划的执行器所属领域子 Agent。
 
-    This is intentionally executor-based rather than a model-facing domain
-    heuristic: a capability may contain multiple actions, while the compiler
-    has already selected exactly one execution contract.
+    参数：route 为编译后的结构化路由事实。
+    返回：唯一 owner 名称；计划未解析、动作与执行器错配或工作流关闭时返回 ``None``。
+
+    派发必须以执行器为依据，而非模型可见的领域猜测：一个能力域可有多个动作，
+    但编译器已经为当前计划选定唯一执行契约。
     """
     if not isinstance(route, dict):
         return None
@@ -98,7 +101,16 @@ def domain_agent_for_route(route: dict[str, Any] | None) -> str | None:
     # 编译状态同时携带 action 和 executor 时，两者必须来自同一份
     # ActionCatalog。否则即使 executor 本身存在，也不能把错配计划派发。
     if action is not None and action.execution_tool != executor:
-        return None
+        # 多轮目标核验是唯一例外：路由语义仍是 schedule.update / meeting.cancel，
+        # 但第一段必须先把候选内部 ID 交给只读详情工具核验。它不是让模型改选
+        # executor，而是由 target_resolution.py 签发的内部两段式计划。
+        spec = target_resolution_spec(route_capability(route), route_action_id(route))
+        if not (
+            is_target_resolution_route(route)
+            and spec is not None
+            and spec.verification_tool == executor
+        ):
+            return None
     contract = contract_for_executor(executor)
     # feature flag 是编译期可用性的一部分。关闭的 party workflow 也必须在
     # 此处停止派发，不能把“工具不可用”拖到子 Agent 运行时才暴露。
@@ -108,11 +120,14 @@ def domain_agent_for_route(route: dict[str, Any] | None) -> str | None:
 def work_order_from_route(
     route: dict[str, Any] | None, *, user_context: str | None = None,
 ) -> WorkOrder | None:
-    """Build a WorkOrder only from a compiler-resolved route.
+    """仅从编译器已解析的路由构造 WorkOrder。
 
-    ``None`` means this route has no migrated domain executor.  Callers must
-    then use the explicit legacy/control-plane route, never choose an agent by
-    interpreting user prose.
+    参数：
+        route：包含计划 ID、规范计划与执行器的编译结果。
+        user_context：可选原始用户上下文，只供子 Agent 理解请求。
+
+    返回 ``None`` 表示路由尚无迁移后的领域执行器；调用方必须进入显式旧链路或
+    控制面链路，绝不能重新根据用户自然语言挑选 Agent。
     """
     agent = domain_agent_for_route(route)
     if not agent or not isinstance(route, dict):
@@ -147,6 +162,7 @@ def work_order_from_route(
 
 
 def serialize_work_order(work_order: WorkOrder) -> str:
+    """将 WorkOrder 序列化为 ``task.description`` 可识别的单行标记。"""
     return WORK_ORDER_MARKER + json.dumps(
         work_order.model_dump(by_alias=True, mode="json"),
         ensure_ascii=False,
@@ -155,7 +171,7 @@ def serialize_work_order(work_order: WorkOrder) -> str:
 
 
 def parse_work_order(text: str) -> WorkOrder | None:
-    """Parse one compact WorkOrder marker, returning ``None`` for old turns."""
+    """解析单行 WorkOrder 标记；旧回合或无标记文本返回 ``None``。"""
     marker_index = str(text or "").find(WORK_ORDER_MARKER)
     if marker_index < 0:
         return None

@@ -1,9 +1,11 @@
-"""The single pure boundary from a candidate plan to an executable plan.
+"""候选计划到可执行计划的唯一纯编译边界。
 
-The model may propose an action and typed fields, but only this compiler can
-bind that proposal to an executor. Domain-specific rules live in the bounded
-compilers under :mod:`orchestration.planning`; this module owns transport
-normalization, action lookup and shared validation.
+数据流：模型/路由工具给出 ``CandidatePlan`` -> 本模块查 Action Catalog、规范化
+字段、校验共享约束 -> 领域编译器处理业务规则 -> ``CompiledTaskPlan`` 绑定唯一
+执行器。模型只能提出动作和字段，只有编译器能把提议绑定到执行器。
+
+领域专属规则位于 ``orchestration.planning`` 的受限编译器；本模块负责传输规范化、
+动作查询和共享校验，因此没有模型调用、I/O 或业务副作用。
 """
 
 from __future__ import annotations
@@ -144,7 +146,17 @@ def compile_task_plan(
     candidate_plan: dict[str, Any] | None = None,
     query_intent: dict[str, Any] | None = None,
 ) -> CompiledTaskPlan | None:
-    """Compile a model proposal without models, I/O or business side effects."""
+    """将模型候选提议编译为可执行计划，过程不含模型、I/O 或业务副作用。
+
+    参数：
+        capability_id：路由阶段确定的能力域。
+        execution_class：候选执行类别，正式值会由 Action Catalog 覆盖。
+        candidate_plan：模型提交的候选动作与业务字段。
+        query_intent：结构化查询意图，会和候选字段合并后校验。
+
+    返回：可执行、需澄清、不可支持或回退的 ``CompiledTaskPlan``；无法处理时返回
+    ``None``，由上层进入明确的通用处理路径。
+    """
     capability = canonical_capability_id(capability_id)
     proposed_class = str(execution_class or "").strip() or "clarify"
     payload = dict(candidate_plan) if isinstance(candidate_plan, dict) else {}
@@ -251,7 +263,7 @@ def compile_task_plan(
 
 
 class PlanCompiler:
-    """Small object boundary for dependency injection and future variants."""
+    """为依赖注入和未来编译器变体保留的轻量对象边界。"""
 
     def compile(self, **kwargs: Any) -> CompiledTaskPlan | None:
         return compile_task_plan(**kwargs)
@@ -261,7 +273,7 @@ plan_compiler = PlanCompiler()
 
 
 def compile_plan(**kwargs: Any) -> CompiledTaskPlan | None:
-    """Stable public function used by route tools and executor projection."""
+    """供路由工具和执行器投影调用的稳定公开编译入口。"""
     return plan_compiler.compile(**kwargs)
 
 

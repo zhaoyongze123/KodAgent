@@ -66,13 +66,19 @@ def _tool_name(tool: Any) -> str:
 
 
 def bind_workflow_call_args(tool_name: str, canonical: dict[str, Any], args: dict[str, Any]) -> dict[str, Any]:
-    """Re-bind the canonical plan onto a workflow tool call.
+    """把权威 ``canonical`` 计划重新绑定到工作流工具调用参数。
 
-    # 与主 Agent 侧 plan_projection._bind_compiled_call 的对应分支保持同一
-    # 套字段映射：operation/source_* 等“谁操作、操作哪条”的字段由编译计划
-    # 拥有，业务字段（时间、参会人、标题等）同样以计划为准，防止模型/子
-    # Agent 在重试时篡改或丢失。两个工作流共用一套命名规则，避免主侧与
-    # 子侧各维护一份逻辑。
+    参数：
+        tool_name：本次受控工作流的正式工具名称。
+        canonical：中央编译得到的权威计划，是操作类型、目标对象和业务字段的
+            唯一事实源。
+        args：模型或子 Agent 原本提供的参数；会被复制后按计划重填。
+
+    返回：
+        可安全交给工作流的参数。与主 Agent 侧
+        ``plan_projection._bind_compiled_call`` 保持同一字段映射：
+        ``operation``/``source_*`` 等“谁操作、操作哪条”的字段由编译计划拥有，
+        时间、参会人、标题等业务字段也以计划为准，防止重试时被篡改或丢失。
     """
     bound = dict(args)
     if tool_name == "run_meeting_booking_workflow":
@@ -217,10 +223,27 @@ class WorkflowPlanBinderMiddleware(AgentMiddleware):
         if not isinstance(call, dict):
             return request
         tool_name = str(call.get("name") or "")
-        if tool_name not in _WORKFLOW_TOOLS:
-            return request
         state = getattr(request, "state", {}) or {}
         work_order = self._work_order(state)
+        # 目标核验 WorkOrder 的 executor 是只读详情工具，不属于写工作流。ID 仍
+        # 必须由中央编译计划绑定，防止子 Agent 用候选摘要或模型猜测改查另一条。
+        if tool_name in {"get_personal_schedule", "get_my_meeting_booking"}:
+            if work_order is None or not bool(work_order.canonical_plan.get("targetResolution")):
+                return request
+            if work_order.execution_tool != tool_name:
+                return request
+            source_key = "sourceScheduleId" if tool_name == "get_personal_schedule" else "sourceBookingId"
+            source_id = work_order.canonical_plan.get(source_key)
+            if source_id is None:
+                return request
+            bound_call = dict(call)
+            bound_call["args"] = {
+                **dict(call.get("args") or {}),
+                "schedule_id" if tool_name == "get_personal_schedule" else "booking_id": source_id,
+            }
+            return request.override(tool_call=bound_call)
+        if tool_name not in _WORKFLOW_TOOLS:
+            return request
         if work_order is not None and (
             work_order.execution_tool != tool_name
             or tool_name not in work_order.allowed_executors

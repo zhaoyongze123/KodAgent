@@ -92,13 +92,13 @@ EXECUTION_CONTRACTS: tuple[ExecutionContract, ...] = (
     ),
     *_contracts(
         "meeting_rooms_agent",
-        "list_my_meeting_bookings", "meeting_report",
+        "list_my_meeting_bookings", "get_my_meeting_booking", "meeting_report",
         "run_meeting_booking_workflow",
         workflow_tools={"run_meeting_booking_workflow": "meeting_booking"},
     ),
     *_contracts(
         "schedules_agent",
-        "get_my_calendar", "schedule_report",
+        "get_my_calendar", "get_personal_schedule", "schedule_report",
         "run_personal_schedule_workflow",
         workflow_tools={"run_personal_schedule_workflow": "personal_schedule"},
     ),

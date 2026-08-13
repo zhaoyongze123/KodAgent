@@ -1,4 +1,9 @@
-"""Tool collections used when assembling the OA parent graph."""
+"""组装 OA 主图时使用的工具集合。
+
+本文件仅注册图启动时必须认识的工具，并按工作流开关暴露兼容集合；它不决定某一
+回合模型实际可见的工具。运行时工具范围由 ``PlanToolProjectionMiddleware`` 和
+WorkOrder 授权契约收紧，避免“注册过”被误解为“本次可以调用”。
+"""
 
 from ..tools.approval.templates import list_startable_approval_types, preview_approval_request
 from ..tools.approval.requests import (
@@ -71,12 +76,9 @@ from ..workflows.registry import workflow_registry
 
 
 def meeting_workflow_enabled() -> bool:
-    """Return whether the deterministic meeting workflow is the parent path.
+    """返回确定性会议工作流是否可作为当前部署的执行路径。
 
-    The default stays on the existing ReAct path until Java/approval/frontend
-    integration has passed in a real environment. Enable V2 explicitly for
-    local and staged rollout; setting it to ``false`` remains the rollback
-    switch after rollout.
+    是否使用由工作流注册表决定；关闭时是运维回滚开关，不能靠模型提示词改变。
     """
     return workflow_registry.enabled("meeting_booking")
 
@@ -98,7 +100,7 @@ def party_approval_check_enabled() -> bool:
 
 
 def business_tools() -> list:
-    """Return every tool whose contract must be registered at graph startup."""
+    """返回图启动时必须注册工具契约的完整集合。"""
     return [
         report_progress,
         route_conversation,

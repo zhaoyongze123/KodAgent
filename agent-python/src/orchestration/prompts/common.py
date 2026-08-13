@@ -1,7 +1,8 @@
-"""Cross-stage prompt contract.
+"""跨阶段通用提示词契约。
 
-This file must stay domain-neutral.  If a rule names a concrete business
-action, it belongs in the Action Catalog, a Skill, or a tool schema.
+这里仅存放所有领域共用的模型行为边界，必须保持领域无关。凡是涉及某个
+具体业务动作、业务字段或权限判断的规则，都应写在 Action Catalog、Skill 或
+工具 Schema 中，不能写死在本文件，防止提示词与真实执行契约发生漂移。
 """
 
 COMMON_PROMPT = """

@@ -1,8 +1,24 @@
-"""Phase-aware prompt composition for the parent Agent.
+"""主 Agent 的阶段识别与提示词组装。
 
-The module owns stage selection and composition only.  Domain rules are
-provided by the Action Catalog and a selected Skill bundle; they are not
-duplicated in the parent prompt.
+文件职责
+========
+本模块根据当前回合消息判断主 Agent 正处于“规划、执行还是汇总”阶段，并将
+对应提示词、当前业务时间、能力目录和已选领域 Skill 组装为 SystemMessage。
+它只决定提示词组合方式，不解释业务规则；动作、权限和字段约束仍由 Action
+Catalog 与已选 Skill 提供，避免父提示词复制业务事实。
+
+调用关系
+========
+``oa_agent`` -> ``MainAgentPhasePromptMiddleware`` -> 本模块 -> 模型。
+模型返回的 ``route_conversation`` ToolMessage 会反过来成为下一次组装提示词的
+路由事实来源。
+
+结构导读
+========
+* ``classify_main_agent_phase``：从本轮消息判定阶段；
+* ``_route_skill_prompt``：仅在需要时加载当前领域 Skill；
+* ``main_agent_phase_instructions``：组合阶段提示词和能力目录；
+* ``MainAgentPhasePromptMiddleware``：模型调用前注入最终 SystemMessage。
 """
 
 from __future__ import annotations
@@ -28,6 +44,7 @@ from .prompts import (
 from .skill_registry import skill_registry
 from .route_state import route_state
 from .pending_plan import pending_plan_prompt
+from .conversation_context import context_prompt
 
 MainAgentPhase = Literal["planning", "executing", "synthesizing"]
 
@@ -84,6 +101,15 @@ def _task_result_requires_execution(message: Any) -> bool:
 
 
 def classify_main_agent_phase(messages) -> MainAgentPhase:
+    """根据当前用户回合后的消息判定主 Agent 阶段。
+
+    参数：
+        messages：LangGraph 保存的完整会话消息，可同时包含对象和字典形式。
+
+    返回：
+        ``planning`` 表示等待路由，``executing`` 表示仍需执行计划，
+        ``synthesizing`` 表示子 Agent/工具已经返回可汇总结果。
+    """
     messages = list(messages or [])
     latest_human = max(
         (i for i, message in enumerate(messages) if _message_type(message) in {"human", "user"}),
@@ -148,6 +174,13 @@ def main_agent_phase_instructions(
     *,
     route: dict[str, Any] | None = None,
 ) -> str:
+    """返回指定阶段应追加的中文提示词。
+
+    参数：
+        phase：已判定的主 Agent 阶段。
+        route：当前回合最近一次路由工具返回的结构化事实；规划或执行阶段会据此
+            追加对应领域 Skill，缺失时保持通用提示词。
+    """
     prompts = {
         "planning": MAIN_AGENT_PLANNING_PROMPT,
         "executing": MAIN_AGENT_EXECUTION_PROMPT,
@@ -174,7 +207,11 @@ def main_agent_prompt_for_phase(
 
 
 def system_prompt() -> str:
-    """Compatibility prompt used by console/tests; production uses middleware."""
+    """返回兼容控制台的完整提示词。
+
+    生产请求使用 ``MainAgentPhasePromptMiddleware`` 按回合动态注入；控制台和
+    兼容调用没有中间件时，才使用这个包含全部阶段规则的静态版本。
+    """
     return "\n\n".join(
         (
             main_agent_prompt_for_phase("planning"),
@@ -227,6 +264,14 @@ class MainAgentPhasePromptMiddleware(AgentMiddleware):
             pending_prompt = pending_plan_prompt(state.get("pending_plan"))
             if pending_prompt:
                 text += f"\n\n{pending_prompt}"
+            # 候选摘要只帮助模型理解短句或指代；正式来源字段仍留在 checkpoint，
+            # 必须由计划投影层按候选 ID 重新绑定，不能出现在系统提示词中。
+            candidate_prompt = context_prompt(
+                state.get("context_candidates"),
+                messages=list(state.get("messages") or []),
+            )
+            if candidate_prompt:
+                text += f"\n\n{candidate_prompt}"
         return request.override(system_message=SystemMessage(content=text))
 
     def wrap_model_call(self, request, handler):

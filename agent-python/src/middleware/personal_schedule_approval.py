@@ -16,7 +16,10 @@ from ..services.personal_schedule_approval import (
     personal_schedule_confirmation_args,
 )
 from ..services.approval_core import PROJECTION_METADATA_KEY, approval_projection_metadata
-from .approval_projection import is_delegated_draft_projection_turn, is_draft_projection_turn
+from .approval_projection import (
+    delegated_personal_schedule_draft_receipt,
+    is_draft_projection_turn,
+)
 
 
 CONFIRM_TOOL_NAME = "confirm_personal_schedule"
@@ -62,7 +65,6 @@ def _enrich_or_inject(request: Any, response: Any) -> Any:
     replaces same-turn calls so no unrelated side effect can run before the
     user decides.
     """
-    pending, pending_error = load_pending_personal_schedule_context(request)
     messages = getattr(response, "result", None)
     if not messages:
         return response
@@ -71,14 +73,17 @@ def _enrich_or_inject(request: Any, response: Any) -> Any:
         return response
     updated = list(messages)
     target = messages[target_index]
-    if (
-        pending is not None
-        and pending_error is None
-        and (
-            is_draft_projection_turn(request, _DRAFT_SOURCE_TOOLS)
-            or is_delegated_draft_projection_turn(request, _DRAFT_DELEGATE_AGENTS)
-        )
-    ):
+    direct_draft = is_draft_projection_turn(request, _DRAFT_SOURCE_TOOLS)
+    delegated_receipt = delegated_personal_schedule_draft_receipt(request)
+    if direct_draft or delegated_receipt is not None:
+        # 子 Agent 场景只允许由本回合强类型回执提供 Operation；不能扫描其他
+        # WAITING_APPROVAL 状态，以免旧草稿在无关消息中重新弹出确认卡。
+        if delegated_receipt is not None:
+            from ..tools.common import set_operation_context
+            set_operation_context(delegated_receipt.operation_id)
+        pending, pending_error = load_pending_personal_schedule_context(request)
+        if pending is None or pending_error is not None:
+            return response
         call = {
             "name": CONFIRM_TOOL_NAME,
             "args": personal_schedule_confirmation_args(pending, {}),

@@ -250,7 +250,9 @@ ACTION_SPECS = (
     ),
     ActionSpec(
         "schedule.cancel", "schedule", "取消个人日程",
-        "workflow", "CANCEL", ("CANCEL_SCHEDULE", "DELETE", "DELETE_SCHEDULE"), False, True,
+        "workflow", "CANCEL", (
+            "CANCEL_SCHEDULE", "schedule_cancel", "DELETE", "DELETE_SCHEDULE",
+        ), False, True,
         "run_personal_schedule_workflow", ("source_schedule_id",),
     ),
     ActionSpec(
@@ -285,16 +287,19 @@ ACTION_SPECS = (
         "party_file.create", "party_file", "创建或发布党务文件草稿",
         "workflow", "CREATE", ("DRAFT", "PUBLISH", "create_document_draft", "create_party_file_draft"), False, True,
         "run_party_file_write_workflow", ("title", "content", "category_name"),
+        permission="party-file:create",
     ),
     ActionSpec(
         "party_file.update", "party_file", "修改党务文件草稿",
         "workflow", "UPDATE", ("EDIT",), False, True,
         "run_party_file_write_workflow", ("source_party_file_id",),
+        permission="party-file:update",
     ),
     ActionSpec(
         "party_file.delete", "party_file", "删除或作废党务文件草稿",
         "workflow", "DELETE", ("REMOVE", "VOID", "CANCEL"), False, True,
         "run_party_file_write_workflow", ("source_party_file_id",),
+        permission="party-file:delete",
     ),
     ActionSpec(
         "reporting.approval", "reporting", "生成审批报表",

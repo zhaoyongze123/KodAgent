@@ -9,8 +9,10 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.ClientHttpRequest;
 import org.springframework.http.client.ClientHttpResponse;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.ResourceAccessException;
@@ -47,25 +49,83 @@ public class AgentModelService {
                 "FROM agent_model_provider p WHERE tenant_id = ? AND deleted = FALSE ORDER BY id", tenantId);
     }
 
+    /**
+     * 物理删除当前租户的供应商及其模型配置。
+     *
+     * <p>模型绑定依赖模型，模型和凭据依赖供应商；数据库没有级联删除，故必须按
+     * 绑定、模型、凭据、供应商的顺序删除，并放进同一事务，避免残留孤儿配置。</p>
+     *
+     * @param tenantId 当前租户编号
+     * @param providerId 要删除的供应商编号
+     */
+    @Transactional(transactionManager = "agentEventTransactionManager")
     public void deleteProvider(Long tenantId, Long providerId) {
-        int updated = jdbcTemplate.update("UPDATE agent_model_provider SET deleted=TRUE, enabled=FALSE, updated_at=CURRENT_TIMESTAMP WHERE id=? AND tenant_id=?", providerId, tenantId);
-        if (updated == 0) throw ServiceExceptionUtil.exception0(404, "供应商不存在");
+        int deleted = physicalDeleteProvider(tenantId, providerId);
+        if (deleted == 0) throw ServiceExceptionUtil.exception0(404, "供应商不存在");
     }
 
+    /**
+     * 按外键依赖顺序物理删除供应商配置，返回最终删除的供应商记录数。
+     *
+     * <p>每条语句都带租户条件，不能因外部传入的供应商编号跨租户删除数据。</p>
+     */
+    private int physicalDeleteProvider(Long tenantId, Long providerId) {
+        jdbcTemplate.update("DELETE FROM agent_model_binding WHERE model_id IN "
+                + "(SELECT m.id FROM agent_model m JOIN agent_model_provider p ON p.id=m.provider_id "
+                + "WHERE m.provider_id=? AND p.tenant_id=?)", providerId, tenantId);
+        jdbcTemplate.update("DELETE FROM agent_model WHERE provider_id=? AND EXISTS "
+                + "(SELECT 1 FROM agent_model_provider WHERE id=? AND tenant_id=?)",
+                providerId, providerId, tenantId);
+        jdbcTemplate.update("DELETE FROM agent_model_credential WHERE provider_id=? AND EXISTS "
+                + "(SELECT 1 FROM agent_model_provider WHERE id=? AND tenant_id=?)",
+                providerId, providerId, tenantId);
+        return jdbcTemplate.update("DELETE FROM agent_model_provider WHERE id=? AND tenant_id=?", providerId, tenantId);
+    }
+
+    /**
+     * 保存当前租户的模型供应商。
+     *
+     * <p>供应商名称是当前租户内的稳定标识。新增时会清理旧版本软删除留下的同名记录；
+     * 改名时必须先检查重复名称。查询检查用于给用户返回可理解的提示；数据库唯一索引用于处理并发提交的最终竞争。</p>
+     *
+     * @param tenantId 当前租户编号
+     * @param request 前端提交的供应商表单，包含 id（编辑时）、name、providerType、baseUrl、apiKey、enabled
+     * @return 脱敏后的已保存供应商配置，不包含 API Key
+     */
+    @Transactional(transactionManager = "agentEventTransactionManager")
     public Map<String, Object> saveProvider(Long tenantId, Map<String, Object> request) {
         String name = required(request, "name");
         String baseUrl = required(request, "baseUrl").replaceAll("/+$", "");
         String apiKey = String.valueOf(request.getOrDefault("apiKey", "")).trim();
         Long id = request.get("id") == null ? null : Long.valueOf(String.valueOf(request.get("id")));
         if (id == null) {
-            jdbcTemplate.update("INSERT INTO agent_model_provider(tenant_id,name,provider_type,base_url,source) VALUES(?,?,?,?,?)",
-                    tenantId, name, request.getOrDefault("providerType", "OPENAI_COMPATIBLE"), baseUrl,
-                    request.getOrDefault("source", "CUSTOM"));
+            if (activeProviderNameExists(tenantId, name)) {
+                throw providerNameConflict(name);
+            }
+            // 旧版本删除供应商时仅标记 deleted，会占用唯一索引；新建同名配置前彻底清理它。
+            purgeDeletedProviderWithSameName(tenantId, name);
+            try {
+                jdbcTemplate.update("INSERT INTO agent_model_provider(tenant_id,name,provider_type,base_url,source) VALUES(?,?,?,?,?)",
+                        tenantId, name, request.getOrDefault("providerType", "OPENAI_COMPATIBLE"), baseUrl,
+                        request.getOrDefault("source", "CUSTOM"));
+            } catch (DuplicateKeyException ex) {
+                // 两个请求同时通过预检查时，由唯一索引裁决；此处不能向前端泄露数据库异常。
+                throw providerNameConflict(name);
+            }
             id = jdbcTemplate.queryForObject("SELECT id FROM agent_model_provider WHERE tenant_id=? AND name=?", Long.class, tenantId, name);
         } else {
-            jdbcTemplate.update("UPDATE agent_model_provider SET name=?, provider_type=?, base_url=?, enabled=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND tenant_id=?",
-                    name, request.getOrDefault("providerType", "OPENAI_COMPATIBLE"), baseUrl,
-                    request.getOrDefault("enabled", true), id, tenantId);
+            if (providerNameExists(tenantId, name, id)) {
+                throw providerNameConflict(name);
+            }
+            try {
+                int updated = jdbcTemplate.update("UPDATE agent_model_provider SET name=?, provider_type=?, base_url=?, enabled=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND tenant_id=?",
+                        name, request.getOrDefault("providerType", "OPENAI_COMPATIBLE"), baseUrl,
+                        request.getOrDefault("enabled", true), id, tenantId);
+                if (updated == 0) throw ServiceExceptionUtil.exception0(404, "供应商不存在");
+            } catch (DuplicateKeyException ex) {
+                // 编辑时也可能与另一请求改出的同名配置竞争，统一转换为业务错误。
+                throw providerNameConflict(name);
+            }
         }
         if (!apiKey.isEmpty()) {
             String encrypted = encrypt(apiKey);
@@ -74,6 +134,44 @@ public class AgentModelService {
                     id, encrypted);
         }
         return jdbcTemplate.queryForMap("SELECT id, name, provider_type, base_url, source, enabled FROM agent_model_provider WHERE id=? AND tenant_id=?", id, tenantId);
+    }
+
+    /**
+     * 检查租户内是否已有其他同名供应商，已删除记录也保留在检查范围内。
+     *
+     * <p>数据表的唯一索引不区分 deleted；忽略历史记录会导致预检查通过、插入时仍失败。</p>
+     */
+    private boolean activeProviderNameExists(Long tenantId, String name) {
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(1) FROM agent_model_provider WHERE tenant_id=? AND name=? AND deleted=FALSE",
+                Integer.class, tenantId, name);
+        return count != null && count > 0;
+    }
+
+    private boolean providerNameExists(Long tenantId, String name, Long excludedProviderId) {
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(1) FROM agent_model_provider WHERE tenant_id=? AND name=? AND (? IS NULL OR id<>?)",
+                Integer.class, tenantId, name, excludedProviderId, excludedProviderId);
+        return count != null && count > 0;
+    }
+
+    /** 清理旧软删除实现留下的同名记录，使用户能重新创建该供应商。 */
+    private void purgeDeletedProviderWithSameName(Long tenantId, String name) {
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                "SELECT id FROM agent_model_provider WHERE tenant_id=? AND name=? AND deleted=TRUE",
+                tenantId, name);
+        for (Map<String, Object> row : rows) {
+            Object providerId = row.get("id");
+            if (providerId instanceof Number) {
+                physicalDeleteProvider(tenantId, ((Number) providerId).longValue());
+            }
+        }
+    }
+
+    /** 返回不暴露数据库约束名的统一重复名称错误。 */
+    private RuntimeException providerNameConflict(String name) {
+        return ServiceExceptionUtil.exception0(409,
+                "供应商名称“" + name + "”已存在，请编辑已有配置或使用其他名称");
     }
 
     public Map<String, Object> testProvider(Long tenantId, Long providerId) {

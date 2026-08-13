@@ -1,4 +1,18 @@
-"""Conversation tools that do not call business systems."""
+"""不直接访问业务系统的会话控制工具。
+
+文件职责
+========
+本模块定义 ``route_conversation`` 等控制面工具：它们把用户文本、当前上下文和
+Action Catalog 编译成可验证的路由结果或澄清结果，但不直接预约会议、写审批或
+修改日程。业务系统调用必须在后续执行器中发生。
+
+结构导读
+========
+* 输入模型：校验两阶段路由所需的能力域、动作和候选计划；
+* 规范化函数：统一日期、查询条件和领域字段；
+* ``route_conversation``：编译计划并返回结构化路由事实；
+* 结果转换函数：将内部异常和状态转换为工具契约规定的响应。
+"""
 
 import ast
 from copy import deepcopy
@@ -53,6 +67,8 @@ from ...orchestration.action_selection import (
     recover_approval_read_action,
 )
 from ...orchestration.compiler import compile_plan
+from ...orchestration.conversation_context import ContextIntent, verify_context_candidate_proof
+from ...orchestration.target_resolution import target_resolution_compiled_route
 from ...orchestration.planning.party_file import normalize_party_file_operation
 from ...orchestration.planning.resources import infer_workflow_capability
 from .events import current_agent_context, emit
@@ -60,14 +76,26 @@ from langgraph.config import get_stream_writer
 from .contracts import ToolResponse, tool_failure, tool_success
 
 class RouteConversationInput(BaseModel):
-    """Typed boundary for the two-stage route tool.
+    """两阶段路由工具的类型化输入边界。
 
-    ``capability_id`` is required at both stages.  The first stage chooses a
-    registered domain (or ``general_agent`` when genuinely unknown); the
-    second stage keeps that same domain and adds ``action_id`` and payload.
-    Making the domain required prevents a provider from silently omitting the
-    only fact that distinguishes a deterministic business plan from a generic
-    ReAct fallback.
+    ``capability_id`` 在两个阶段都必填：第一阶段从已注册领域中选择一个，确实
+    无法识别时才使用 ``general_agent``；第二阶段保持同一领域并补充 ``action_id``
+    和候选业务字段。强制传入领域可防止模型悄悄遗漏“确定性业务计划”和通用
+    ReAct 回退之间最关键的事实。
+
+    字段说明：
+        message：当前用户原始请求；只能用于理解意图，不能代替授权业务事实。
+        capability_id：第一阶段选定的能力域，后续阶段不得随意更换。
+        action_id：第二阶段从实时 Action Catalog 中逐字选择的正式动作标识。
+        candidate_plan：用户明确提供或工具真实返回的候选业务字段，编译器会继续
+            校验其完整性、权限和来源对象。
+        context_candidate_id：主图 checkpoint 签发的上下文候选引用。模型只能选择
+            已展示的候选；候选只会触发 Java 定向核验，不能在本参数或业务计划中
+            伪造来源字段。
+        context_intent：模型对本轮与上下文关系的结构化判断。它只影响路由和澄清，
+            不能授予业务对象写权限或替代正式审批卡。
+        context_confidence：模型对 context_intent 的置信度。引用已授权对象这种会
+            影响写计划的意图，低置信度只能进入澄清，不能绑定来源字段。
     """
 
     message: str
@@ -96,11 +124,31 @@ class RouteConversationInput(BaseModel):
     unsupported_criteria: list[str] | None = None
     query_intent: dict | str | None = None
     execution_class: ExecutionClass | None = None
+    context_candidate_id: str | None = Field(
+        default=None,
+        min_length=16,
+        max_length=128,
+        description="仅传当前提示词展示的上下文候选 ID；不能用它代替 source_*_id 或审批确认。",
+    )
+    context_intent: ContextIntent = Field(
+        default="NEW_REQUEST",
+        description=(
+            "本轮上下文意图：NEW_REQUEST=新请求；RESUME_PENDING_PLAN=补充待补计划；"
+            "REFER_TO_QUERY_CANDIDATE=修改/取消已授权业务对象；"
+            "LOCATE_APPROVAL_CARD=定位待确认操作；AMBIGUOUS=多个候选无法唯一确定。"
+        ),
+    )
+    context_confidence: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="对 context_intent 的置信度，取值 0 到 1；不确定时传较低值并选择 AMBIGUOUS。",
+    )
     candidate_plan: dict[str, Any] | str | None = Field(
         default=None,
         description=(
             "只填写用户明确提供或真实工具返回的业务字段。更新/取消必须使用"
-            "当前授权查询事实中的 source_*_id；不能猜测或从历史上下文选目标。"
+            "本轮 Java 已授权业务事实中的 source_*_id；不能猜测或从历史上下文选目标。"
             "键名必须使用 Action Catalog 的正式字段名，值类型与格式遵循其"
             "字段格式约定：datetime 为 yyyy-MM-dd HH:mm:ss，date 为 yyyy-MM-dd，"
             "integer 为纯数字，array 为字符串数组；缺失字段不要编造。"
@@ -110,7 +158,7 @@ class RouteConversationInput(BaseModel):
     @field_validator("missing_fields", "unsupported_criteria", mode="before")
     @classmethod
     def _coerce_string_lists(cls, value: Any) -> Any:
-        """Accept JSON-string lists from providers while preserving the schema."""
+        """兼容供应商把数组编码为 JSON 字符串的情况，同时保持字段 Schema。"""
         if not isinstance(value, str):
             return value
         text = value.strip()
@@ -124,11 +172,10 @@ class RouteConversationInput(BaseModel):
 
 
 class _ModelToolSchema(dict[str, Any]):
-    """OpenAI-compatible descriptor that retains a stable tool ``name`` view.
+    """兼容 OpenAI 的工具描述，同时提供稳定的 ``name`` 访问方式。
 
-    LangChain models consume the mapping form, while middleware diagnostics
-    and tests intentionally reason about tool names.  Keeping both views
-    avoids a second ad-hoc name parser at every tool-palette boundary.
+    LangChain 模型消费字典形式；中间件诊断和边界校验则需要读取工具名称。两种
+    视图共用同一对象，可避免各个工具投影边界重复实现不一致的名称解析器。
     """
 
     @property
@@ -143,16 +190,18 @@ def route_conversation_model_schema(
     selected_action_id: str | None = None,
     require_action: bool = False,
 ) -> dict[str, Any]:
-    """Build the model-facing route-tool schema from the live action catalog.
+    """根据实时 Action Catalog 构造本回合面向模型的路由工具 Schema。
 
-    The executable ``route_conversation`` tool deliberately retains a stable
-    transport schema: LangGraph's ToolNode resolves it by name after the
-    model call.  Before binding that tool to a model, the projection
-    middleware calls this factory and supplies a per-turn JSON schema instead.
-    Thus the model can choose only the *currently registered* capability and,
-    after a domain has been selected, only that domain's live ``action_id``s.
-    Java's synchronized action catalog is automatically reflected through
-    ``actions_for_capability``; no action name is copied into a prompt.
+    可执行的 ``route_conversation`` 工具保持稳定的传输 Schema，供 LangGraph 在
+    模型调用后按名称解析。模型调用前，投影中间件会调用本工厂生成本回合专用的
+    JSON Schema，因此模型只能选择当前已注册的能力域；进入领域后，也只能选择
+    该领域当前有效的 ``action_id``。Java 同步的动作目录会经由
+    ``actions_for_capability`` 自动反映到这里，提示词中不复制任何动作名称。
+
+    参数：
+        capability_id：已锁定的能力域；为空时提供完整能力域枚举。
+        selected_action_id：已知的正式动作标识，用于进一步收紧枚举。
+        require_action：是否要求本次调用必须提交 ``action_id``。
     """
     parameters = deepcopy(RouteConversationInput.model_json_schema())
     properties = parameters.setdefault("properties", {})
@@ -184,6 +233,14 @@ def route_conversation_model_schema(
         }
         if require_action and "action_id" not in required:
             required.append("action_id")
+    elif not require_action:
+        # 第一阶段不向模型暴露 action_id：该阶段字段没有枚举约束，弱模型会
+        # 提前编造未注册动作名导致整轮路由失败。能力域锁定后（action_values
+        # 非空）才在第二阶段暴露带枚举的正式动作列表。需要强制动作的
+        # HANDSHAKE 回合保留字段，避免模型无动作可提交。
+        properties.pop("action_id", None)
+        if "action_id" in required:
+            required.remove("action_id")
     parameters["required"] = required
 
     return _ModelToolSchema({
@@ -194,6 +251,23 @@ def route_conversation_model_schema(
             "parameters": parameters,
         },
     })
+
+
+def _meeting_write_contains_explicit_field_signal(message: str) -> bool:
+    """判断预约原文是否已含值得由第二阶段模型落位的字段线索。
+
+    这里只判断“是否需要保留用户已给信息”，不提取字段值、更不从文本生成业务
+    计划。实际标题、时间、人员等仍必须由模型按 Action Catalog 的 schema 写入
+    ``candidate_plan``，随后交给 PlanCompiler 校验。没有任何字段线索时保留原有
+    的直接字段澄清，避免为了一个空计划额外发起模型交握。
+    """
+
+    text = str(message or "")
+    return bool(re.search(
+        r"主题|题目|会议名称|议题|参会人|参加人|\d{1,2}\s*(?:点|时|:)|"
+        r"(?:今天|明天|后天|周[一二三四五六日天]|下周|上午|下午|晚上)",
+        text,
+    ))
 
 
 def _coerce_object(value: Any) -> dict[str, Any] | None:
@@ -613,21 +687,37 @@ def _recover_typed_workflow_candidate(
     }
 
 
-def _is_plain_confirmation_message(message: str) -> bool:
-    """Recognize a confirmation utterance without matching confirmation UI text.
+def _context_clarification_response(
+    *,
+    intent: ContextIntent,
+    question: str,
+    issue: str,
+    candidate_id: str | None = None,
+) -> ToolResponse:
+    """返回上下文层的确定性澄清结果，绝不把短句直接编译为写操作。"""
 
-    ``确认卡`` and ``待确认草稿`` are descriptions of a pending write, not a
-    user's decision to submit it.  Treating the substring ``确认`` as a
-    confirmation signal made normal draft requests skip action selection and
-    lose their executor.  Only a small, punctuation-tolerant set of complete
-    confirmation utterances is allowed to enter the safe resume clarification.
-    """
-    text = re.sub(r"[\s，,。！？!?；;：:、]+", "", str(message or "").strip())
-    if not text or re.search(r"确认(?:卡|草稿|信息|按钮|字段)", text):
-        return False
-    if text in {"确认", "同意", "批准", "确认发布", "确认提交", "确认通过", "同意发布", "同意提交"}:
-        return True
-    return bool(re.fullmatch(r"(?:我|用户)?(?:已|现在)?确认(?:发布|提交|通过)", text))
+    data = {
+        "routeState": "CONFIRMATION_REQUIRED" if intent == "LOCATE_APPROVAL_CARD" else "FIELD_CLARIFICATION",
+        "planStatus": "CLARIFY",
+        "contextIntent": intent,
+        "clarification": {
+            "status": "CLARIFY",
+            "question": question,
+            "issues": [issue],
+            "missingFields": [],
+            **({"contextCandidateId": candidate_id} if candidate_id else {}),
+        },
+    }
+    return tool_success(
+        data,
+        {
+            "blockType": "card",
+            "cardType": "clarification",
+            "resultKind": "clarification",
+            "summary": {"headline": question},
+            "actions": [],
+        },
+    )
 
 
 def _recover_typed_schedule_query_candidate(
@@ -689,6 +779,9 @@ def route_conversation(
     unsupported_criteria: list[str] | None = None,
     query_intent: dict | str | None = None,
     execution_class: ExecutionClass | None = None,
+    context_candidate_id: str | None = None,
+    context_intent: ContextIntent = "NEW_REQUEST",
+    context_confidence: float | None = None,
     candidate_plan: dict[str, Any] | str | None = None,
 ) -> ToolResponse:
     """校验主 Agent 提出的能力选择和任务复杂度，不执行业务操作。
@@ -701,7 +794,69 @@ def route_conversation(
     # encoding, then immediately restore the canonical in-memory shape.  No
     # business routing is inferred from the user's prose here.
     candidate_plan = _coerce_object(candidate_plan)
-    explicit_candidate_supplied = isinstance(candidate_plan, dict) and bool(candidate_plan)
+    # 服务端后续可能为了兼容旧供应商补入 ``action_id``、``operation`` 或做
+    # 窄范围动作纠偏；这些字段不能倒过来证明“模型已经提交了完整计划”。保留
+    # 这一时刻的原始事实，才能在会议写操作的首轮正确进入二阶段动作选择。
+    model_supplied_candidate_plan = isinstance(candidate_plan, dict) and bool(candidate_plan)
+    context_intent = str(context_intent or "NEW_REQUEST").strip().upper()  # type: ignore[assignment]
+    if context_intent not in {
+        "NEW_REQUEST", "RESUME_PENDING_PLAN", "REFER_TO_QUERY_CANDIDATE",
+        "LOCATE_APPROVAL_CARD", "AMBIGUOUS",
+    }:
+        context_intent = "AMBIGUOUS"  # type: ignore[assignment]
+    # 当模型选择上下文候选时，内部证明只能由 PlanToolProjectionMiddleware 在
+    # 清洗模型参数后、从可信 checkpoint 注入。普通模型调用无法伪造 HMAC，因此
+    # 不能靠填写授权标记取得来源 ID。未携带候选 ID 的历史内部调用仍由其原有
+    # 上游边界负责来源标记；主图投影层会先剥离模型直接提交的同名字段。
+    trusted_context_candidate = bool(
+        isinstance(candidate_plan, dict)
+        and verify_context_candidate_proof(
+            context_candidate_id, candidate_plan.get("_context_candidate_proof"),
+        )
+    )
+    if isinstance(candidate_plan, dict):
+        candidate_plan = dict(candidate_plan)
+        candidate_plan.pop("_context_candidate_proof", None)
+        if context_candidate_id and not trusted_context_candidate:
+            candidate_plan.pop("_authorized_source_fields", None)
+    candidate_kind = str((candidate_plan or {}).get("_context_candidate_kind") or "")
+    target_resolution = (
+        dict((candidate_plan or {}).get("_target_resolution") or {})
+        if isinstance((candidate_plan or {}).get("_target_resolution"), dict)
+        else None
+    )
+    if isinstance(candidate_plan, dict):
+        # 内部核验标记不属于 Action Catalog 的业务字段。它只在本工具返回路由
+        # 之前被读取，普通编译器永远看不到候选 source ID。
+        candidate_plan.pop("_target_resolution", None)
+    if context_intent == "AMBIGUOUS":
+        return _context_clarification_response(
+            intent="AMBIGUOUS",
+            question="当前有多个可能相关的事项，请说明名称或第几个事项。",
+            issue="上下文候选不唯一，不能自动选择业务对象。",
+        )
+    if context_intent == "LOCATE_APPROVAL_CARD":
+        if trusted_context_candidate and candidate_kind == "pending_approval":
+            return _context_clarification_response(
+                intent="LOCATE_APPROVAL_CARD",
+                question="已定位到待确认操作。请使用当前有效的确认卡完成确认或取消。",
+                issue="普通文本不能替代 ApprovalCard；系统会以 Java 当前 PENDING 状态为准。",
+                candidate_id=context_candidate_id,
+            )
+        return _context_clarification_response(
+            intent="LOCATE_APPROVAL_CARD",
+            question="没有找到当前有效的待确认操作，请重新生成草稿或从待办中选择。",
+            issue="待确认操作可能已处理、过期或不属于当前 Thread。",
+        )
+    if context_intent == "REFER_TO_QUERY_CANDIDATE" and (
+        context_confidence is not None and context_confidence < 0.70
+    ):
+        return _context_clarification_response(
+            intent="AMBIGUOUS",
+            question="我还不能确定你指的是哪一项，请说名称或第几个事项。",
+            issue="上下文意图置信度不足，不能为修改或取消操作自动绑定对象。",
+        )
+    explicit_candidate_supplied = model_supplied_candidate_plan
     query_intent = _coerce_object(query_intent)
     # Textual schedule-date recovery is a provider-envelope compatibility
     # path. Once the provider supplied any structured plan/intent, time
@@ -908,9 +1063,9 @@ def route_conversation(
             in {"CONFIRM", "CONFIRM_PUBLISH", "CONFIRM_RELEASE"}
         )
     )
-    if not confirmation_intent and str(capability_id or "").strip().lower() in {
+    if not confirmation_intent and context_intent == "LOCATE_APPROVAL_CARD" and str(capability_id or "").strip().lower() in {
         "party_file", "party_files", "party_files_agent"
-    } and _is_plain_confirmation_message(message):
+    }:
         confirmation_intent = True
         capability_id = "party_file"
         execution_class = "workflow"
@@ -1154,6 +1309,22 @@ def route_conversation(
         and not missing_fields
         and party_file_attachment is None
     )
+    # ``recover_meeting_write_action`` 只负责阻止“预约”误路由为会议查询，不能
+    # 代替模型完成正式动作选择或从自然语言摘取业务字段。若模型首轮只交了领域，
+    # 服务端虽然可以给出 ``meeting.create`` 的建议，但必须回到受限 Action Catalog
+    # 让模型显式提交 action_id 与 candidate_plan。否则“项目例会”等已给字段只会
+    # 停留在文本中，后续 PendingPlan 无法恢复。
+    recovered_meeting_action_needs_selection = (
+        action_recovery is not None
+        and action_recovery.get("reason") == "explicit_meeting_write_boundary"
+        and decision["capabilityId"] == "meeting"
+        and not action_id_was_explicit
+        and not model_supplied_candidate_plan
+        and not query_intent
+        and _meeting_write_contains_explicit_field_signal(message)
+    )
+    if recovered_meeting_action_needs_selection:
+        action_selection_required = True
     if action_selection_required:
         decision["strategy"] = "clarify"
     # A malformed provider tool call may omit all routing arguments (or leave
@@ -1183,8 +1354,24 @@ def route_conversation(
         query_resolution = canonicalize_approval_query(query_intent)
         if query_resolution.status == "CLARIFY":
             decision["strategy"] = "clarify"
+    # 候选引用的 UPDATE/CANCEL 先转换为 Java 定向核验计划。它是代码签发的
+    # ``RESOLVED`` 只读 WorkOrder，不会把 source_*_id 注入写 candidate_plan。
+    # 核验回执后的二次编译由 TargetResolutionMiddleware 完成。
+    resolution_route = None
+    if (
+        trusted_context_candidate
+        and context_intent == "REFER_TO_QUERY_CANDIDATE"
+        and target_resolution is not None
+        and action_id in {"schedule.update", "schedule.cancel", "meeting.update", "meeting.cancel"}
+    ):
+        resolution_route = target_resolution_compiled_route(
+            capability_id=str(decision["capabilityId"]),
+            action_id=str(action_id),
+            candidate_plan=candidate_plan or {},
+            target_resolution=target_resolution,
+        )
     compiled_plan = None
-    if not confirmation_intent:
+    if not confirmation_intent and resolution_route is None:
         compiled_plan = compile_plan(
             capability_id=decision["capabilityId"],
             execution_class=execution_class,
@@ -1226,6 +1413,12 @@ def route_conversation(
     set_route_reasoning_policy(route, message)
     result = route.model_dump()
     result["routeDecision"] = decision
+    if resolution_route is not None:
+        result.update(resolution_route)
+        result["routeDecision"]["executionTool"] = resolution_route["executionTool"]
+        result["routeDecision"]["actionId"] = resolution_route["actionId"]
+        result["routeDecision"]["strategy"] = "direct"
+        result["targetResolution"] = True
     if action_recovery is not None:
         result["routeDecision"]["actionRecovery"] = action_recovery
         result["actionRecovery"] = action_recovery
@@ -1246,8 +1439,13 @@ def route_conversation(
             # next routing call must add only ``action_id`` and may reuse this
             # payload; dropping it was causing repeated route calls and made
             # the model fall back to the generic task tool.
-            "candidatePlan": candidate_plan or {},
+            # 对仅凭自然语言恢复的会议写动作，不能把服务端加上的
+            # action_id/operation 伪装成模型已经提交的候选计划。
+            "candidatePlan": (
+                {} if recovered_meeting_action_needs_selection else candidate_plan or {}
+            ),
             "queryIntent": query_intent or {},
+            "requiresStructuredSubmission": recovered_meeting_action_needs_selection,
             "nextRequiredFields": ["action_id"],
             "actions": [
                 {
@@ -1278,8 +1476,13 @@ def route_conversation(
             "issues": [],
             "missingFields": ["action_id"],
             "nextRequiredFields": ["action_id"],
-            "suggestedActionId": _suggest_action_id_from_payload(
-                decision["capabilityId"], candidate_plan, query_intent
+            # 动词纠偏只能提供“建议动作”，不能跳过二阶段 schema 校验；模型仍须
+            # 从 actions 枚举显式选择并提交自己的结构化 candidate_plan。
+            "suggestedActionId": (
+                action_id if recovered_meeting_action_needs_selection else
+                _suggest_action_id_from_payload(
+                    decision["capabilityId"], candidate_plan, query_intent
+                )
             ),
             "options": result["actionSelection"]["actions"],
         }
@@ -1432,6 +1635,12 @@ def route_conversation(
     )
     result["routingTrace"] = {
         "model_id": model_trace.get("model_id") or "runtime-resolved",
+        # 推理实验仅影响模型供应商的规划预算。把实际取值写入 trace，供离线评测
+        # 比较，不得把它当作权限、计划或审批卡的放行条件。
+        "requested_reasoning_effort": model_trace.get("requested_reasoning_effort"),
+        "effective_reasoning_effort": model_trace.get("effective_reasoning_effort"),
+        "reasoning_experiment_eligible": model_trace.get("reasoning_experiment_eligible"),
+        "reasoning_experiment_enabled": model_trace.get("reasoning_experiment_enabled"),
         "prompt_version": PROMPT_VERSION,
         "catalog_version": catalog_meta.get("contractVersion") or "agent-actions-v1",
         "skill_version": skill_registry.version_for(trace_capability_id, action_id=action_id),

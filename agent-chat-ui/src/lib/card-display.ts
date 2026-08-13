@@ -1,11 +1,9 @@
 /**
- * Human-facing value formatting for Agent cards.
+ * Agent 卡片的面向用户字段展示与脱敏规则。
  *
- * The business APIs intentionally keep numeric IDs and enum codes because
- * they are required for authorization, persistence, and mutation.  Cards are
- * a presentation boundary, though, and must never expose those transport
- * values verbatim.  Keep the mapping here so every card follows the same
- * policy instead of each component inventing its own fallback.
+ * 业务接口必须保留数字 ID 与枚举编码，供权限、持久化和写操作使用；卡片则是
+ * 展示边界，不能把这些传输字段原样暴露给用户。所有映射集中在本文件，避免每个
+ * 组件各自实现兜底逻辑后出现展示口径不一致。
  */
 
 export type CardDisplayContext = {
@@ -115,13 +113,13 @@ function isNumericList(value: unknown): boolean {
   return raw.length > 0 && raw.split(/[,，、\s]+/).filter(Boolean).every((item) => isNumericCode(item));
 }
 
-/** Return a stable label for a business operation without leaking its code. */
+/** 返回业务操作的稳定中文标签，不泄露内部编码。 */
 export function displayOperation(value: unknown): string {
   const raw = normalized(value);
   return OPERATION_LABELS[code(raw)] ?? (isNumericCode(raw) ? "业务操作" : raw);
 }
 
-/** Return the user-facing status for approval, workflow, or party-file cards. */
+/** 返回审批、工作流或党务文件卡片的面向用户状态。 */
 export function displayStatus(value: unknown, context?: CardDisplayContext): string {
   const raw = normalized(value);
   const key = code(raw);
@@ -146,14 +144,14 @@ export function displayTargetType(value: unknown): string {
   return TARGET_TYPE_LABELS[code(raw)] ?? (isNumericCode(raw) ? "分发对象待确认" : raw);
 }
 
-/** Return a human label for a source/type code used by calendar and reports. */
+/** 返回日历和报表中来源/类型编码的中文标签。 */
 export function displaySourceType(value: unknown): string {
   const raw = normalized(value);
   const key = code(raw);
   return SOURCE_TYPE_LABELS[key] ?? (isNumericCode(raw) ? "来源类型待确认" : raw);
 }
 
-/** Return a human label for a party-file document type. */
+/** 返回党务文件类型编码的中文标签。 */
 export function displayDocumentType(value: unknown): string {
   const raw = normalized(value);
   const key = code(raw);
@@ -161,10 +159,10 @@ export function displayDocumentType(value: unknown): string {
 }
 
 /**
- * Render a value used as a grouping/dimension key.  Group keys are often
- * backed by numeric department/category/room IDs, so they must go through the
- * same presentation boundary as form fields instead of being interpolated
- * directly into a card.
+ * 展示分组或维度字段的值。
+ *
+ * 维度通常由部门、分类或会议室的数字 ID 支撑，必须和表单字段一样经过展示边界，
+ * 不能直接插入卡片。
  */
 export function displayDimensionValue(value: unknown, dimension = "分组"): string {
   const raw = normalized(value);
@@ -195,9 +193,9 @@ export function displayDimensionValue(value: unknown, dimension = "分组"): str
 }
 
 /**
- * Hide technical identifiers while retaining a useful human explanation.
- * IDs remain in the payload for actions, but are intentionally not rendered
- * into a human confirmation card.
+ * 隐藏技术标识，同时保留用户可理解的业务说明。
+ *
+ * ID 仍保留在动作请求载荷中，但确认卡片故意不展示它们。
  */
 function displayTechnicalValue(label: string): string | undefined {
   const key = normalizedKey(label);
@@ -223,9 +221,9 @@ function displayTechnicalValue(label: string): string | undefined {
 }
 
 /**
- * Format a field value using its semantic label.  Non-enum business numbers
- * (amounts, counts, durations) are preserved; only IDs and enum/status codes
- * are transformed.
+ * 按字段语义格式化字段值。
+ *
+ * 金额、数量、时长等非枚举业务数字必须原样保留；只转换内部 ID、枚举和状态码。
  */
 export function displayFieldValue(
   label: unknown,
@@ -238,11 +236,9 @@ export function displayFieldValue(
   const technical = displayTechnicalValue(fieldLabel);
 
   const key = normalizedKey(fieldLabel);
-  // Category IDs are the one exception: they are useful to resolve a
-  // category label, so an unknown numeric category is rendered as a safe
-  // placeholder below. Every other technical *Id/code* field is hidden before
-  // any broad semantic matcher (for example, targetId must not be mistaken
-  // for targetType).
+  // 分类 ID 是唯一例外：它可用于解析分类名称，未知数字分类在下方显示安全占位。
+  // 其他技术性 *Id/code* 字段必须先隐藏，再进行宽泛语义匹配，避免把 targetId
+  // 误判为 targetType。
   if (technical && !key.includes("categoryid")) return technical;
   if (key.includes("分类") || key.includes("category")) {
     return isNumericCode(value) ? "分类名称待确认" : String(value);
@@ -282,14 +278,13 @@ export function displayFieldValue(
     try {
       return displayStructuredValue(JSON.parse(value), context);
     } catch {
-      // A normal string beginning with a bracket is still a valid business
-      // value; leave it unchanged when it is not JSON.
+      // 以括号开头的普通文本仍可能是合法业务值；不是 JSON 时保持原样。
     }
   }
   return String(value);
 }
 
-/** Redact enum/ID keys inside generic approval form values as well. */
+/** 通用审批表单的嵌套值也要递归脱敏枚举和 ID 字段。 */
 export function displayStructuredValue(value: unknown, context?: CardDisplayContext): string {
   const normalize = (item: unknown): unknown => {
     if (Array.isArray(item)) return item.map(normalize);

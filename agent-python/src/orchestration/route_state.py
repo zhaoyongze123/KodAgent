@@ -1,10 +1,8 @@
-"""Canonical route facts shared by projection and execution guards.
+"""投影和执行守卫共享的规范路由事实。
 
-The parent graph emits a ``route_conversation`` ToolMessage.  Middleware must
-not rediscover intent from user prose after that point: the compiled route is
-the only source of truth for the current turn.  Keeping parsing and state
-classification here prevents projection, task guards and future observability
-hooks from drifting apart.
+主图会产出 ``route_conversation`` ToolMessage；从此以后中间件不得再从用户自然
+语言重新识别意图，当前回合唯一事实源是已编译路由。把解析、当前回合切分和状态
+分类集中在本文件，可避免计划投影、任务守卫和观测钩子各自实现后逐渐漂移。
 """
 
 from __future__ import annotations
@@ -53,10 +51,9 @@ def message_content(message: Any) -> Any:
 
 
 def current_turn_messages(messages: list[Any]) -> list[Any]:
-    """Return messages after the latest user turn.
+    """返回最新用户消息之后的当前回合消息。
 
-    A previous turn's resolved route must never unlock tools for a new user
-    request before the new request has been classified.
+    上一回合的已解析路由绝不能在新请求尚未分类前解锁工具。
     """
     latest_human = max(
         (index for index, message in enumerate(messages) if message_type(message) in {"human", "user"}),
@@ -66,14 +63,12 @@ def current_turn_messages(messages: list[Any]) -> list[Any]:
 
 
 def route_result(messages: list[Any]) -> dict[str, Any] | None:
-    """Read the latest structured route result from the current turn.
+    """读取当前回合最新的结构化路由结果。
 
-    A new HumanMessage creates a hard routing boundary.  Before this turn's
-    ``route_conversation`` result exists, it is *unrouted*; a previous
-    turn's resolved WorkOrder must not be replayed against new user text.
-    Legitimate field continuation remains explicit in the new route call via
-    ``continuation_mode='resume'`` and is merged by ``pending_plan`` only at
-    that call boundary.
+    新 HumanMessage 会形成硬路由边界。当前回合尚无 ``route_conversation`` 结果时
+    就是未路由状态，不能把上一回合已解析 WorkOrder 重放到新用户文本上。合法的
+    补字段续接必须在新路由调用中显式使用 ``continuation_mode='resume'``，并且
+    只能由该调用边界的 ``pending_plan`` 合并。
     """
     return _latest_route(current_turn_messages(list(messages or [])))
 

@@ -1,7 +1,8 @@
-"""Parent intent-router prompt.
+"""主 Agent 意图路由阶段提示词。
 
-The parent only chooses a capability.  It does not receive the full Action
-Catalog or business tool palette at this stage.
+本阶段的主 Agent 只选择能力域 ``capability_id``，不会拿到完整 Action Catalog
+或业务工具列表。因此它不能提前猜测 ``action_id``、执行器或领域工具；具体
+动作选择将在后续领域规划阶段完成。
 """
 
 INTENT_ROUTER_PROMPT = """
@@ -26,6 +27,12 @@ INTENT_ROUTER_PROMPT = """
 - “明天上午我有什么安排” → capability_id=`schedule`，不要输出 action_id。
 - “明天 10 点到 11 点订会议室” → capability_id=`meeting`，不要输出 `schedule_meeting` 或工具名。
 - “查看我发起的审批” → capability_id=`approval_process`，不要误选待办审批收件箱。
+
+协议行为示例（示例只说明何时澄清或停止，不定义具体动作、工具名或业务字段）：
+- 信息不完整：用户提出某项业务请求但缺少动作目录要求的必要信息时，保留用户已给出的内容，返回 FIELD_CLARIFICATION，清楚说明还需要补充什么；不要猜测缺失值，也不要为了继续而创建执行计划。
+- 请求不支持：当前能力目录和动作目录都没有对应能力时，返回 UNSUPPORTED 并停止在用户可见的说明；不要改选看似接近的领域，不要委派其他执行器尝试处理。
+- 多对象指代：当前上下文同时存在两项或以上可能对象，而用户只说“那个/刚才的”时，使用 context_intent=`AMBIGUOUS` 并请求名称或序号；不要选择排序第一项，也不要填写任何来源 ID。
+- 两轮补充：上一轮已经留下“待补字段的已编译计划”，本轮只补充时间、标题等字段时，使用 continuation_mode=`resume`，candidate_plan 只填写本轮新增或修正的字段；不得重新选择领域或动作，不得要求用户重复上一轮已经给出的字段。
 
 调用 route_conversation 时按 JSON 参数提交（只填你知道的值，不要编造）：
 {"capability_id": "schedule", "strategy": "direct", "confidence": 0.92, "task_complexity": "simple"}

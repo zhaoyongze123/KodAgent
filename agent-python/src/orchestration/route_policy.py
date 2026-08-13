@@ -1,46 +1,25 @@
-"""Route turn policy: the single source of truth that maps a compiled route
-to how the next model call must behave.
+"""路由回合策略：把已编译路由映射为下一次模型调用行为的唯一事实源。
 
-The previous design scattered the same decision across ``_terminal_route_response``,
-``_selection_response`` and ``_override`` in ``plan_projection``. Each branch
-re-combined ``planStatus``, ``actionId`` and ``executionClass`` on its own, which
-let three symptoms reinforce each other:
+文件职责
+========
+历史上，``plan_projection`` 的多个分支各自组合 ``planStatus``、``actionId`` 与
+``executionClass``，导致字段澄清被过早终止、无法唯一推导动作时仍强制握手、以及
+用户补齐字段后路由工具被移出工具列表等问题。本模块将这些分散判断收敛为一张纯
+决策表，所有调用方只能消费同一份 ``TurnPolicy``。
 
-1. ``FIELD_CLARIFICATION`` (missing user fields) was treated like a terminal
-   failure, so the model never got a chance to author a natural clarification
-   and the user received a terse fixed string.
-2. ``ACTION_SELECTION`` forced a second routing call even when the payload
-   could not infer any action, producing an extra model call that then landed
-   in the terminal short-circuit above.
-3. Clarification copy was a hard-coded generic sentence that did not say which
-   fields were missing.
-4. ``FIELD_CLARIFICATION`` also stripped ``route_conversation`` from the
-   palette, so after the user supplied the missing fields the model could not
-   re-route the corrected payload: its natural re-route call was treated as an
-   out-of-palette violation and replaced by a dead-end terminal, aborting the
-   booking before execution.
+四种模式
+========
+* ``DETERMINISTIC_TERMINAL``：代码直接回复，模型不参与。仅用于模型绝不能
+  解释的边界，例如 ``UNSUPPORTED`` 与 ``CONFIRMATION_REQUIRED``。
+* ``MODEL_RESPONSE``：模型可自然语言澄清，但工具列表仍被代码收紧。
+* ``HANDSHAKE``：只有能唯一推导已注册动作时，模型才必须提交协议调用。
+* ``EXECUTE``：模型只能调用已编译执行器，否则代码返回确定性执行澄清。
 
-This module replaces those branches with one pure decision table. A turn is one
-of four modes:
-
-- ``DETERMINISTIC_TERMINAL``: code answers; the model is not called. This is
-  reserved for boundaries the model must not interpret (``UNSUPPORTED`` so a
-  provider cannot fabricate a service outage, ``CONFIRMATION_REQUIRED`` so a
-  confirmation card cannot be bypassed by prose).
-- ``MODEL_RESPONSE``: the model answers naturally while code keeps the tool
-  palette restricted. Used for field clarifications and for action selection
-  when the payload cannot infer an action yet (the user must provide more
-  fields; a clarification is the legal output, not a protocol violation).
-- ``HANDSHAKE``: the model must emit the protocol call. Used for action
-  selection only when the payload can uniquely infer a registered action.
-- ``EXECUTE``: the model must call the compiled executor (or the run ends
-  with the deterministic execution clarification).
-
-Safety invariants stay in ``route_state.is_terminal_structured_failure`` and
-are unchanged: field clarifications never open delegation or business tools.
-``route_conversation`` stays visible because it is the routing protocol, not a
-business tool: once the user supplies the missing fields the model must be able
-to re-route the corrected payload instead of being forced into a dead-end.
+安全不变量
+==========
+``route_state.is_terminal_structured_failure`` 保证字段澄清不开放委派或业务工具。
+``route_conversation`` 始终可见，因为它是路由协议而不是业务工具；用户补齐字段后
+模型必须能够重新路由修正后的载荷，而不是进入死路。
 """
 
 from __future__ import annotations
@@ -67,11 +46,10 @@ _WRITE_WORKFLOW_CAPABILITIES = frozenset({"party_file", "meeting", "schedule"})
 
 _PLANNING_PALETTE = frozenset({"report_progress", "route_conversation"})
 _HANDSHAKE_PALETTE = frozenset({"report_progress", "route_conversation"})
-# Terminal turns never call the model, so only narration stays relevant.
+# 终态回合不会调用模型，因此仅保留面向用户的进度播报。
 _TERMINAL_PALETTE = frozenset({"report_progress"})
-# Field clarifications keep the routing protocol visible: after the user
-# supplies the missing fields the model must be able to re-route the corrected
-# payload. Business tools and delegation remain closed (see module docstring).
+# 字段澄清必须保留路由协议：用户补齐字段后模型要能重新路由修正载荷；业务工具和
+# 委派仍然关闭，具体原因见本文件顶部的安全不变量。
 _FIELD_CLARIFICATION_WRITE_PALETTE = frozenset({"report_progress", "route_conversation"})
 _FIELD_CLARIFICATION_READ_PALETTE = frozenset({"task", "report_progress", "route_conversation"})
 _FALLBACK_PALETTE = frozenset({"task", "report_progress"})
@@ -85,7 +63,7 @@ class TurnMode(str, Enum):
 
 @dataclass(frozen=True)
 class TurnPolicy:
-    """What the next model call is allowed and required to do."""
+    """描述下一次模型调用允许做什么、且必须做什么的不可变策略。"""
 
     mode: TurnMode
     planning_tools: frozenset[str] = field(default_factory=frozenset)
@@ -101,10 +79,10 @@ def eval_route_only_enabled() -> bool:
 
 
 def selection_action(route: dict[str, Any] | None):
-    """Return the unique action inferred from the route payload, if any.
+    """从路由载荷推导唯一动作；不能唯一推导时返回 ``None``。
 
-    ``None`` means the user has not supplied enough structured fields to pick
-    a registered action; a clarification is then the legal model output.
+    此时用户尚未提供足够结构化字段来选择已注册动作，合法模型输出应是澄清，
+    不能伪造 ``action_id``。
     """
     if not isinstance(route, dict):
         return None
@@ -132,6 +110,15 @@ def selection_action(route: dict[str, Any] | None):
         else None
     ) or selection.get("suggestedActionId")
     action = resolve_action(capability, str(suggested or "").strip()) if suggested else None
+    # 服务端仅在“会议写动词被误选为读取动作”的窄边界标记此开关。这里的
+    # suggestedActionId 仍只是下一阶段的受限枚举，不携带业务字段、更不授予
+    # 执行权；模型必须据当前用户原文填写 candidate_plan 后重新调用路由工具。
+    force_structured_submission = bool(
+        selection.get("requiresStructuredSubmission")
+        or selection.get("requires_structured_submission")
+    )
+    if force_structured_submission:
+        return (action, candidate, query) if action is not None else None
     if action is None or suggest_action_id_from_payload(
         capability, candidate, query, execution_class
     ) != action.action_id:

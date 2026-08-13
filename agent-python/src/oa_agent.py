@@ -1,3 +1,11 @@
+"""OA Agent 主图装配入口。
+
+调用链：应用启动调用 ``build_agent`` -> 注册全部工具契约、领域子 Agent 与中间件
+-> DeepAgents 创建主图。模型配置不在这里固定，而由 ``DynamicModelMiddleware``
+按 Run 从 Java 设置服务解析；这里的 ChatOpenAI 仅用于满足建图类型要求，不能
+作为后备模型调用。
+"""
+
 import os
 from datetime import datetime
 
@@ -55,7 +63,7 @@ from .subagents.registry import build_subagents
 from .orchestration.tool_registry import business_tools, main_tools, meeting_workflow_enabled
 
 def skill_files() -> dict[str, dict[str, str]]:
-    """Expose Skill resources to StateBackend without globally loading them."""
+    """向 StateBackend 暴露 Skill 文件资源，但不在启动时全量加载到提示词中。"""
     return {
         path: create_file_data(content)
         for path, content in skill_registry.files().items()
@@ -71,11 +79,9 @@ def build_agent(*, use_checkpointer: bool = True):
     current_business_time = datetime.now(AGENT_TIMEZONE).strftime(
         "%Y-%m-%d %H:%M:%S"
     )
-    # DeepAgents needs a BaseChatModel while assembling the graph, but the
-    # real model is resolved per Run by DynamicModelMiddleware from the Java
-    # settings service.  This local, non-routable placeholder retains the
-    # historical construction name for compatibility, but can never call an
-    # OpenAI gateway or act as a fallback provider.
+    # DeepAgents 建图时需要 BaseChatModel；真实模型由 DynamicModelMiddleware 在
+    # 每个 Run 中从 Java 设置服务解析。此处不可路由的本地占位模型只为兼容建图，
+    # 绝不能调用 OpenAI 网关或充当后备供应商。
     chat_model = ChatOpenAI(
         model="gpt-5.6-luna",
         api_key="runtime-model-is-resolved-per-run",
@@ -87,13 +93,11 @@ def build_agent(*, use_checkpointer: bool = True):
         timeout=1,
     )
 
-    # Domain child specifications are owned by the subagent registry.
+    # 领域子 Agent 规格统一由 subagent registry 维护。
     subagents = build_subagents(
         current_business_time,
-        # A deterministic workflow is the preferred executor for its covered
-        # contract, not a replacement for the whole meeting domain.  Keep the
-        # ReAct child registered for follow-up questions and unsupported
-        # multi-step requests that the workflow intentionally does not model.
+        # 确定性工作流只是其覆盖契约的优先执行器，不替代完整会议领域。仍保留
+        # ReAct 子 Agent 处理追问和工作流刻意未覆盖的复杂多步请求。
         include_meeting_agent=True,
     )
 

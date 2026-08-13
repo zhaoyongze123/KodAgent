@@ -29,7 +29,7 @@ public class AgentModelConfigController {
     public Map<String,Object> save(@RequestBody Map<String,Object> request) { return service.saveProvider(getTenantId(), request); }
 
     @DeleteMapping("/admin-api/agent/model-providers/{providerId}")
-    @Operation(summary = "停用 Agent 模型供应商")
+    @Operation(summary = "删除 Agent 模型供应商及关联模型配置")
     public void delete(@PathVariable Long providerId) { service.deleteProvider(getTenantId(), providerId); }
 
     @PostMapping("/admin-api/agent/model-providers/{providerId}/test")

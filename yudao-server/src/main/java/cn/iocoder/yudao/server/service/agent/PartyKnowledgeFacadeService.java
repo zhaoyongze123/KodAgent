@@ -29,11 +29,11 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * Authorization boundary for derived party-file knowledge.
+ * 党务文件派生知识的授权边界。
  *
- * <p>PostgreSQL tenant columns narrow the candidate set only. The final fact
- * is PartyFileService's employee visibility rule, evaluated with the current
- * SecurityContext user before any derived document or chunk is returned.</p>
+ * <p>PostgreSQL 的租户列只能缩小候选集合，最终事实必须是
+ * {@link PartyFileService} 按当前 {@code SecurityContext} 用户计算的员工可见性
+ * 规则。任何派生文档或文本分块返回前都要重新执行该规则。</p>
  */
 @Service
 public class PartyKnowledgeFacadeService {
@@ -46,7 +46,7 @@ public class PartyKnowledgeFacadeService {
     @Resource
     private PartyFileService partyFileService;
 
-    /** Read-only operational evidence for validating the real PG/vector path. */
+    /** 返回只读运行证据，用于核验真实 PostgreSQL 向量检索链路。 */
     public Map<String, Object> health(Long tenantId, Long userId) {
         requireIdentity(tenantId, userId);
         Map<String, Object> result = new LinkedHashMap<>();
@@ -82,8 +82,8 @@ public class PartyKnowledgeFacadeService {
         List<SearchHit> hits = new ArrayList<>();
         Set<Long> recheckedSources = new LinkedHashSet<>();
         for (ChunkRecord candidate : retrieval.chunks) {
-            // A visibility page is only a snapshot. Re-check through the OA
-            // service immediately before exposing each source's derived text.
+            // 可见性分页结果只是快照；暴露每个来源的派生文本前必须立即经 OA 服务
+            // 复核，避免权限在查询和返回之间发生变化。
             if (recheckedSources.add(candidate.sourcePartyFileId)) {
                 requireSourceVisible(candidate.sourcePartyFileId, userId, userNickname, visiblePartyFileIds);
             }
@@ -112,8 +112,8 @@ public class PartyKnowledgeFacadeService {
     private Set<Long> visiblePartyFileIds(Long userId) {
         PartyFileMyPageReqVO request = new PartyFileMyPageReqVO();
         request.setPageNo(1);
-        // This is an internal service invocation. PAGE_SIZE_NONE deliberately
-        // evaluates the complete employee-visible fact set before PG lookup.
+        // 这是内部服务调用。PG 查询前故意用 PAGE_SIZE_NONE 计算当前员工完整的
+        // 可见事实集合，不能只取第一页后误判权限。
         request.setPageSize(PageParam.PAGE_SIZE_NONE);
         PageResult<PartyFileRespVO> page = partyFileService.getMyPartyFilePage(userId, request);
         if (page == null || page.getList() == null) return Collections.emptySet();
@@ -143,9 +143,8 @@ public class PartyKnowledgeFacadeService {
             }
             return new RetrievalResult(rerankHybrid(vectorCandidates, keywordCandidates, resultLimit), "hybrid");
         } catch (RuntimeException ignored) {
-            // pgvector must improve recall, not make an authorized keyword
-            // query unavailable. The response carries this degraded state so
-            // callers and telemetry can distinguish it from normal hybrid use.
+            // pgvector 只能提高召回，不能让已授权的关键词查询不可用。响应携带降级
+            // 状态，使调用方和监控能区分正常混合检索与向量不可用。
             return new RetrievalResult(keywordCandidates.subList(0, Math.min(resultLimit, keywordCandidates.size())), "keyword_degraded_vector_unavailable");
         }
     }
@@ -282,9 +281,8 @@ public class PartyKnowledgeFacadeService {
     private void requireSourceVisible(Long sourcePartyFileId, Long userId, String userNickname,
                                       Set<Long> visiblePartyFileIds) {
         if (!visiblePartyFileIds.contains(sourcePartyFileId)) throw notFound();
-        // This service applies the definitive ALL/USER/DEPT/ROLE rule again,
-        // protects against a page-to-read TOCTOU change, and records reading
-        // only after the user actually consumes knowledge from that document.
+        // 这里再次执行最终的 ALL/USER/DEPT/ROLE 可见性规则，防止分页查询到读取
+        // 正文之间发生 TOCTOU 权限变化；只有用户实际读取该文档知识后才记录已读。
         partyFileService.getMyPartyFileDetail(sourcePartyFileId, userId, userNickname);
     }
 
@@ -295,7 +293,7 @@ public class PartyKnowledgeFacadeService {
     }
 
     private RuntimeException notFound() {
-        // Deliberately use one response for absent and inaccessible records.
+        // 对不存在和无权访问统一返回同一响应，避免通过错误差异枚举文档。
         return ServiceExceptionUtil.exception0(404, "知识文档不存在或当前用户无权访问");
     }
 
@@ -406,9 +404,8 @@ public class PartyKnowledgeFacadeService {
         }
 
         private ChunkRecord withHybridScore() {
-            // Cosine similarity falls in [-1, 1]; ts_rank is unbounded, so
-            // normalize both independently before applying the documented
-            // 85/15 semantic/lexical blend.
+            // 余弦相似度范围为 [-1, 1]，ts_rank 没有上界；两者必须分别归一化后
+            // 再按既定的 85/15 语义/词法权重融合。
             double semantic = Math.max(0.0d, Math.min(1.0d, (semanticScore + 1.0d) / 2.0d));
             double keyword = Math.max(0.0d, Math.min(1.0d, keywordScore));
             return new ChunkRecord(record.chunkId, record.documentId, record.sourcePartyFileId,
