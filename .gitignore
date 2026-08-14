@@ -131,6 +131,12 @@ logs/
 !/README.md
 !/pom.xml
 
+# README 中展示的公开产品截图。
+!/docs/
+/docs/*
+!/docs/images/
+!/docs/images/**
+
 !/agent-python/
 !/agent-python/**
 !/agent-chat-ui/

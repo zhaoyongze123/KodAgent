@@ -22,7 +22,7 @@
 ### 对话入口
 
 <p align="center">
-  <img src="./image.png" alt="KodAgent 对话入口与办公任务快捷入口" width="92%" />
+  <img src="./docs/images/chat-entry.png" alt="KodAgent 对话入口与办公任务快捷入口" width="92%" />
 </p>
 
 <p align="center"><sub>自然语言入口，覆盖审批、日程、会议预约和党务文件等常用办公任务。</sub></p>
@@ -34,12 +34,12 @@
     <td width="50%" valign="top">
       <strong>多轮任务执行</strong><br />
       <sub>展示路由、查询、工作流执行与过程结果。</sub><br /><br />
-      <img src="./image-5.png" alt="KodAgent 多轮任务执行过程" width="100%" />
+      <img src="./docs/images/multi-turn-execution.png" alt="KodAgent 多轮任务执行过程" width="100%" />
     </td>
     <td width="50%" valign="top">
       <strong>写操作确认卡</strong><br />
       <sub>修改会议预约先生成草稿，用户确认后才提交。</sub><br /><br />
-      <img src="./image-6.png" alt="会议预约修改确认卡" width="100%" />
+      <img src="./docs/images/meeting-update-confirmation.png" alt="会议预约修改确认卡" width="100%" />
     </td>
   </tr>
 </table>
@@ -51,12 +51,12 @@
     <td width="50%" valign="top">
       <strong>审批待办洞察</strong><br />
       <sub>基于授权的待办数据生成风险与优先级分析。</sub><br /><br />
-      <img src="./image-1.png" alt="待办审批洞察与风险分析" width="100%" />
+      <img src="./docs/images/approval-insight.png" alt="待办审批洞察与风险分析" width="100%" />
     </td>
     <td width="50%" valign="top">
       <strong>管理员运行台</strong><br />
       <sub>查看运行趋势、关键漏斗、失败信号和工具健康度。</sub><br /><br />
-      <img src="./image-2.png" alt="Agent 管理员运行趋势与执行漏斗" width="100%" />
+      <img src="./docs/images/analytics-dashboard.png" alt="Agent 管理员运行趋势与执行漏斗" width="100%" />
     </td>
   </tr>
 </table>
@@ -64,7 +64,7 @@
 #### 可交互执行拓扑
 
 <p align="center">
-  <img src="./image-3.png" alt="Agent 多阶段执行拓扑与运行指标" width="100%" />
+  <img src="./docs/images/execution-topology.png" alt="Agent 多阶段执行拓扑与运行指标" width="100%" />
 </p>
 
 <p align="center"><sub>按主 Agent、领域执行、业务 Operation、人工确认和跨领域协调呈现真实运行事件，可缩放、平移并查看节点指标。</sub></p>
@@ -72,7 +72,7 @@
 ### 模型供应商管理
 
 <p align="center">
-  <img src="./image-4.png" alt="模型供应商配置、连通性测试与模型同步" width="92%" />
+  <img src="./docs/images/model-providers.png" alt="模型供应商配置、连通性测试与模型同步" width="92%" />
 </p>
 
 <p align="center"><sub>统一管理兼容 OpenAI 协议的模型供应商、连接检测和模型同步。</sub></p>
