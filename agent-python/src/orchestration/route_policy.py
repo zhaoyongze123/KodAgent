@@ -259,6 +259,12 @@ def decide_turn_policy(route: dict[str, Any] | None) -> TurnPolicy:
             planning_tools=frozenset({executor}),
         )
 
+    if state == "COORDINATION_READY":
+        # 跨领域批次没有单一业务 executor。它只能由后续协调执行桥读取已持久化
+        # 的 CoordinationBatch 后派发，不能掉回普通规划工具让模型重新拆分步骤。
+        # 这里关闭模型工具，执行桥接入后会在同一状态前接管实际派发。
+        return TurnPolicy(mode=TurnMode.MODEL_RESPONSE, planning_tools=frozenset())
+
     if state == "FALLBACK":
         # The route tool asked for the domain ReAct fallback. Delegation and
         # narration stay visible so the child can handle it without touching

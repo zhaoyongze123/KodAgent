@@ -98,6 +98,8 @@ public class OaAgentAuthInterceptor implements HandlerInterceptor {
         mapping.put("party-file:attachment:write", new String[]{"system:party-file:update"});
         mapping.put("model:read", new String[]{"system:agent-model:query"});
         mapping.put("model:manage", new String[]{"system:agent-model:manage"});
+        // 运行台展示跨用户的全院聚合与追踪，不能复用所有人均可写事件的 agent:audit。
+        mapping.put("agent:analytics:read", new String[]{"system:agent-model:manage"});
         String[] permissions = mapping.get(requested);
         if (permissions == null || !securityFrameworkService.hasAnyPermissions(permissions)) {
             throw new AgentAuthorizationException("当前用户没有调用该 Agent 工具的权限");

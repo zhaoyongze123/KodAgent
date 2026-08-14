@@ -15,6 +15,7 @@ import cn.iocoder.yudao.module.system.service.partyfile.PartyFileAttachmentServi
 import cn.iocoder.yudao.module.system.service.partyfile.PartyFileCategoryService;
 import cn.iocoder.yudao.module.system.service.partyfile.PartyFileService;
 import cn.iocoder.yudao.server.service.agent.AgentPartyFileDraftService;
+import cn.iocoder.yudao.server.service.agent.AgentPartyFileMetadataQueryService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.web.bind.annotation.*;
@@ -42,13 +43,14 @@ public class AgentPartyFileToolController {
     @Resource private PartyFileCategoryService partyFileCategoryService;
     @Resource private PartyFileAttachmentService partyFileAttachmentService;
     @Resource private AgentPartyFileDraftService partyFileDraftService;
+    @Resource private AgentPartyFileMetadataQueryService partyFileMetadataQueryService;
 
     @GetMapping("/party-files/my-page") @Operation(summary = "获取当前用户可见的党务文件")
     public PageResult<PartyFileRespVO> listMyPartyFiles(@Valid PartyFileMyPageReqVO request) { return partyFileService.getMyPartyFilePage(getLoginUserId(), request); }
 
     @PostMapping("/party-files/query-plan") @Operation(summary = "执行当前用户可见党务文件元数据查询计划")
     public Map<String, Object> queryPartyFileMetadataPlan(@RequestBody Map<String, Object> plan) {
-        return partyFileService.executeMyPartyFileMetadataPlan(getLoginUserId(), plan);
+        return partyFileMetadataQueryService.execute(getLoginUserId(), plan);
     }
 
     @GetMapping("/party-files/my-get") @Operation(summary = "获取党务文件详情并记录已读")
@@ -177,7 +179,7 @@ public class AgentPartyFileToolController {
                 new LinkedHashMap<String, Object>() {{ put("field", "publishTime"); put("operator", "GTE"); put("value", startTime.toString()); }},
                 new LinkedHashMap<String, Object>() {{ put("field", "publishTime"); put("operator", "LT"); put("value", endTime.toString()); }}));
         plan.put("rank", new LinkedHashMap<String, Object>() {{ put("field", "publishTime"); put("mode", "desc"); }});
-        Map<String, Object> raw = partyFileService.executeMyPartyFileMetadataPlan(getLoginUserId(), plan);
+        Map<String, Object> raw = partyFileMetadataQueryService.execute(getLoginUserId(), plan);
         List<?> matches = raw.get("matches") instanceof List ? (List<?>) raw.get("matches") : Collections.emptyList();
         int read = 0;
         Map<String, Integer> byCategory = new LinkedHashMap<>();

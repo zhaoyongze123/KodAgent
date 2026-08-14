@@ -31,6 +31,7 @@ from .route_state import (
 )
 from .execution_contracts import contract_for_executor
 from .target_resolution import is_target_resolution_route, target_resolution_spec
+from ..domain.plan import CompiledTaskPlan
 
 
 WORK_ORDER_MARKER = "KODAGENT_WORK_ORDER:"
@@ -161,6 +162,50 @@ def work_order_from_route(
         return None
 
 
+def work_order_from_compiled_plan(
+    compiled: CompiledTaskPlan,
+    *,
+    user_context: str | None = None,
+    revision: int = 1,
+) -> WorkOrder | None:
+    """把单个已编译计划转换为领域子 Agent 可执行的 WorkOrder。
+
+    参数：
+        compiled：只能来自 ``compile_plan`` 的 RESOLVED 结果，不能由模型手写。
+        user_context：仅用于子 Agent 理解，不参与业务字段或权限判断。
+        revision：协作批次内该步骤的计划版本。
+
+    该函数供跨领域批次编译器复用；它与 ``work_order_from_route`` 使用同一份
+    执行契约校验，因此批处理不会另起一条可绕过单领域边界的派发路径。
+    """
+
+    if compiled.status != "RESOLVED" or not compiled.execution_tool:
+        return None
+    canonical = dict(compiled.canonical or {})
+    action_id = str(canonical.get("action_id") or canonical.get("actionId") or "").strip()
+    action = resolve_action(compiled.capability_id, action_id)
+    if action is None or action.execution_tool != compiled.execution_tool:
+        return None
+    contract = contract_for_executor(compiled.execution_tool)
+    if contract is None or not contract.is_available():
+        return None
+    try:
+        return WorkOrder(
+            planId=compiled.plan_id,
+            domain=compiled.capability_id,
+            action=action.action_id,
+            executionTool=compiled.execution_tool,
+            canonicalPlan=canonical,
+            allowedCapabilities=(compiled.capability_id,),
+            allowedActions=(action.action_id,),
+            allowedExecutors=(compiled.execution_tool,),
+            revision=revision,
+            userContext=user_context.strip() if isinstance(user_context, str) and user_context.strip() else None,
+        )
+    except (TypeError, ValueError):
+        return None
+
+
 def serialize_work_order(work_order: WorkOrder) -> str:
     """将 WorkOrder 序列化为 ``task.description`` 可识别的单行标记。"""
     return WORK_ORDER_MARKER + json.dumps(
@@ -184,5 +229,5 @@ def parse_work_order(text: str) -> WorkOrder | None:
 
 __all__ = [
     "ExecutionResult", "WORK_ORDER_MARKER", "WORK_ORDER_SCHEMA_VERSION", "WorkOrder",
-    "domain_agent_for_route", "parse_work_order", "serialize_work_order", "work_order_from_route",
+    "domain_agent_for_route", "parse_work_order", "serialize_work_order", "work_order_from_compiled_plan", "work_order_from_route",
 ]

@@ -1,6 +1,7 @@
 package cn.iocoder.yudao.server.controller.agent;
 
 import cn.iocoder.yudao.server.service.agent.AgentRunEventService;
+import cn.iocoder.yudao.server.service.agent.AgentAnalyticsService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.web.bind.annotation.*;
@@ -15,6 +16,12 @@ import java.util.Map;
 import static cn.iocoder.yudao.framework.security.core.util.SecurityFrameworkUtils.getLoginUserId;
 import static cn.iocoder.yudao.framework.tenant.core.context.TenantContextHolder.getTenantId;
 
+/**
+ * Agent 运行事件、管理员运行台与取消操作的 HTTP 入口。
+ *
+ * <p>普通运行事件仍按当前用户写入和读取；统计相关接口由独立的管理员权限保护，
+ * 只能读取服务端根据当前租户确定的范围，不能由浏览器传入用户编号扩大查询。</p>
+ */
 @Tag(name = "Business Agent Runs")
 @RestController
 @RequestMapping("/agent/runs")
@@ -22,6 +29,36 @@ public class AgentRunController {
 
     @Resource
     private AgentRunEventService agentRunEventService;
+
+    @Resource
+    private AgentAnalyticsService agentAnalyticsService;
+
+    @GetMapping("/analytics/overview")
+    @Operation(summary = "读取管理员 Agent 运行台概览")
+    public Map<String, Object> analyticsOverview(
+            @RequestParam(value = "days", defaultValue = "14") int days,
+            @RequestParam(value = "granularity", defaultValue = "day") String granularity) {
+        return agentAnalyticsService.overview(getTenantId(), days, granularity);
+    }
+
+    /** 管理员按状态和领域分页筛选最近运行，用于失败定位表格。 */
+    @GetMapping("/analytics/runs")
+    @Operation(summary = "读取管理员最近 Agent 运行列表")
+    public Map<String, Object> analyticsRuns(
+            @RequestParam(value = "days", defaultValue = "14") int days,
+            @RequestParam(value = "status", required = false) String status,
+            @RequestParam(value = "domain", required = false) String domain,
+            @RequestParam(value = "pageNo", defaultValue = "1") int pageNo,
+            @RequestParam(value = "pageSize", defaultValue = "20") int pageSize) {
+        return agentAnalyticsService.listRuns(getTenantId(), days, status, domain, pageNo, pageSize);
+    }
+
+    /** 管理员读取单次运行的 allowlist 追踪时间线，不返回原始提示词或工具结果。 */
+    @GetMapping("/analytics/runs/{runId}")
+    @Operation(summary = "读取管理员 Agent 运行安全追踪")
+    public Map<String, Object> analyticsRunTrace(@PathVariable String runId) {
+        return agentAnalyticsService.runTrace(getTenantId(), runId);
+    }
 
     @PostMapping("/{runId}/events")
     @Operation(summary = "保存 Agent 运行事件")

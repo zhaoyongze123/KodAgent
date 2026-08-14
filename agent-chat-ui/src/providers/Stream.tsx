@@ -122,7 +122,7 @@ const StreamSession = ({
   authScheme?: string;
 }) => {
   const [threadId, setThreadId] = useQueryState("threadId");
-  const { getThreads, setThreads } = useThreads();
+  const { reloadThreads } = useThreads();
   const [processEvents, setProcessEvents] = useState<AgentCustomEvent[]>([]);
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
   const [streamErrorRunId, setStreamErrorRunId] = useState<string | null>(null);
@@ -334,19 +334,52 @@ const StreamSession = ({
     onStop: () => {
       const runId = activeRunIdRef.current;
       if (!runId || !threadId) return;
-      void fetch(`/api/agent-runs/${encodeURIComponent(runId)}/cancel`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ threadId }),
-        keepalive: true,
-      }).catch(() => undefined);
-      failedRunIdsRef.current.delete(runId);
-      if (typeof window !== "undefined") {
-        clearLiveRunId(window.sessionStorage, threadId, runId);
-      }
-      activeRunIdRef.current = null;
-      activeRunThreadIdRef.current = null;
-      setCurrentRunId(null);
+      // SDK 只停止浏览器流；这里再请求服务端中断真正的 LangGraph Run。
+      // 只有后端明确确认已中断，才移除本地恢复标记，避免已完成 Run 被浏览器
+      // 误标为取消，或因网络失败丢失仍可恢复的运行。
+      void (async () => {
+        try {
+          const response = await fetch(
+            `/api/agent-runs/${encodeURIComponent(runId)}/cancel`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ threadId }),
+              keepalive: true,
+            },
+          );
+          const result = (await response.json().catch(() => null)) as {
+            cancelled?: boolean;
+            error?: string;
+          } | null;
+          if (!result?.cancelled) {
+            // 例如 Run 已完成、已不存在，或 LangGraph 暂不可用。此时保留
+            // 会话恢复信息，由协调器重新读取 LangGraph 的真实终态。
+            console.info("未取消 LangGraph Run，保留真实状态等待同步", {
+              runId,
+              status: response.status,
+              reason: result?.error,
+            });
+            return;
+          }
+
+          failedRunIdsRef.current.delete(runId);
+          if (typeof window !== "undefined") {
+            clearLiveRunId(window.sessionStorage, threadId, runId);
+          }
+          if (activeRunIdRef.current === runId) {
+            activeRunIdRef.current = null;
+            activeRunThreadIdRef.current = null;
+            setCurrentRunId(null);
+          }
+          if (!response.ok) {
+            toast.warning("任务已停止，但取消记录稍后需要补齐。");
+          }
+        } catch (error) {
+          // 网络失败不覆盖运行状态；恢复协调器仍可重新挂接这个 Run。
+          console.warn("请求停止 LangGraph Run 失败", { runId, error });
+        }
+      })();
     },
     onCustomEvent: (event, options) => {
       const traceId = traceIdRef.current;
@@ -417,7 +450,7 @@ const StreamSession = ({
       setStreamErrorRunId(null);
       // Refetch threads list when thread ID changes.
       // Wait for some seconds before fetching so we're able to get the new thread that was created.
-      sleep().then(() => getThreads().then(setThreads).catch(console.error));
+      sleep().then(() => reloadThreads().catch(console.error));
     },
   } satisfies StreamOptions;
   const streamValue = useTypedStream(streamOptions);

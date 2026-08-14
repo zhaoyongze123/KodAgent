@@ -26,6 +26,7 @@ from .personal_schedule_approval import PersonalScheduleApprovalArgsMiddleware
 from .personal_schedule_approval_resume import PersonalScheduleApprovalResumeMiddleware
 from .tool_audit import ToolAuditMiddleware
 from .workflow_task_guard import DeterministicWorkflowTaskGuardMiddleware
+from .coordination_approval_sync import CoordinationApprovalSyncMiddleware
 from ..services.party_file_approval import PartyFileApprovalAutoConfirmMiddleware
 
 
@@ -65,6 +66,8 @@ def build_middleware_chain(*, dynamic_model: Any | None = None, phase_prompt: An
         ApprovalResumeGateMiddleware(),
         MeetingApprovalResumeMiddleware(),
         PersonalScheduleApprovalResumeMiddleware(),
+        # 各领域确认工具已经完成后，再同步其 Operation 对应的协作步骤终态。
+        CoordinationApprovalSyncMiddleware(),
         main_approval_tool_limit_middleware(),
     ]
     names = [str(getattr(item, "name", item.__class__.__name__)) for item in items]
@@ -84,6 +87,7 @@ def build_middleware_chain(*, dynamic_model: Any | None = None, phase_prompt: An
         ("MeetingApprovalAutoConfirmMiddleware", "MeetingApprovalResumeMiddleware"),
         ("ApprovalResumeGateMiddleware", "MeetingApprovalResumeMiddleware"),
         ("PersonalScheduleApprovalArgsMiddleware", "PersonalScheduleApprovalResumeMiddleware"),
+        ("PersonalScheduleApprovalResumeMiddleware", "CoordinationApprovalSyncMiddleware"),
     )
     positions = {name: index for index, name in enumerate(names)}
     for before, after in required_order:

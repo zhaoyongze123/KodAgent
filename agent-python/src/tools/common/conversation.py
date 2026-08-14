@@ -67,10 +67,16 @@ from ...orchestration.action_selection import (
     recover_approval_read_action,
 )
 from ...orchestration.compiler import compile_plan
+from ...orchestration.coordination_compiler import (
+    CoordinationCandidateStep,
+    CoordinationCompilationError,
+    compile_coordination_batch,
+)
 from ...orchestration.conversation_context import ContextIntent, verify_context_candidate_proof
 from ...orchestration.target_resolution import target_resolution_compiled_route
 from ...orchestration.planning.party_file import normalize_party_file_operation
 from ...orchestration.planning.resources import infer_workflow_capability
+from ...persistence.operation_store import OperationStore
 from .events import current_agent_context, emit
 from langgraph.config import get_stream_writer
 from .contracts import ToolResponse, tool_failure, tool_success
@@ -128,7 +134,10 @@ class RouteConversationInput(BaseModel):
         default=None,
         min_length=16,
         max_length=128,
-        description="仅传当前提示词展示的上下文候选 ID；不能用它代替 source_*_id 或审批确认。",
+        description=(
+            "仅传当前提示词展示的上下文候选 ID；界面返回的 sourceResultId/result:... 不是候选 ID，"
+            "也不能用它代替 source_*_id 或审批确认。"
+        ),
     )
     context_intent: ContextIntent = Field(
         default="NEW_REQUEST",
@@ -152,6 +161,17 @@ class RouteConversationInput(BaseModel):
             "键名必须使用 Action Catalog 的正式字段名，值类型与格式遵循其"
             "字段格式约定：datetime 为 yyyy-MM-dd HH:mm:ss，date 为 yyyy-MM-dd，"
             "integer 为纯数字，array 为字符串数组；缺失字段不要编造。"
+        ),
+    )
+    steps: list[CoordinationCandidateStep] | None = Field(
+        default=None,
+        min_length=2,
+        max_length=4,
+        description=(
+            "仅用于一次请求包含 2 到 4 个相互独立领域动作的跨领域路由。每项必须"
+            "填写稳定 step_id、正式 capability_id、action_id、execution_class 与结构化 candidate_plan。"
+            "步骤会分别经过中央编译并生成 WorkOrder；不得填写工具名、子 Agent 名称、"
+            "依赖关系或上一步结果中的业务 ID。"
         ),
     )
 
@@ -766,6 +786,163 @@ def _recover_typed_schedule_query_candidate(
     return normalized
 
 
+def _coordination_step_summaries(steps: tuple[Any, ...]) -> list[dict[str, Any]]:
+    """将已签发批次投影为可给主 Agent 看的最小步骤摘要。
+
+    ``CoordinationBatch`` 内的 ``work_order`` 是子 Agent 的执行契约，可能包含
+    业务字段和内部来源信息。主 Agent 后续只需拿 ``batchId`` 交给协调执行桥，
+    不应从模型上下文重新拼装 WorkOrder，因此这里绝不回传完整 WorkOrder。
+    """
+
+    return [
+        {
+            "stepId": str(step.step_id),
+            "domain": str(step.domain),
+            "actionId": str(step.action_id),
+            "executorTool": str(step.executor_tool),
+            # 让后续协调执行桥能审计每步是否仍使用编译器签发的唯一 executor，
+            # 但不返回 canonicalPlan 或任何 source_*_id，避免主模型重组业务事实。
+            "workOrderSafety": {
+                "schemaVersion": (step.work_order or {}).get("schemaVersion"),
+                "planId": (step.work_order or {}).get("planId"),
+                "allowedCapabilities": (step.work_order or {}).get("allowedCapabilities", []),
+                "allowedActions": (step.work_order or {}).get("allowedActions", []),
+                "allowedExecutors": (step.work_order or {}).get("allowedExecutors", []),
+            },
+        }
+        for step in steps
+    ]
+
+
+def _compile_coordination_route(
+    *,
+    message: str,
+    steps: list[CoordinationCandidateStep] | list[dict[str, Any]],
+) -> ToolResponse:
+    """编译并持久化一次跨领域批次，但不在路由层执行任何子 Agent。
+
+    参数：
+        message：当前用户原文，只作为 WorkOrder 的澄清上下文和审计摘要。
+        steps：模型提交的 2 到 4 项独立候选步骤；每项都必须走现有
+            ``compile_plan -> WorkOrder`` 链路。
+
+    返回：成功时只返回批次 ID 和步骤摘要。协调器随后从 PostgreSQL 读取同一批次
+    并执行；失败时返回结构化澄清，保证任何未完整编译的步骤都不会被派发。
+    """
+
+    # ``route_conversation.func`` 在单元测试和少量内部调用中会绕过 LangChain 的
+    # Pydantic 输入适配，因此在入口再做一次严格转换，线上和测试使用同一契约。
+    try:
+        proposals = [
+            item if isinstance(item, CoordinationCandidateStep)
+            else CoordinationCandidateStep.model_validate(item)
+            for item in steps
+        ]
+    except (TypeError, ValueError) as exc:
+        return tool_success({
+            "routeState": "FIELD_CLARIFICATION",
+            "planStatus": "CLARIFY",
+            "clarification": {
+                "status": "CLARIFY",
+                "question": "跨领域请求的每个步骤都需要提供领域、动作类型和结构化条件。",
+                "issues": [f"跨领域步骤格式无效：{exc}"],
+                "missingFields": ["steps"],
+            },
+        })
+
+    runtime = current_agent_context()
+    required_context = {
+        "tenant_id": str(runtime.get("tenantId") or "").strip(),
+        "user_id": str(runtime.get("userId") or "").strip(),
+        "thread_id": str(runtime.get("threadId") or "").strip(),
+        "run_id": str(runtime.get("runId") or "").strip(),
+        "message_id": str(runtime.get("messageId") or "").strip(),
+    }
+    missing_context = [name for name, value in required_context.items() if not value]
+    if missing_context:
+        # 批次必须绑定真实的用户、Thread、Run 和消息。不能为了让本轮通过而用
+        # local-* 伪值落库，否则恢复、审计和后续 HITL 无法确认它属于谁。
+        return tool_failure(
+            "COORDINATION_CONTEXT_INVALID",
+            "当前跨领域请求缺少运行上下文，无法安全创建协作批次。",
+            details={"missing": missing_context},
+            retryable=False,
+            user_action="请重新发起当前请求。",
+        )
+
+    try:
+        batch = compile_coordination_batch(
+            proposals,
+            tenant_id=required_context["tenant_id"],
+            user_id=required_context["user_id"],
+            thread_id=required_context["thread_id"],
+            run_id=required_context["run_id"],
+            origin_run_id=str(runtime.get("originRunId") or required_context["run_id"]).strip(),
+            message_id=required_context["message_id"],
+            user_context=message,
+        )
+    except CoordinationCompilationError as exc:
+        # 中央编译是原子边界：任一步不符合 Action Catalog、WorkOrder 或特性开关，
+        # 整批都不会得到 batch ID，更不会出现“部分步骤绕过计划直接执行”。
+        return tool_success({
+            "routeState": "FIELD_CLARIFICATION",
+            "planStatus": "CLARIFY",
+            "clarification": {
+                "status": "CLARIFY",
+                "question": "这组跨领域请求中有步骤尚不能执行，请补充或拆分后重试。",
+                "issues": [str(exc)],
+                "missingFields": [],
+            },
+        })
+
+    try:
+        store = OperationStore()
+        try:
+            persisted = store.create_coordination_batch(batch)
+        finally:
+            store.close()
+    except Exception:
+        # 不把数据库连接、SQL 或认证细节传给模型。未持久化就不能交给后续协调器，
+        # 因此这里必须失败而不是返回一个只存在于内存中的 batch ID。
+        return tool_failure(
+            "COORDINATION_PERSISTENCE_UNAVAILABLE",
+            "跨领域协作状态暂时无法保存，请稍后重试。",
+            retryable=True,
+        )
+
+    result = {
+        # 这是给后续主图协调桥识别的明确事实，不伪装成单领域 RESOLVED 计划；
+        # 它没有单一 executor，不能被现有单 WorkOrder 派发逻辑误处理。
+        "routeState": "COORDINATION_READY",
+        "planStatus": "COORDINATION_READY",
+        "coordinationBatch": {
+            "batchId": persisted.batch_id,
+            "status": persisted.status,
+            "stepCount": len(persisted.steps),
+            "steps": _coordination_step_summaries(persisted.steps),
+        },
+        "routeDecision": {
+            "capabilityId": "coordination",
+            "strategy": "coordinate",
+            "confidence": 1.0,
+        },
+    }
+    try:
+        writer = get_stream_writer()
+    except RuntimeError:
+        writer = None
+    if writer is not None:
+        emit(
+            writer,
+            "coordination.batch.created",
+            f"已编译 {len(persisted.steps)} 个独立领域步骤，等待协调执行。",
+            batchId=persisted.batch_id,
+            stepCount=len(persisted.steps),
+            status=persisted.status,
+        )
+    return tool_success(result)
+
+
 @tool(args_schema=RouteConversationInput)
 def route_conversation(
     message: str,
@@ -783,13 +960,19 @@ def route_conversation(
     context_intent: ContextIntent = "NEW_REQUEST",
     context_confidence: float | None = None,
     candidate_plan: dict[str, Any] | str | None = None,
+    steps: list[CoordinationCandidateStep] | None = None,
 ) -> ToolResponse:
     """校验主 Agent 提出的能力选择和任务复杂度，不执行业务操作。
 
     capability_id 必须来自当前能力目录；不确定时传 general_agent，不能
     编造未注册的业务能力。已选择领域后，action_id 必须来自该领域的动作目录；
-    模型不能传工具名或 Java 路径。Runtime 会校验 direct/delegate/clarify 边界。
+    模型不能传工具名或 Java 路径。若 ``steps`` 非空，必须是 2 到 4 个互不依赖
+    的跨领域候选步骤；它们仍由中央编译为独立 WorkOrder，路由工具不执行它们。
+    Runtime 会校验 direct/delegate/clarify 边界。
     """
+    if steps is not None:
+        return _compile_coordination_route(message=message, steps=steps)
+
     # Keep the public schema tolerant of the provider's object-as-string
     # encoding, then immediately restore the canonical in-memory shape.  No
     # business routing is inferred from the user's prose here.

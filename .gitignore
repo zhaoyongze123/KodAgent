@@ -159,6 +159,22 @@ logs/
 !/scripts/start-model-lan-relay.sh
 !/scripts/stop-java-backends.sh
 
+# Agent 的 PostgreSQL 迁移是运行契约的一部分。没有这些文件，新环境虽然有
+# Python/Java 源码也无法创建 Run、Operation、Outbox 或知识检索事实表。
+# 只纳入迁移脚本实际执行的 Agent 专用文件，其他业务 SQL 继续保持忽略。
+!/sql/
+/sql/*
+!/sql/postgresql/
+/sql/postgresql/*
+!/sql/postgresql/agent_run_event.sql
+!/sql/postgresql/agent_runtime.sql
+!/sql/postgresql/agent_model_config.sql
+!/sql/postgresql/party_knowledge.sql
+!/sql/postgresql/party_knowledge_vector.sql
+
+# 本地端到端验证会使用本机身份签名和测试数据，不作为运行时源码发布。
+/agent-python/e2e_runner.py
+
 !/yudao-server/
 !/yudao-server/pom.xml
 !/yudao-server/src/

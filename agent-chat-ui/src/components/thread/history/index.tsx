@@ -18,6 +18,8 @@ import {
   PanelRightClose,
   Trash2,
   Settings,
+  ChartNoAxesCombined,
+  LoaderCircle,
 } from "lucide-react";
 import Link from "next/link";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
@@ -26,10 +28,18 @@ function ThreadList({
   threads,
   onThreadClick,
   onDeleteThread,
+  hasMore,
+  loadingMore,
+  loadMoreError,
+  onLoadMore,
 }: {
   threads: Thread[];
   onThreadClick?: (threadId: string) => void;
   onDeleteThread?: (threadId: string) => Promise<void>;
+  hasMore: boolean;
+  loadingMore: boolean;
+  loadMoreError: string | null;
+  onLoadMore: () => void;
 }) {
   const [threadId, setThreadId] = useQueryState("threadId");
   const [contextMenu, setContextMenu] = useState<{
@@ -99,6 +109,38 @@ function ThreadList({
             </div>
           );
         })}
+        {hasMore ? (
+          <div className="w-full px-2 pt-1 pb-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="w-full text-xs"
+              onClick={onLoadMore}
+              disabled={loadingMore}
+            >
+              {loadingMore ? (
+                <LoaderCircle
+                  className="size-3.5 animate-spin"
+                  aria-hidden="true"
+                />
+              ) : null}
+              {loadingMore ? "正在加载更多" : "加载更多历史记录"}
+            </Button>
+            {loadMoreError ? (
+              <p
+                className="mt-1.5 px-1 text-xs text-rose-600"
+                role="alert"
+              >
+                {loadMoreError}
+              </p>
+            ) : null}
+          </div>
+        ) : threads.length ? (
+          <p className="w-full px-3 py-2 text-center text-xs text-slate-400">
+            已加载全部历史记录
+          </p>
+        ) : null}
       </div>
       {contextMenu && onDeleteThread && (
         <div
@@ -141,12 +183,23 @@ function ThreadHistoryLoading() {
   );
 }
 
-function ThreadHistoryFailure({ message, onRetry }: { message: string; onRetry: () => void }) {
+function ThreadHistoryFailure({
+  message,
+  onRetry,
+}: {
+  message: string;
+  onRetry: () => void;
+}) {
   return (
     <div className="mx-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
       <p className="font-medium">历史记录暂时无法加载</p>
       <p className="mt-1 text-xs leading-5 text-amber-800">{message}</p>
-      <Button className="mt-3" size="sm" variant="outline" onClick={onRetry}>
+      <Button
+        className="mt-3"
+        size="sm"
+        variant="outline"
+        onClick={onRetry}
+      >
         重试
       </Button>
     </div>
@@ -161,20 +214,21 @@ export default function ThreadHistory() {
   );
 
   const {
-    getThreads,
     deleteThread,
     threads,
-    setThreads,
     threadsLoading,
     threadsError,
     reloadThreads,
+    threadsHasMore,
+    threadsLoadingMore,
+    threadsLoadMoreError,
+    loadMoreThreads,
   } = useThreads();
   const initialLoadStarted = useRef(false);
 
   const handleDeleteThread = async (threadId: string) => {
     await deleteThread(threadId);
-    const refreshedThreads = await getThreads();
-    setThreads(refreshedThreads);
+    await reloadThreads();
   };
 
   useEffect(() => {
@@ -207,15 +261,35 @@ export default function ThreadHistory() {
           {threadsLoading ? (
             <ThreadHistoryLoading />
           ) : threadsError ? (
-            <ThreadHistoryFailure message={threadsError} onRetry={() => void reloadThreads().catch(console.error)} />
+            <ThreadHistoryFailure
+              message={threadsError}
+              onRetry={() => void reloadThreads().catch(console.error)}
+            />
           ) : (
             <ThreadList
               threads={threads}
               onDeleteThread={handleDeleteThread}
+              hasMore={threadsHasMore}
+              loadingMore={threadsLoadingMore}
+              loadMoreError={threadsLoadMoreError}
+              onLoadMore={() => void loadMoreThreads().catch(console.error)}
             />
           )}
         </div>
         <div className="w-full border-t border-slate-200 p-3">
+          <Button
+            asChild
+            variant="ghost"
+            className="w-full justify-start gap-2 font-normal"
+          >
+            <Link
+              href="/operations"
+              aria-label="打开运行统计"
+            >
+              <ChartNoAxesCombined className="size-4" />
+              运行统计
+            </Link>
+          </Button>
           <Button
             asChild
             variant="ghost"
@@ -249,15 +323,36 @@ export default function ThreadHistory() {
             {threadsLoading ? (
               <ThreadHistoryLoading />
             ) : threadsError ? (
-              <ThreadHistoryFailure message={threadsError} onRetry={() => void reloadThreads().catch(console.error)} />
+              <ThreadHistoryFailure
+                message={threadsError}
+                onRetry={() => void reloadThreads().catch(console.error)}
+              />
             ) : (
               <ThreadList
                 threads={threads}
                 onThreadClick={() => setChatHistoryOpen((o) => !o)}
                 onDeleteThread={handleDeleteThread}
+                hasMore={threadsHasMore}
+                loadingMore={threadsLoadingMore}
+                loadMoreError={threadsLoadMoreError}
+                onLoadMore={() => void loadMoreThreads().catch(console.error)}
               />
             )}
             <div className="mt-auto border-t border-slate-200 pt-3">
+              <Button
+                asChild
+                variant="ghost"
+                className="w-full justify-start gap-2 font-normal"
+              >
+                <Link
+                  href="/operations"
+                  aria-label="打开运行统计"
+                  onClick={() => setChatHistoryOpen(false)}
+                >
+                  <ChartNoAxesCombined className="size-4" />
+                  运行统计
+                </Link>
+              </Button>
               <Button
                 asChild
                 variant="ghost"

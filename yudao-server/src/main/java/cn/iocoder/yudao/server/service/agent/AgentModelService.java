@@ -1,6 +1,7 @@
 package cn.iocoder.yudao.server.service.agent;
 
 import cn.hutool.crypto.SecureUtil;
+import cn.iocoder.yudao.framework.common.exception.ServiceException;
 import cn.iocoder.yudao.framework.common.exception.util.ServiceExceptionUtil;
 import cn.iocoder.yudao.framework.common.util.json.JsonUtils;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -337,26 +338,37 @@ public class AgentModelService {
      */
     public void proxyChatCompletion(Long tenantId, Long modelId, byte[] requestBody,
                                     HttpServletResponse servletResponse) {
-        GatewayConfig gateway = gatewayConfig(tenantId, modelId);
-        Map<String, Object> request = JsonUtils.parseObject(new String(requestBody, StandardCharsets.UTF_8), Map.class);
-        if (request == null) throw ServiceExceptionUtil.exception0(400, "模型请求体不能为空");
-        request.put("model", gateway.modelName);
-        byte[] normalizedBody = JsonUtils.toJsonString(request).getBytes(StandardCharsets.UTF_8);
-        boolean stream = Boolean.TRUE.equals(request.get("stream"));
-        String endpoint = gateway.baseUrl + "/chat/completions";
+        GatewayConfig gateway = null;
         try {
+            // 模型网关多数请求接受 SSE。若在进入上游前发现本地密钥或模型配置错误，
+            // 不能交给全局 JSON 异常处理器：它会受 Accept:text/event-stream 协商影响，
+            // 使客户端收到 200 空流并误判为模型没有生成内容。
+            final GatewayConfig resolvedGateway = gatewayConfig(tenantId, modelId);
+            gateway = resolvedGateway;
+            Map<String, Object> request = JsonUtils.parseObject(new String(requestBody, StandardCharsets.UTF_8), Map.class);
+            if (request == null) throw ServiceExceptionUtil.exception0(400, "模型请求体不能为空");
+            request.put("model", resolvedGateway.modelName);
+            byte[] normalizedBody = JsonUtils.toJsonString(request).getBytes(StandardCharsets.UTF_8);
+            boolean stream = Boolean.TRUE.equals(request.get("stream"));
+            String endpoint = resolvedGateway.baseUrl + "/chat/completions";
             restTemplate.execute(endpoint, HttpMethod.POST, clientRequest -> {
                 HttpHeaders headers = clientRequest.getHeaders();
                 headers.setContentType(MediaType.APPLICATION_JSON);
                 headers.setAccept(Collections.singletonList(stream
                         ? MediaType.TEXT_EVENT_STREAM : MediaType.APPLICATION_JSON));
-                headers.setBearerAuth(gateway.apiKey);
+                headers.setBearerAuth(resolvedGateway.apiKey);
                 headers.setContentLength(normalizedBody.length);
                 OutputStream output = clientRequest.getBody();
                 output.write(normalizedBody);
             }, response -> copyProviderResponse(response, servletResponse));
+        } catch (ServiceException ex) {
+            if (!servletResponse.isCommitted()) {
+                writeJsonError(servletResponse, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                        ex.getMessage() == null ? "模型网关配置无效" : ex.getMessage());
+            }
         } catch (HttpStatusCodeException ex) {
-            writeProviderError(servletResponse, ex.getRawStatusCode(), ex.getResponseBodyAsByteArray(), gateway.apiKey);
+            writeProviderError(servletResponse, ex.getRawStatusCode(), ex.getResponseBodyAsByteArray(),
+                    gateway == null ? "" : gateway.apiKey);
         } catch (ResourceAccessException ex) {
             if (!servletResponse.isCommitted()) {
                 writeJsonError(servletResponse, HttpServletResponse.SC_BAD_GATEWAY,

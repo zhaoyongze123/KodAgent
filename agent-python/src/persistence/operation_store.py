@@ -22,6 +22,15 @@ from ..domain.effect import (
     EffectTransitionError,
     transition_effect,
 )
+from ..domain.coordination import (
+    CoordinationBatch,
+    CoordinationBatchStatus,
+    CoordinationStep,
+    CoordinationStepStatus,
+    CoordinationTransitionError,
+    transition_batch,
+    transition_step,
+)
 from ..domain.events import EventEnvelope, RuntimeOutboxRecord
 from ..domain.operation import (
     OperationContext,
@@ -287,6 +296,193 @@ class OperationStore:
             now=now,
             event=event,
         )
+
+    # ------------------------------------------------------------------
+    # 跨领域协作批次
+    # ------------------------------------------------------------------
+    # 这组方法与 Operation 存储在同一个事务库中，但刻意不复用 Operation 表：
+    # 一个 Batch 可以有多项独立业务操作，而每一项仍需保留自己的幂等和 HITL
+    # 生命周期。Batch 只记录 DAG 调度及跨 Agent 汇总事实。
+
+    def create_coordination_batch(
+        self,
+        batch: CoordinationBatch,
+        *,
+        event: EventEnvelope | None = None,
+    ) -> CoordinationBatch:
+        """创建协作批次及其不可变步骤图；同一 batch ID 可幂等重试。"""
+
+        with self._connection() as connection, connection.transaction():
+            row = connection.execute(
+                """
+                INSERT INTO agent_runtime.coordination_batch (
+                    batch_id, tenant_id, user_id, thread_id, origin_run_id,
+                    current_run_id, message_id, request_summary, status,
+                    version, created_at, updated_at
+                ) VALUES (
+                    %(batch_id)s, %(tenant_id)s, %(user_id)s, %(thread_id)s,
+                    %(origin_run_id)s, %(current_run_id)s, %(message_id)s,
+                    %(request_summary)s, %(status)s, %(version)s,
+                    %(created_at)s, %(updated_at)s
+                )
+                ON CONFLICT (batch_id) DO NOTHING
+                RETURNING *
+                """,
+                self._coordination_batch_params(batch),
+            ).fetchone()
+            if row is None:
+                existing = self._get_coordination_batch(connection, batch.batch_id, for_update=True)
+                if existing is None:
+                    raise OperationConcurrencyError("协作批次幂等插入失败且无法读取已存在记录")
+                identity_fields = ("tenant_id", "user_id", "thread_id", "message_id", "origin_run_id")
+                if any(getattr(existing, name) != getattr(batch, name) for name in identity_fields):
+                    raise ValueError(f"协作批次 ID 已绑定到不同请求上下文: {batch.batch_id}")
+                if tuple(step.step_id for step in existing.steps) != tuple(step.step_id for step in batch.steps):
+                    raise ValueError(f"协作批次 ID 已绑定到不同步骤图: {batch.batch_id}")
+                return existing
+            for step in batch.steps:
+                connection.execute(
+                    """
+                    INSERT INTO agent_runtime.coordination_step (
+                        batch_id, step_id, domain, action_id, executor_tool,
+                        work_order, depends_on, failure_policy, status,
+                        version, operation_id, receipt, error_code, error_message,
+                        started_at, completed_at
+                    ) VALUES (
+                        %(batch_id)s, %(step_id)s, %(domain)s, %(action_id)s,
+                        %(executor_tool)s, %(work_order)s, %(depends_on)s,
+                        %(failure_policy)s, %(status)s, %(version)s, %(operation_id)s,
+                        %(receipt)s, %(error_code)s, %(error_message)s,
+                        %(started_at)s, %(completed_at)s
+                    )
+                    """,
+                    self._coordination_step_params(batch.batch_id, step),
+                )
+            if event is not None:
+                self._insert_event(connection, event)
+        return self.get_coordination_batch(batch.batch_id, required=True)
+
+    def get_coordination_batch(
+        self,
+        batch_id: str,
+        *,
+        required: bool = False,
+    ) -> CoordinationBatch | None:
+        """读取批次及其完整步骤图；不从 checkpoint 或展示消息还原状态。"""
+
+        with self._connection() as connection:
+            batch = self._get_coordination_batch(connection, batch_id)
+        if batch is None and required:
+            raise KeyError(f"协作批次不存在: {batch_id}")
+        return batch
+
+    def transition_coordination_batch(
+        self,
+        batch_id: str,
+        target: CoordinationBatchStatus,
+        *,
+        expected_version: int | None,
+        run_id: str | None = None,
+        event: EventEnvelope | None = None,
+        now: datetime | None = None,
+    ) -> CoordinationBatch:
+        """推进批次状态；步骤状态必须由 ``transition_coordination_step`` 修改。"""
+
+        with self._connection() as connection, connection.transaction():
+            current = self._get_coordination_batch(connection, batch_id, for_update=True)
+            if current is None:
+                raise KeyError(f"协作批次不存在: {batch_id}")
+            updated = transition_batch(current, target, expected_version=expected_version, now=now)
+            row = connection.execute(
+                """
+                UPDATE agent_runtime.coordination_batch
+                SET status = %s, version = %s, current_run_id = %s, updated_at = %s
+                WHERE batch_id = %s AND version = %s
+                RETURNING *
+                """,
+                (
+                    updated.status, updated.version, run_id or updated.current_run_id,
+                    updated.updated_at, batch_id, current.version,
+                ),
+            ).fetchone()
+            if row is None:
+                raise OperationConcurrencyError(f"协作批次版本竞争: {batch_id}")
+            if event is not None:
+                self._insert_event(connection, event)
+        return self.get_coordination_batch(batch_id, required=True)
+
+    def transition_coordination_step(
+        self,
+        batch_id: str,
+        step_id: str,
+        target: CoordinationStepStatus,
+        *,
+        receipt: dict[str, Any] | None = None,
+        operation_id: str | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        event: EventEnvelope | None = None,
+        now: datetime | None = None,
+    ) -> CoordinationBatch:
+        """原子更新一个步骤；调用方必须先依据依赖图确认该步骤可运行。"""
+
+        with self._connection() as connection, connection.transaction():
+            batch = self._get_coordination_batch(connection, batch_id, for_update=True)
+            if batch is None:
+                raise KeyError(f"协作批次不存在: {batch_id}")
+            current_step = next((step for step in batch.steps if step.step_id == step_id), None)
+            if current_step is None:
+                raise KeyError(f"协作步骤不存在: {batch_id}/{step_id}")
+            updated_step = transition_step(
+                current_step, target, now=now, receipt=receipt,
+                operation_id=operation_id, error_code=error_code,
+                error_message=error_message,
+            )
+            connection.execute(
+                """
+                UPDATE agent_runtime.coordination_step
+                SET status = %s, version = %s, operation_id = %s, receipt = %s,
+                    error_code = %s, error_message = %s, started_at = %s,
+                    completed_at = %s
+                WHERE batch_id = %s AND step_id = %s
+                """,
+                (
+                    updated_step.status, updated_step.version, updated_step.operation_id,
+                    Jsonb(updated_step.receipt) if updated_step.receipt is not None else None,
+                    updated_step.error_code, updated_step.error_message,
+                    updated_step.started_at, updated_step.completed_at,
+                    batch_id, step_id,
+                ),
+            )
+            if event is not None:
+                self._insert_event(connection, event)
+        return self.get_coordination_batch(batch_id, required=True)
+
+    def coordination_batches_for_operation(self, operation_id: str) -> list[CoordinationBatch]:
+        """查询引用某个领域 Operation 的协作批次。
+
+        ``CoordinationStep.operation_id`` 仅在子 Agent 成功生成草稿后写入，因此
+        此查询用于确认卡完成后的状态回收，不能反向作为“定位业务对象”的来源。
+        返回完整批次，让调用方继续使用同一套版本化状态迁移。
+        """
+
+        if not str(operation_id or "").strip():
+            return []
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT DISTINCT batch_id
+                FROM agent_runtime.coordination_step
+                WHERE operation_id = %s
+                ORDER BY batch_id
+                """,
+                (operation_id,),
+            ).fetchall()
+            batches = [
+                self._get_coordination_batch(connection, str(row["batch_id"]))
+                for row in rows
+            ]
+        return [batch for batch in batches if batch is not None]
 
     def create_effect(self, effect: EffectRecord, *, event: EventEnvelope | None = None) -> EffectRecord:
         with self._connection() as connection, connection.transaction():
@@ -653,6 +849,77 @@ class OperationStore:
             "response_data": Jsonb(effect.response_data),
             "error_data": Jsonb(effect.error_data),
         }
+
+    @staticmethod
+    def _coordination_batch_params(batch: CoordinationBatch) -> dict:
+        """转换 Pydantic 批次字段为 PostgreSQL 参数，不把 steps 写进父表。"""
+
+        return {
+            "batch_id": batch.batch_id,
+            "tenant_id": batch.tenant_id,
+            "user_id": batch.user_id,
+            "thread_id": batch.thread_id,
+            "origin_run_id": batch.origin_run_id,
+            "current_run_id": batch.current_run_id,
+            "message_id": batch.message_id,
+            "request_summary": batch.request_summary,
+            "status": batch.status,
+            "version": batch.version,
+            "created_at": batch.created_at,
+            "updated_at": batch.updated_at,
+        }
+
+    @staticmethod
+    def _coordination_step_params(batch_id: str, step: CoordinationStep) -> dict:
+        """转换一个步骤；结构化 WorkOrder/依赖/回执均以 JSONB 保存。"""
+
+        return {
+            "batch_id": batch_id,
+            "step_id": step.step_id,
+            "domain": step.domain,
+            "action_id": step.action_id,
+            "executor_tool": step.executor_tool,
+            "work_order": Jsonb(step.work_order),
+            "depends_on": Jsonb(list(step.depends_on)),
+            "failure_policy": step.failure_policy,
+            "status": step.status,
+            "version": step.version,
+            "operation_id": step.operation_id,
+            "receipt": Jsonb(step.receipt) if step.receipt is not None else None,
+            "error_code": step.error_code,
+            "error_message": step.error_message,
+            "started_at": step.started_at,
+            "completed_at": step.completed_at,
+        }
+
+    @classmethod
+    def _get_coordination_batch(cls, connection, batch_id: str, *, for_update: bool = False) -> CoordinationBatch | None:
+        suffix = " FOR UPDATE" if for_update else ""
+        row = connection.execute(
+            f"SELECT * FROM agent_runtime.coordination_batch WHERE batch_id = %s{suffix}",
+            (batch_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        step_rows = connection.execute(
+            """
+            SELECT * FROM agent_runtime.coordination_step
+            WHERE batch_id = %s ORDER BY step_id
+            """,
+            (batch_id,),
+        ).fetchall()
+        data = dict(row)
+        data["steps"] = tuple(cls._coordination_step(step_row) for step_row in step_rows)
+        return CoordinationBatch.model_validate(data)
+
+    @staticmethod
+    def _coordination_step(row: dict) -> CoordinationStep:
+        data = dict(row)
+        # ``batch_id`` 是关系表的父键，领域 Step 已由其所属 Batch 表达该关系；
+        # 不能透传给 extra=forbid 的不可变业务模型。
+        data.pop("batch_id", None)
+        data["depends_on"] = tuple(data.get("depends_on") or ())
+        return CoordinationStep.model_validate(data)
 
     @staticmethod
     def _operation(row: dict) -> OperationContext:

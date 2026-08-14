@@ -729,6 +729,72 @@ def recent_model_messages(messages: list[Any], *, window: int = _RECENT_MESSAGE_
     return [*recent_history, *items[current_start:]]
 
 
+_MODEL_HIDDEN_SOURCE_KEYS = frozenset({
+    # 会议、日程、党务文件的 Java 对象定位字段及其常见传输别名。模型只能经
+    # context_candidate_id 选择对象，不能从 ToolMessage 抄写这些值回填写计划。
+    "id", "sourceId", "source_id",
+    "sourceResultId", "source_result_id", "resultId", "result_id",
+    "bookingId", "booking_id", "sourceBookingId", "source_booking_id",
+    "scheduleId", "schedule_id", "sourceScheduleId", "source_schedule_id",
+    "eventId", "event_id",
+    "partyFileId", "party_file_id", "sourcePartyFileId", "source_party_file_id",
+    "fileId", "file_id", "documentId", "document_id",
+})
+
+
+def _model_visible_tool_data(value: Any) -> Any:
+    """递归移除模型不能作为业务事实使用的对象来源 ID。"""
+
+    if isinstance(value, dict):
+        return {
+            key: _model_visible_tool_data(item)
+            for key, item in value.items()
+            if key not in _MODEL_HIDDEN_SOURCE_KEYS
+        }
+    if isinstance(value, list):
+        return [_model_visible_tool_data(item) for item in value]
+    return value
+
+
+def _model_visible_message(message: Any) -> Any:
+    """移除 ToolResponse 中 UI 元数据和业务来源 ID 的模型可见副本。
+
+    ``presentation.sourceResultId`` 是前端更新、去重卡片使用的传输相关键，不是
+    checkpoint 候选 ID。把它原样交给模型会让模型误把 ``result:...`` 填进
+    ``context_candidate_id``。此处只复制本次模型调用的 ToolMessage，不修改
+    checkpoint，所以 UI 和审计仍可使用完整 presentation。
+    """
+
+    if message_type(message) != "tool":
+        return message
+    content = message_content(message)
+    if not isinstance(content, str):
+        return message
+    response = _as_dict(content)
+    # 只处理统一 ToolResponse 信封。普通工具文本不做 JSON 改写，避免改变第三方
+    # 工具协议；所有本项目 ToolResponse 不论是否生成 UI 卡片，都必须隐藏来源 ID。
+    if response.get("ok") not in {True, False}:
+        return message
+    visible_response = _model_visible_tool_data(dict(response))
+    visible_response.pop("presentation", None)
+    visible_content = json.dumps(visible_response, ensure_ascii=False, separators=(",", ":"))
+    if isinstance(message, dict):
+        copied = dict(message)
+        copied["content"] = visible_content
+        return copied
+    model_copy = getattr(message, "model_copy", None)
+    if callable(model_copy):
+        return model_copy(update={"content": visible_content})
+    # 未知消息实现不强行改写，避免破坏供应商的 ToolMessage 协议。
+    return message
+
+
+def model_visible_messages(messages: list[Any], *, window: int = _RECENT_MESSAGE_WINDOW) -> list[Any]:
+    """返回可交给模型的近窗口，并排除 UI 专用展示标识。"""
+
+    return [_model_visible_message(message) for message in recent_model_messages(messages, window=window)]
+
+
 def _candidate_priority(candidate: ContextCandidate) -> int:
     """先做业务语义的确定性优先级，再在同类候选内比较新鲜度。
 
@@ -742,6 +808,55 @@ def _candidate_priority(candidate: ContextCandidate) -> int:
         "authorized_resource": 100,
         "authorized_query": 100,
     }[candidate.kind]
+
+
+def _trusted_source_identity(candidate: ContextCandidate) -> tuple[str, str, str, int] | None:
+    """返回候选对应的可信业务对象键，用于合并重复查询结果。
+
+    候选的 ``candidate_id`` 是每次投影新签发的临时引用，不能用它判断两个候选
+    是否指向同一业务对象。只有 ``trusted_plan`` 中已声明为授权来源字段、且为
+    正整数的 ``source_*_id`` 才可参与去重；模型可见摘要、标题和 UI 的
+    ``sourceResultId`` 都不能参与这个判断。
+    """
+
+    authorized_fields = candidate.trusted_plan.get("_authorized_source_fields")
+    if not isinstance(authorized_fields, (list, tuple, set)):
+        return None
+    for field in authorized_fields:
+        source_field = str(field or "").strip()
+        if not source_field.startswith("source_") or not source_field.endswith("_id"):
+            continue
+        value = candidate.trusted_plan.get(source_field)
+        # bool 是 int 的子类；把它当业务 ID 会把异常 checkpoint 放大成写定位器。
+        if isinstance(value, bool):
+            continue
+        try:
+            source_id = int(str(value).strip())
+        except (TypeError, ValueError):
+            continue
+        if source_id > 0:
+            return candidate.kind, candidate.capability_id, source_field, source_id
+    return None
+
+
+def _deduplicate_context_candidates(candidates: list[ContextCandidate]) -> list[ContextCandidate]:
+    """按候选类型、领域和可信来源 ID 合并重复对象，保留较新的投影。
+
+    调用方会把本次刚解析的消息按“从新到旧”放在旧 checkpoint 候选之前。因此
+    首次遇到同一可信对象的候选就是较新的查询结果；保留它能避免反复查询同一
+    日程后，模型面对多个实际上相同的候选而被错误判为歧义。
+    """
+
+    deduplicated: list[ContextCandidate] = []
+    seen: set[tuple[str, str, str, int]] = set()
+    for candidate in candidates:
+        identity = _trusted_source_identity(candidate)
+        if identity is not None:
+            if identity in seen:
+                continue
+            seen.add(identity)
+        deduplicated.append(candidate)
+    return deduplicated
 
 
 def _candidate_subject(candidate: ContextCandidate) -> str:
@@ -866,7 +981,8 @@ def context_candidates_state_update(state: dict[str, Any]) -> dict[str, Any] | N
 
     messages = list((state or {}).get("messages") or [])
     current_turn = _human_turn_count(messages)
-    existing = _as_candidates((state or {}).get("context_candidates"))
+    raw_existing = (state or {}).get("context_candidates")
+    existing = _as_candidates(raw_existing)
     # 确认卡完成提交后不能继续和刚创建的日程竞争“那个”的指代。只按确认工具
     # 调用参数中的 approvalId 精确移除对应卡片，其他尚待确认草稿仍然保留。
     settled_approval_ids = _settled_personal_schedule_approval_ids(messages)
@@ -889,6 +1005,9 @@ def context_candidates_state_update(state: dict[str, Any]) -> dict[str, Any] | N
             for candidate in existing
             if candidate.kind != "pending_plan" or candidate.trusted_plan.get("planId") == current_plan_id
         ]
+    # 新版本上线前的 checkpoint 可能已经保存了重复对象。先压缩旧状态，确保它
+    # 也会在下一次模型调用时收敛，而不是必须再执行一次同样的查询才生效。
+    existing = _deduplicate_context_candidates(existing)
     known_source_keys = {candidate.source_tool_call_id for candidate in existing if candidate.source_tool_call_id}
     additions: list[ContextCandidate] = []
     # 倒序只扫描自上次已投影 ToolMessage 之后的新输出。checkpoint 变长后不必
@@ -931,11 +1050,14 @@ def context_candidates_state_update(state: dict[str, Any]) -> dict[str, Any] | N
     ):
         additions.append(pending)
 
-    if not additions and len(existing) == len((state or {}).get("context_candidates") or []):
+    if not additions and len(existing) == len(raw_existing or []):
         return None
+    # additions 按消息倒序构建，必须在旧候选前去重，才能让同一对象最新的 Java
+    # 查询替换较早快照，而不是把两个不同 candidateId 一并交给模型。
+    unique_candidates = _deduplicate_context_candidates([*additions, *existing])
     # 合并后统一排序；查询候选最多保留八条，待补计划和待确认事项不会被查询列表挤掉。
     merged = ordered_context_candidates(
-        [candidate.model_dump(by_alias=True, mode="json") for candidate in [*existing, *additions]],
+        [candidate.model_dump(by_alias=True, mode="json") for candidate in unique_candidates],
         current_turn=current_turn,
     )[:_MAX_CANDIDATES]
     update: dict[str, Any] = {
@@ -1061,7 +1183,8 @@ def context_prompt(value: Any, *, messages: list[Any] | None = None) -> str:
             "多个候选而用户没有明确名称或序号时用 AMBIGUOUS，不能猜测对象。",
             "同时填写 0 到 1 的 context_confidence；引用查询对象低于 0.70 时必须澄清，不能绑定写操作来源。",
             "只有确实在修改或取消某项已授权对象时，才传 context_candidate_id。不得自行填写 source ID、",
-            "_authorized_source_fields 或任何授权标记。待确认操作只能定位正式确认卡，不能替代审批确认。",
+            "_authorized_source_fields 或任何授权标记；界面结果标识 sourceResultId/result:... 不是候选 ID。",
+            "待确认操作只能定位正式确认卡，不能替代审批确认。",
         ]
     )
     return "\n".join(lines)
@@ -1082,12 +1205,12 @@ class ContextCandidateMiddleware(AgentMiddleware):
     def wrap_model_call(self, request, handler):
         """在不改变 checkpoint 的前提下，把有限近窗口交给模型。"""
 
-        return handler(request.override(messages=recent_model_messages(list(request.messages or []))))
+        return handler(request.override(messages=model_visible_messages(list(request.messages or []))))
 
     async def awrap_model_call(self, request, handler):
         """异步模型调用使用与同步路径完全一致的窗口规则。"""
 
-        return await handler(request.override(messages=recent_model_messages(list(request.messages or []))))
+        return await handler(request.override(messages=model_visible_messages(list(request.messages or []))))
 
 
 __all__ = [
@@ -1102,6 +1225,7 @@ __all__ = [
     "context_candidate_proof",
     "context_candidates_state_update",
     "context_trigger_reason",
+    "model_visible_messages",
     "audit_context_decision",
     "context_prompt",
     "ordered_context_candidates",

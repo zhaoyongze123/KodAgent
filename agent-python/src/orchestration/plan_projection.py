@@ -84,6 +84,13 @@ from .delegated_receipt import (
     parse_party_file_draft_receipt,
     parse_personal_schedule_draft_receipt,
 )
+from .coordination_dispatch import (
+    load_tasks as _load_coordination_tasks,
+    public_summary as _coordination_public_summary,
+    record_task_result as _record_coordination_task_result,
+    start_tasks as _start_coordination_tasks,
+    task_from_description as _coordination_task_from_description,
+)
 from .route_state import (
     current_turn_messages as _current_turn_messages,
     message_content as _content,
@@ -113,6 +120,155 @@ class PlanToolProjectionMiddleware(AgentMiddleware):
         "<|dsml|>", "<tool_calls", "</tool_calls>", "<invoke name=",
         "<function_calls>", "</function_calls>",
     )
+
+    @staticmethod
+    def _coordination_batch_id(route: dict[str, Any] | None) -> str:
+        """从跨领域路由事实读取已持久化批次 ID，模型参数不参与。"""
+
+        if not isinstance(route, dict):
+            return ""
+        batch = route.get("coordinationBatch") or route.get("coordination_batch") or {}
+        return str(batch.get("batchId") or batch.get("batch_id") or "").strip() if isinstance(batch, dict) else ""
+
+    @classmethod
+    def _is_coordination_route(cls, route: dict[str, Any] | None) -> bool:
+        """只认可路由工具明确签发的协调状态，不能从步骤文本推断。"""
+
+        return (
+            isinstance(route, dict)
+            and str(route.get("planStatus") or route.get("plan_status") or "").upper() == "COORDINATION_READY"
+            and bool(cls._coordination_batch_id(route))
+        )
+
+    @staticmethod
+    def _task_calls(messages: list[Any]) -> dict[str, str]:
+        """建立父级 task 调用 ID 到代码描述的映射，兼容 checkpoint 对象/字典。"""
+
+        calls: dict[str, str] = {}
+        for message in messages:
+            if _message_type(message) != "ai":
+                continue
+            raw_calls = getattr(message, "tool_calls", None)
+            if isinstance(message, dict):
+                raw_calls = raw_calls or message.get("tool_calls")
+            for call in raw_calls or []:
+                if not isinstance(call, dict) or str(call.get("name") or "") != "task":
+                    continue
+                args = call.get("args") if isinstance(call.get("args"), dict) else {}
+                description = args.get("description")
+                call_id = str(call.get("id") or "").strip()
+                if call_id and isinstance(description, str):
+                    calls[call_id] = description
+        return calls
+
+    @classmethod
+    def _record_coordination_results(cls, request, route: dict[str, Any]) -> None:
+        """将已经返回的子 Agent 回执落回批次，重复扫描不改变终态。"""
+
+        batch_id = cls._coordination_batch_id(route)
+        if not batch_id:
+            return
+        messages = list((getattr(request, "state", {}) or {}).get("messages") or [])
+        descriptions = cls._task_calls(messages)
+        for message in messages:
+            if _message_type(message) != "tool":
+                continue
+            description = descriptions.get(cls._tool_call_id(message))
+            if not description:
+                continue
+            parsed = _coordination_task_from_description(description)
+            if parsed is None or parsed[0] != batch_id:
+                continue
+            _record_coordination_task_result(description, _content(message))
+
+    @classmethod
+    def _coordination_dispatch_response(cls, route: dict[str, Any]):
+        """返回一条含多个代码签发 task 的消息，DeepAgents 会并行执行它们。"""
+
+        batch_id = cls._coordination_batch_id(route)
+        if not batch_id:
+            return cls._execution_clarification()
+        try:
+            tasks = _load_coordination_tasks(batch_id)
+            if not tasks:
+                return None
+            _start_coordination_tasks(batch_id, tasks)
+        except Exception:
+            # 批次状态无法读取/变更时不能退化为模型自由 task；保留既有确定性
+            # 边界并让用户稍后重试。
+            return cls._execution_clarification()
+        return AIMessage(
+            name="oa-main-agent",
+            content="",
+            tool_calls=[
+                {
+                    "name": "task",
+                    "args": {
+                        "subagent_type": task.subagent_type,
+                        "description": task.description,
+                    },
+                    "id": f"coordination-{task.batch_id}-{task.step_id}",
+                    "type": "tool_call",
+                }
+                for task in tasks
+            ],
+            response_metadata={cls._AUTO_EXECUTION_MARKER: True, "coordinationBatchId": batch_id},
+        )
+
+    @classmethod
+    def _coordination_summary_text(cls, route: dict[str, Any]) -> str | None:
+        """从持久化步骤事实生成给用户的汇总底稿，不使用子 Agent 自由文本。"""
+
+        batch_id = cls._coordination_batch_id(route)
+        if not batch_id:
+            return None
+        try:
+            summary = _coordination_public_summary(batch_id)
+        except Exception:
+            return None
+        status = str(summary.get("status") or "")
+        if status == "RUNNING":
+            return None
+        labels = {
+            "SUCCEEDED": "已完成",
+            "WAITING_APPROVAL": "已生成待确认草稿",
+            "FAILED": "执行失败",
+            "SKIPPED": "因依赖未执行",
+            "CANCELLED": "已取消",
+        }
+        lines = ["跨领域任务处理情况："]
+        for step in summary.get("steps") or []:
+            if not isinstance(step, dict):
+                continue
+            domain = str(step.get("domain") or "业务")
+            result = labels.get(str(step.get("status") or ""), "处理中")
+            text = f"- {domain}：{result}"
+            if step.get("errorMessage"):
+                text += f"（{str(step['errorMessage'])[:160]}）"
+            lines.append(text)
+        if status == "WAITING_APPROVAL":
+            lines.append("请通过系统展示的确认卡完成待确认操作；未确认前不会提交写入。")
+        return "\n".join(lines)
+
+    @classmethod
+    def _coordination_summary_response(cls, response, route: dict[str, Any]):
+        """用确定性汇总替换模型叙述，同时保留后续 HITL 中间件的响应结构。"""
+
+        content = cls._coordination_summary_text(route)
+        if not content:
+            return response
+        messages = cls._response_messages(response)
+        target_index = next(
+            (index for index in range(len(messages) - 1, -1, -1) if _message_type(messages[index]) == "ai"),
+            None,
+        )
+        if target_index is None:
+            return response
+        target = messages[target_index]
+        replacement = target.model_copy(deep=True, update={"content": content, "tool_calls": []})
+        updated = list(messages)
+        updated[target_index] = replacement
+        return cls._replace_response_messages(response, updated)
 
     @staticmethod
     def _tool_name(tool: Any) -> str:
@@ -896,6 +1052,16 @@ class PlanToolProjectionMiddleware(AgentMiddleware):
         #      - EXECUTE         -> _execution_response（防计划被散文替换）
         all_messages = list((getattr(request, "state", {}) or {}).get("messages") or [])
         route = _route_result(all_messages)
+        if self._is_coordination_route(route):
+            # 路由工具已原子写入 Batch；从这一刻起不再调用模型决定“派给谁”。
+            # 先吸收本轮已经返回的 task 回执，再读取仍可运行的持久化步骤。
+            self._record_coordination_results(request, route)
+            dispatch = self._coordination_dispatch_response(route)
+            if dispatch is not None:
+                return dispatch
+            response = handler(self._override_for_policy(request, decide_turn_policy(route), route))
+            response = self._enforce_model_response(response, decide_turn_policy(route))
+            return self._protocol_firewall(self._coordination_summary_response(response, route), route)
         policy = decide_turn_policy(route)
         if policy.mode == TurnMode.DETERMINISTIC_TERMINAL:
             return AIMessage(
@@ -923,6 +1089,14 @@ class PlanToolProjectionMiddleware(AgentMiddleware):
     async def awrap_model_call(self, request, handler):
         all_messages = list((getattr(request, "state", {}) or {}).get("messages") or [])
         route = _route_result(all_messages)
+        if self._is_coordination_route(route):
+            self._record_coordination_results(request, route)
+            dispatch = self._coordination_dispatch_response(route)
+            if dispatch is not None:
+                return dispatch
+            response = await handler(self._override_for_policy(request, decide_turn_policy(route), route))
+            response = self._enforce_model_response(response, decide_turn_policy(route))
+            return self._protocol_firewall(self._coordination_summary_response(response, route), route)
         policy = decide_turn_policy(route)
         if policy.mode == TurnMode.DETERMINISTIC_TERMINAL:
             return AIMessage(
@@ -987,6 +1161,13 @@ class PlanToolProjectionMiddleware(AgentMiddleware):
                 raw_plan.pop("_authorized_source_fields", None)
                 raw_plan.pop("_context_candidate_proof", None)
                 raw_plan.pop("_context_candidate_kind", None)
+                # ``source_*_id`` 是 Java 业务对象的内部来源字段。模型可能从刚刚
+                # 收到的工具结果或 UI 展示标识中误抄它；主图只允许随后基于有效
+                # candidateId 从 checkpoint 重新签发定向核验，不能把模型参数当事实。
+                # 用户明确写出的编号仍会由 route_conversation 从原始用户消息按既有
+                # 规则恢复并经过编译器/Java 校验，因此这里不会把 UI 误引用放进行计划。
+                for source_field in ("source_schedule_id", "source_booking_id", "source_party_file_id"):
+                    raw_plan.pop(source_field, None)
                 raw_args["candidate_plan"] = raw_plan
             call["args"] = raw_args
             call = merge_resume_route_call(call, state.get("pending_plan"))
