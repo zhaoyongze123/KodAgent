@@ -26,12 +26,17 @@ export function useFormSchema(): VbenFormSchema[] {
     },
     {
       fieldName: 'username',
-      label: '用户名称',
+      label: '登录账号',
       component: 'Input',
       componentProps: {
-        placeholder: '请输入用户名称',
+        placeholder: '请输入小写拼音账号，例如 zhangsan',
       },
-      rules: 'required',
+      rules: z
+        .string()
+        .regex(
+          /^[a-z][a-z0-9]{0,29}$/,
+          '登录账号只能使用小写英文字母和数字，且必须以字母开头',
+        ),
     },
     {
       label: '用户密码',
@@ -203,7 +208,7 @@ export function useAssignRoleFormSchema(): VbenFormSchema[] {
     },
     {
       fieldName: 'username',
-      label: '用户名称',
+      label: '登录账号',
       component: 'Input',
       componentProps: {
         disabled: true,
@@ -261,10 +266,10 @@ export function useGridFormSchema(): VbenFormSchema[] {
   return [
     {
       fieldName: 'username',
-      label: '用户名称',
+      label: '登录账号',
       component: 'Input',
       componentProps: {
-        placeholder: '请输入用户名称',
+        placeholder: '请输入登录账号',
         allowClear: true,
       },
     },
@@ -305,7 +310,7 @@ export function useGridColumns(
     },
     {
       field: 'username',
-      title: '用户名称',
+      title: '登录账号',
       minWidth: 110,
     },
     {

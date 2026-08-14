@@ -451,6 +451,28 @@ onBeforeUnmount(() => {
       </Select>
     </FormItem>
     <FormItem
+      v-if="userTaskForm.candidateStrategy === CandidateStrategy.START_USER_SELECT"
+      label="限定可选审批人"
+      name="candidateParam"
+    >
+      <Select
+        v-model:value="userTaskForm.candidateParam"
+        allow-clear
+        mode="multiple"
+        placeholder="不配置则发起人可从全部用户中选择"
+        style="width: 100%"
+        @change="updateElementTask"
+      >
+        <SelectOption
+          v-for="item in userOptions"
+          :key="item.id"
+          :value="item.id"
+        >
+          {{ item.nickname }}
+        </SelectOption>
+      </Select>
+    </FormItem>
+    <FormItem
       v-if="userTaskForm.candidateStrategy === CandidateStrategy.USER_GROUP"
       label="指定用户组"
       name="candidateParam"

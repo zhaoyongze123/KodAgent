@@ -139,10 +139,12 @@ export async function vbenPrompt<T = any>(
     content,
     defaultValue,
     modelPropName: _modelPropName,
+    validate,
     ...delegated
   } = options;
 
   const modelValue = ref<T | undefined>(defaultValue);
+  const validationError = ref('');
   const inputComponentRef = ref<null | VNode>(null);
   const staticContents: Component[] = [
     h(VbenRenderContent, { content, renderBr: true }),
@@ -156,8 +158,12 @@ export async function vbenPrompt<T = any>(
     const currentProps = {
       ...componentProps,
       [modelPropName]: modelValue.value,
+      ...(validate && validationError.value
+        ? { status: 'error' }
+        : {}),
       [`onUpdate:${modelPropName}`]: (val: T) => {
         modelValue.value = val;
+        validationError.value = '';
       },
     };
 
@@ -173,16 +179,27 @@ export async function vbenPrompt<T = any>(
     );
 
     // 返回包含静态内容和输入组件的数组
-    return h(
-      'div',
-      { class: 'flex flex-col gap-2' },
-      { default: () => [...staticContents, inputComponentRef.value] },
-    );
+    return h('div', { class: 'flex flex-col gap-2' }, {
+      default: () => [
+        ...staticContents,
+        inputComponentRef.value,
+        validationError.value
+          ? h('p', { class: 'text-sm text-red-500' }, validationError.value)
+          : null,
+      ],
+    });
   };
 
   const props: AlertProps & Recordable<any> = {
     ...delegated,
     async beforeClose(scope: BeforeCloseScope) {
+      if (scope.isConfirm && validate) {
+        const error = validate(modelValue.value);
+        if (error) {
+          validationError.value = error;
+          return false;
+        }
+      }
       if (delegated.beforeClose) {
         return await delegated.beforeClose({
           ...scope,

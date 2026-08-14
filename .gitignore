@@ -53,6 +53,7 @@ application-my.yaml
 /yudao-ui-app/unpackage/
 **/.DS_Store
 /文档/
+/交付文档/
 
 # Local deployment artifacts
 /ruoyi-*-local.tar

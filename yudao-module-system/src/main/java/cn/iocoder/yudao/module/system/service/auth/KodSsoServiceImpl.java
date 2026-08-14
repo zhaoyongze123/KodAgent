@@ -345,29 +345,7 @@ public class KodSsoServiceImpl implements KodSsoService {
     }
 
     private AdminUserDO matchExistingUser(KodUserProfile profile) {
-        KodSsoUserBindDO bind = findBind(profile);
-        if (bind != null) {
-            AdminUserDO bindUser = adminUserService.getUser(bind.getUserId());
-            if (bindUser != null) {
-                return bindUser;
-            }
-            log.warn("可道云绑定记录已失效，kodUserId={}, kodUsername={}, userId={}",
-                    profile.getKodUserId(), profile.getKodUsername(), bind.getUserId());
-        }
         return adminUserService.getUserByUsername(resolveLocalUsername(profile));
-    }
-
-    private KodSsoUserBindDO findBind(KodUserProfile profile) {
-        if (StrUtil.isNotBlank(profile.getKodUsername())) {
-            KodSsoUserBindDO bindByKodUsername = kodSsoUserBindMapper.selectByKodUsername(profile.getKodUsername());
-            if (bindByKodUsername != null) {
-                return bindByKodUsername;
-            }
-        }
-        if (StrUtil.isBlank(profile.getKodUserId())) {
-            return null;
-        }
-        return kodSsoUserBindMapper.selectByKodUserId(profile.getKodUserId());
     }
 
     private void syncLocalProfile(AdminUserDO user, KodUserProfile profile) {

@@ -71,6 +71,8 @@ export type PromptProps<T = any> = {
   defaultValue?: T;
   /** 输入组件的值属性名 */
   modelPropName?: string;
+  /** 确认输入值。返回错误文案时阻止弹窗关闭，并展示字段错误。 */
+  validate?: (value: T | undefined) => string | undefined;
 } & Omit<AlertProps, 'beforeClose'>;
 
 /**

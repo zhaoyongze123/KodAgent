@@ -198,6 +198,7 @@ export type UserTaskFormType = {
   timeoutHandlerType?: number;
   userGroups?: number[]; // 用户组
   userIds?: number[]; // 用户
+  startUserSelectUserIds?: number[]; // 发起人自选时限定的候选用户
 };
 
 export type CopyTaskFormType = {
@@ -365,7 +366,15 @@ export function useNodeForm(nodeType: BpmNodeTypeEnum) {
       configForm.value?.candidateStrategy ===
       CandidateStrategy.START_USER_SELECT
     ) {
-      showText = `发起人自选`;
+      const candidateNames: string[] = [];
+      userOptions?.value.forEach((item: any) => {
+        if (configForm.value?.startUserSelectUserIds?.includes(item.id)) {
+          candidateNames.push(item.nickname);
+        }
+      });
+      showText = candidateNames.length
+        ? `发起人自选：${candidateNames.join(',')}`
+        : `发起人自选`;
     }
     // 发起人自己
     if (configForm.value?.candidateStrategy === CandidateStrategy.START_USER) {
@@ -452,6 +461,10 @@ export function useNodeForm(nodeType: BpmNodeTypeEnum) {
         candidateParam = configForm.value.userGroups?.join(',');
         break;
       }
+      case CandidateStrategy.START_USER_SELECT: {
+        candidateParam = configForm.value.startUserSelectUserIds?.join(',');
+        break;
+      }
       default: {
         break;
       }
@@ -532,6 +545,12 @@ export function useNodeForm(nodeType: BpmNodeTypeEnum) {
       }
       case CandidateStrategy.USER_GROUP: {
         configForm.value.userGroups = candidateParam
+          .split(',')
+          .map((item) => +item);
+        break;
+      }
+      case CandidateStrategy.START_USER_SELECT: {
+        configForm.value.startUserSelectUserIds = candidateParam
           .split(',')
           .map((item) => +item);
         break;

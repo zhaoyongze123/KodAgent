@@ -90,9 +90,7 @@ public class KodSsoServiceImplTest extends BaseDbUnitTest {
 
     @Test
     public void testBuildClientRedirectUrl_andExchange_success() {
-        when(kodSsoUserBindMapper.selectByKodUsername(eq("koduser"))).thenReturn(new KodSsoUserBindDO()
-                .setId(11L).setUserId(11L).setKodUserId("old-u-1").setKodUsername("koduser"));
-        when(adminUserService.getUser(eq(11L))).thenReturn(new AdminUserDO()
+        when(adminUserService.getUserByUsername(eq("koduser"))).thenReturn(new AdminUserDO()
                 .setId(11L).setUsername("koduser").setNickname("可道云用户"));
 
         AuthLoginRespVO loginRespVO = randomPojo(AuthLoginRespVO.class, o -> o.setUserId(11L));
@@ -117,9 +115,7 @@ public class KodSsoServiceImplTest extends BaseDbUnitTest {
 
     @Test
     public void testBuildClientRedirectUrl_hashRoute_keepExchangeCodeInFragment() {
-        when(kodSsoUserBindMapper.selectByKodUsername(eq("koduser"))).thenReturn(new KodSsoUserBindDO()
-                .setId(11L).setUserId(11L).setKodUserId("old-u-1").setKodUsername("koduser"));
-        when(adminUserService.getUser(eq(11L))).thenReturn(new AdminUserDO()
+        when(adminUserService.getUserByUsername(eq("koduser"))).thenReturn(new AdminUserDO()
                 .setId(11L).setUsername("koduser").setNickname("可道云用户"));
 
         try (MockedStatic<HttpUtils> mockedHttpUtils = mockStatic(HttpUtils.class, CALLS_REAL_METHODS)) {
@@ -141,9 +137,7 @@ public class KodSsoServiceImplTest extends BaseDbUnitTest {
 
     @Test
     public void testExchangeCode_withCurrentLoginContext_stillUseTargetUser() {
-        when(kodSsoUserBindMapper.selectByKodUsername(eq("zhanghua"))).thenReturn(new KodSsoUserBindDO()
-                .setId(11L).setUserId(219L).setKodUserId("old-u-4").setKodUsername("zhanghua"));
-        when(adminUserService.getUser(eq(219L))).thenReturn(new AdminUserDO()
+        when(adminUserService.getUserByUsername(eq("zhanghua"))).thenReturn(new AdminUserDO()
                 .setId(219L).setUsername("zhanghua").setNickname("张华"));
 
         AuthLoginRespVO loginRespVO = randomPojo(AuthLoginRespVO.class, o -> o.setUserId(219L));
@@ -197,7 +191,6 @@ public class KodSsoServiceImplTest extends BaseDbUnitTest {
 
     @Test
     public void testLoginByKodToken_matchExistingUserAndCreateBind() {
-        when(kodSsoUserBindMapper.selectByKodUsername(eq("alice"))).thenReturn(null);
         when(adminUserService.getUserByUsername(eq("alice"))).thenReturn(new AdminUserDO()
                 .setId(22L).setUsername("alice").setNickname("旧 Alice").setEmail("old@example.com"));
         when(kodSsoUserBindMapper.selectByUserId(eq(22L))).thenReturn(null);
@@ -230,16 +223,16 @@ public class KodSsoServiceImplTest extends BaseDbUnitTest {
     }
 
     @Test
-    public void testLoginByKodToken_matchBindByKodUsernameAndRefreshBind() {
+    public void testLoginByKodToken_matchUsernameAndRefreshExistingBind() {
         KodSsoUserBindDO bind = new KodSsoUserBindDO();
         bind.setId(33L);
         bind.setUserId(33L);
         bind.setKodUserId("old-u-3");
-        bind.setKodUsername("old-bob");
+        bind.setKodUsername("bob");
         bind.setKodNickname("旧 Bob");
-        when(kodSsoUserBindMapper.selectByKodUsername(eq("bob"))).thenReturn(bind);
-        when(adminUserService.getUser(eq(33L))).thenReturn(new AdminUserDO()
-                .setId(33L).setUsername("kodbob").setDeptId(2L).setNickname("Bob"));
+        when(adminUserService.getUserByUsername(eq("bob"))).thenReturn(new AdminUserDO()
+                .setId(33L).setUsername("bob").setDeptId(2L).setNickname("Bob"));
+        when(kodSsoUserBindMapper.selectByUserId(eq(33L))).thenReturn(bind);
         when(deptMapper.selectByParentIdAndName(eq(0L), eq("总公司")))
                 .thenReturn(new DeptDO().setId(1L).setParentId(0L).setName("总公司").setStatus(0));
         when(deptMapper.selectByParentIdAndName(eq(1L), eq("项目部")))
@@ -247,7 +240,7 @@ public class KodSsoServiceImplTest extends BaseDbUnitTest {
         when(permissionService.getUserRoleIdListByUserId(33L)).thenReturn(new HashSet<>(Collections.singleton(3L)));
 
         AuthLoginRespVO loginRespVO = randomPojo(AuthLoginRespVO.class, o -> o.setUserId(33L));
-        when(adminAuthService.createLoginToken(eq(33L), eq("kodbob"), any())).thenReturn(loginRespVO);
+        when(adminAuthService.createLoginToken(eq(33L), eq("bob"), any())).thenReturn(loginRespVO);
 
         try (MockedStatic<HttpUtils> mockedHttpUtils = mockStatic(HttpUtils.class, CALLS_REAL_METHODS)) {
             mockedHttpUtils.when(() -> HttpUtils.get(eq("https://kod.example.com/?user/sso/apiCheckToken&accessToken=kod-token-3&appName=oa-lite"),
@@ -277,8 +270,7 @@ public class KodSsoServiceImplTest extends BaseDbUnitTest {
                 .setUserId(1L)
                 .setKodUserId("1")
                 .setKodUsername("admin");
-        when(kodSsoUserBindMapper.selectByKodUsername(eq("admin"))).thenReturn(bind);
-        when(adminUserService.getUser(eq(1L))).thenReturn(new AdminUserDO()
+        when(adminUserService.getUserByUsername(eq("admin"))).thenReturn(new AdminUserDO()
                 .setId(1L).setUsername("admin").setNickname("管理员"));
         when(permissionService.getUserRoleIdListByUserId(1L))
                 .thenReturn(new HashSet<>(Collections.singleton(1L)));
@@ -301,9 +293,7 @@ public class KodSsoServiceImplTest extends BaseDbUnitTest {
 
     @Test
     public void testLoginByKodToken_noBindAndNoMatchedUser_autoCreateUserAndDept() {
-        when(kodSsoUserBindMapper.selectByKodUsername(eq("root"))).thenReturn(null);
         when(adminUserService.getUserByUsername(eq("root"))).thenReturn(null);
-        when(kodSsoUserBindMapper.selectByKodUserId(eq("u-4"))).thenReturn(null);
         when(deptMapper.selectByParentIdAndName(eq(0L), eq("总公司"))).thenReturn(null);
         when(deptMapper.selectByParentIdAndName(eq(88L), eq("项目部"))).thenReturn(null);
         when(deptService.createDept(any(DeptSaveReqVO.class))).thenAnswer(invocation -> {
@@ -338,7 +328,7 @@ public class KodSsoServiceImplTest extends BaseDbUnitTest {
         verify(adminUserService).createUser(argThat((UserSaveReqVO reqVO) ->
                 "root".equals(reqVO.getUsername())
                         && "Root".equals(reqVO.getNickname())
-                        && "admin123".equals(reqVO.getPassword())
+                        && reqVO.getPassword() != null
                         && Objects.equals(reqVO.getDeptId(), 99L)));
         verify(permissionService).assignUserRole(eq(44L), eq(Collections.singleton(1L)));
         verify(kodSsoUserBindMapper).insert(argThat((KodSsoUserBindDO bind) ->
@@ -348,14 +338,13 @@ public class KodSsoServiceImplTest extends BaseDbUnitTest {
     }
 
     @Test
-    public void testLoginByKodToken_rebindOldKodUserIdToUsernameMatchedUser() {
+    public void testLoginByKodToken_matchesUserByKodUsername() {
         KodSsoUserBindDO oldBind = new KodSsoUserBindDO()
                 .setId(66L)
                 .setUserId(151L)
                 .setKodUserId("2")
                 .setKodUsername("old-user")
                 .setKodNickname("旧用户");
-        when(kodSsoUserBindMapper.selectByKodUsername(eq("shenzhihua"))).thenReturn(null);
         when(adminUserService.getUserByUsername(eq("shenzhihua"))).thenReturn(
                 new AdminUserDO().setId(301L).setUsername("shenzhihua").setNickname("沈志华").setEmail("old-shen@example.com")
         );
@@ -381,6 +370,7 @@ public class KodSsoServiceImplTest extends BaseDbUnitTest {
                         && "2".equals(bind.getKodUserId())
                         && "shenzhihua".equals(bind.getKodUsername())
                         && "沈志华".equals(bind.getKodNickname())));
+        verify(adminUserService, never()).getUser(151L);
     }
 
 }

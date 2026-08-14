@@ -12,6 +12,7 @@ import cn.iocoder.yudao.framework.common.util.date.DateUtils;
 import cn.iocoder.yudao.framework.common.util.json.JsonUtils;
 import cn.iocoder.yudao.framework.common.util.object.ObjectUtils;
 import cn.iocoder.yudao.framework.common.util.object.PageUtils;
+import cn.iocoder.yudao.framework.common.util.string.StrUtils;
 import cn.iocoder.yudao.framework.datapermission.core.annotation.DataPermission;
 import cn.iocoder.yudao.module.bpm.api.task.dto.BpmProcessInstanceCreateReqDTO;
 import cn.iocoder.yudao.module.bpm.controller.admin.definition.vo.model.BpmModelMetaInfoVO;
@@ -861,6 +862,30 @@ public class BpmProcessInstanceServiceImpl implements BpmProcessInstanceService 
                     throw exception(PROCESS_INSTANCE_START_USER_SELECT_ASSIGNEES_NOT_EXISTS, task.getName(), assignee);
                 }
             });
+            validateStartUserSelectAssigneeWhitelist(definition.getId(), task.getId(), task.getName(), assignees);
+        });
+    }
+
+    /**
+     * A blank candidateParam preserves the legacy "initiator may choose anyone" behavior. When it is
+     * configured for a START_USER_SELECT node, every submitted user must belong to that node whitelist.
+     */
+    private void validateStartUserSelectAssigneeWhitelist(String processDefinitionId, String activityId,
+                                                           String taskName, List<Long> assignees) {
+        BpmnModel bpmnModel = processDefinitionService.getProcessDefinitionBpmnModel(processDefinitionId);
+        FlowElement flowElement = BpmnModelUtils.getFlowElementById(bpmnModel, activityId);
+        String candidateParam = BpmnModelUtils.parseCandidateParam(flowElement);
+        Set<Long> allowedUserIds = StrUtils.splitToLongSet(candidateParam);
+        if (CollUtil.isEmpty(allowedUserIds)) {
+            return;
+        }
+        if (assignees.size() != 1) {
+            throw exception(PROCESS_INSTANCE_START_USER_SELECT_ASSIGNEE_COUNT_INVALID, taskName);
+        }
+        assignees.forEach(assignee -> {
+            if (!allowedUserIds.contains(assignee)) {
+                throw exception(PROCESS_INSTANCE_START_USER_SELECT_ASSIGNEE_NOT_ALLOWED, taskName, assignee);
+            }
         });
     }
 

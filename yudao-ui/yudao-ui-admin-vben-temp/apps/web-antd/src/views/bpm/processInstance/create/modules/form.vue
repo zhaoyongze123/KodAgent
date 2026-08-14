@@ -438,7 +438,8 @@ defineExpose({ initProcessInfo });
   min-height: 0;
   flex: 1;
   flex-direction: column;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   overscroll-behavior: contain;
   padding-top: 12px;
 }
@@ -460,7 +461,9 @@ defineExpose({ initProcessInfo });
 }
 
 .bpm-create-form-panel {
+  width: 100%;
   min-width: 0;
+  margin-inline: 0 !important;
   padding-top: 8px;
   padding-bottom: 24px;
   border-top: 1px solid var(--oa-shell-border);

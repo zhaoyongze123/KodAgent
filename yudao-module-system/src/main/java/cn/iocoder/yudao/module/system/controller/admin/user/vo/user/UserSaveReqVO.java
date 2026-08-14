@@ -24,6 +24,7 @@ public class UserSaveReqVO {
     @Schema(description = "用户账号", requiredMode = Schema.RequiredMode.REQUIRED, example = "yudao")
     @NotBlank(message = "用户账号不能为空")
     @Size(max = 30, message = "用户账号长度不能超过 30 个字符")
+    @Pattern(regexp = "^[a-z][a-z0-9]{0,29}$", message = "用户账号只能使用小写英文字母和数字，且必须以字母开头")
     @DiffLogField(name = "用户账号")
     private String username;
 

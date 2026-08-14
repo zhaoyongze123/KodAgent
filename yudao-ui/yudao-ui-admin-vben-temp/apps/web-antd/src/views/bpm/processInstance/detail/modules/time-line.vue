@@ -2,7 +2,7 @@
 <script lang="ts" setup>
 import type { BpmProcessInstanceApi } from '#/api/bpm/processInstance';
 
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 
 import { useVbenModal } from '@vben/common-ui';
@@ -203,10 +203,14 @@ function getActivityCandidateUsers(
 }
 
 function getActivityUsers(activity: BpmProcessInstanceApi.ApprovalNodeInfo) {
+  const customUsers = customApproveUsers.value[activity.id] || [];
   const users = [
-    ...(customApproveUsers.value[activity.id] || []),
+    ...customUsers,
     ...getActivityTasks(activity).map((task) => getTimelineUser(task)),
-    ...getActivityCandidateUsers(activity),
+    ...(customUsers.length > 0 &&
+    activity.candidateStrategy === BpmCandidateStrategyEnum.START_USER_SELECT
+      ? []
+      : getActivityCandidateUsers(activity)),
   ].filter(Boolean);
   const seen = new Set<string>();
   return users.filter((user) => {
@@ -225,6 +229,41 @@ function getActivityPrimaryUser(
   return getActivityUsers(activity)[0];
 }
 
+function getSingleApproverId(
+  activity: BpmProcessInstanceApi.ApprovalNodeInfo,
+) {
+  if (
+    ![
+      BpmNodeTypeEnum.TRANSACTOR_NODE,
+      BpmNodeTypeEnum.USER_TASK_NODE,
+    ].includes(activity.nodeType)
+  ) {
+    return undefined;
+  }
+  const users = getActivityUsers(activity);
+  return users.length === 1 && users[0]?.id ? String(users[0].id) : undefined;
+}
+
+// 模型历史数据可能在同一条主链连续配置同一审批人。展示层只保留后一个节点，
+// 使待办状态和自选审批人的交互仍绑定到真正生效的节点。
+const displayActivityNodes = computed(() => {
+  const nodes: BpmProcessInstanceApi.ApprovalNodeInfo[] = [];
+  for (const activity of props.activityNodes) {
+    const previous = nodes[nodes.length - 1];
+    const currentApproverId = getSingleApproverId(activity);
+    if (
+      previous &&
+      currentApproverId &&
+      currentApproverId === getSingleApproverId(previous)
+    ) {
+      nodes[nodes.length - 1] = activity;
+      continue;
+    }
+    nodes.push(activity);
+  }
+  return nodes;
+});
+
 function getTimelineUserPosition(
   user: any,
 ) {
@@ -240,13 +279,22 @@ const [UserSelectModalComp, userSelectModalApi] = useVbenModal({
   destroyOnClose: true,
 });
 const selectedActivityNodeId = ref<string>();
+const selectedActivitySingleSelect = ref(false);
 const customApproveUsers = ref<Record<string, any[]>>({}); // key：activityId，value：用户列表
 
 /** 打开选择用户弹窗 */
-const handleSelectUser = (activityId: string, selectedList: any[]) => {
+const handleSelectUser = (
+  activityId: string,
+  selectedList: any[],
+  allowedUserIds?: number[],
+) => {
   selectedActivityNodeId.value = activityId;
+  selectedActivitySingleSelect.value = Boolean(allowedUserIds?.length);
   userSelectModalApi
-    .setData({ userIds: selectedList.map((item) => item.id) })
+    .setData({
+      allowedUserIds,
+      userIds: selectedList.map((item) => item.id),
+    })
     .open();
 };
 
@@ -256,9 +304,12 @@ function handleUserSelectConfirm(userList: any[]) {
   if (!selectedActivityNodeId.value) {
     return;
   }
-  customApproveUsers.value[selectedActivityNodeId.value] = userList || [];
+  const selectedUsers = selectedActivitySingleSelect.value
+    ? (userList || []).slice(0, 1)
+    : (userList || []);
+  customApproveUsers.value[selectedActivityNodeId.value] = selectedUsers;
 
-  emit('selectUserConfirm', selectedActivityNodeId.value, userList);
+  emit('selectUserConfirm', selectedActivityNodeId.value, selectedUsers);
 }
 
 /** 跳转子流程 */
@@ -282,7 +333,7 @@ function shouldShowCustomUserSelect(
     isEmpty(activity.tasks) &&
     ((BpmCandidateStrategyEnum.START_USER_SELECT ===
       activity.candidateStrategy &&
-      isEmpty(activity.candidateUsers)) ||
+      isEmpty(activity.tasks)) ||
       (props.enableApproveUserSelect &&
         BpmCandidateStrategyEnum.APPROVE_USER_SELECT ===
           activity.candidateStrategy))
@@ -329,7 +380,7 @@ defineExpose({ setCustomApproveUsers, batchSetCustomApproveUsers });
     <Timeline class="oa-process-timeline-list">
       <!-- 遍历每个审批节点 -->
       <Timeline.Item
-        v-for="(activity, index) in activityNodes"
+        v-for="(activity, index) in displayActivityNodes"
         :key="index"
         :color="getApprovalNodeColor(activity.status)"
       >
@@ -428,17 +479,21 @@ defineExpose({ setCustomApproveUsers, batchSetCustomApproveUsers });
               <Button
                 type="primary"
                 size="middle"
-                ghost
+                aria-label="添加审批人"
                 class="oa-process-timeline-add-user"
                 @click="
                   handleSelectUser(
                     activity.id,
                     customApproveUsers[activity.id] ?? [],
+                    activity.candidateUsers?.map((user) => user.id),
                   )
                 "
               >
                 <template #icon>
-                  <IconifyIcon icon="lucide:user-plus" class="size-4" />
+                  <IconifyIcon
+                    icon="lucide:plus"
+                    class="oa-process-timeline-add-user-icon"
+                  />
                 </template>
               </Button>
             </Tooltip>
@@ -486,7 +541,7 @@ defineExpose({ setCustomApproveUsers, batchSetCustomApproveUsers });
     <UserSelectModalComp
       class="w-3/5"
       v-model:value="selectedUsers"
-      :multiple="true"
+      :multiple="!selectedActivitySingleSelect"
       title="选择用户"
       @confirm="handleUserSelectConfirm"
       @closed="handleUserSelectClosed"
@@ -645,7 +700,25 @@ defineExpose({ setCustomApproveUsers, batchSetCustomApproveUsers });
 }
 
 .oa-process-timeline-add-user {
-  border-radius: 0;
+  display: inline-flex;
+  width: 36px;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 4px;
+}
+
+.oa-process-timeline-add-user :deep(.ant-btn-icon) {
+  display: inline-flex;
+  margin: 0;
+  line-height: 1;
+}
+
+.oa-process-timeline-add-user-icon {
+  color: #fff;
+  font-size: 18px;
+  stroke-width: 2.5;
 }
 
 .oa-process-timeline-user-chip {

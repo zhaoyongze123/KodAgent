@@ -1,4 +1,5 @@
 import { formatDate, formatDateTime } from '@vben/utils';
+import { getDictLabel } from '@vben/hooks';
 
 export interface FlowFormDisplayOption {
   id?: number | string;
@@ -37,6 +38,11 @@ function getOptionLabel(rule: any, value: unknown) {
     (option: any) => String(option?.value) === String(value),
   );
   return matched?.label ?? matched?.name;
+}
+
+function getDictOptionLabel(rule: any, value: unknown) {
+  const dictType = String(rule?.props?.dictType || rule?.dictType || '').trim();
+  return dictType ? getDictLabel(dictType, value) : '';
 }
 
 export function isMillisecondTimestamp(value: unknown) {
@@ -95,6 +101,10 @@ export function formatFlowFormValue(
   const optionLabel = getOptionLabel(rule, parsed);
   if (optionLabel !== undefined) {
     return String(optionLabel);
+  }
+  const dictOptionLabel = getDictOptionLabel(rule, parsed);
+  if (dictOptionLabel) {
+    return dictOptionLabel;
   }
   const ruleType = String(rule?.type || '').toLowerCase();
   if (ruleType === 'userselect') {

@@ -196,7 +196,10 @@ onMounted(() => {
 </script>
 
 <template>
-  <Page auto-content-height>
+  <Page
+    auto-content-height
+    content-class="!overflow-x-hidden !bg-white !px-6 !py-5"
+  >
     <!-- TODO @jason：这里交互，可以做成类似 vue3 + element-plus 那个一样，滚动切换分类哈？对标钉钉、飞书哈； -->
     <!-- 第一步，通过流程定义的列表，选择对应的流程 -->
     <template v-if="!selectProcessDefinition">

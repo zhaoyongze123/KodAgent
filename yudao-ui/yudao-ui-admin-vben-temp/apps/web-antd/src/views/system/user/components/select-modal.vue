@@ -22,6 +22,7 @@ import {
 
 import { getSimpleDeptList } from '#/api/system/dept';
 import { getUserPage } from '#/api/system/user';
+import { getSimpleUserList } from '#/api/system/user';
 
 /** 部门树节点接口 */
 interface DeptTreeNode {
@@ -41,7 +42,7 @@ interface Props {
 
 defineOptions({ name: 'UserSelectModal' });
 
-withDefaults(defineProps<Props>(), {
+const props = withDefaults(defineProps<Props>(), {
   title: '选择用户',
   multiple: true,
   value: () => [],
@@ -189,6 +190,23 @@ const filteredDeptTree = computed(() => {
 /** 加载用户数据 */
 async function loadUserData(pageNo: number, pageSize: number) {
   try {
+    const allowedUserIds = modalApi.getData()?.allowedUserIds as
+      | number[]
+      | undefined;
+    if (allowedUserIds?.length) {
+      const list = await getSimpleUserList();
+      const allowedUserIdSet = new Set(allowedUserIds);
+      const allowedUsers = list.filter((user) => allowedUserIdSet.has(user.id!));
+      leftListState.value.dataSource = allowedUsers;
+      leftListState.value.pagination.total = allowedUsers.length;
+      leftListState.value.pagination.current = 1;
+      leftListState.value.pagination.pageSize = pageSize;
+      const knownUserIds = new Set(userList.value.map((user) => user.id));
+      userList.value.push(
+        ...allowedUsers.filter((user) => !knownUserIds.has(user.id)),
+      );
+      return;
+    }
     const { list, total } = await getUserPage({
       pageNo,
       pageSize,
@@ -272,8 +290,11 @@ async function handleUserSearch(direction: string, value: string) {
 
 /** 处理用户选择变化 */
 function handleUserChange(targetKeys: string[]) {
-  // 使用 Set 来去重选中的用户ID
-  selectedUserIds.value = [...new Set(targetKeys)];
+  // 白名单审批节点只能指定一名审批人；普通用户选择仍保留原有多选行为。
+  const uniqueUserIds = [...new Set(targetKeys)];
+  selectedUserIds.value = props.multiple
+    ? uniqueUserIds
+    : uniqueUserIds.slice(-1);
   emit('update:value', selectedUserIds.value.map(Number));
   updateRightListData();
 }
@@ -427,7 +448,7 @@ function processDeptNode(node: any): DeptTreeNode {
           v-model:target-keys="selectedUserIds"
           :titles="['未选', '已选']"
           :show-search="true"
-          :show-select-all="true"
+          :show-select-all="props.multiple"
           :filter-option="filterOption"
           @change="handleUserChange"
           @search="handleUserSearch"

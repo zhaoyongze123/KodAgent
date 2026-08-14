@@ -65,4 +65,12 @@ public class BpmTaskCandidateStartUserSelectStrategyTest extends BaseMockitoUnit
         assertEquals(Sets.newLinkedHashSet(1L, 2L), userIds);
     }
 
+    @Test
+    public void testCalculateUsersByActivity_useConfiguredWhitelistBeforeSelection() {
+        Set<Long> userIds = strategy.calculateUsersByActivity(null, "activity_001", "1,2", null, null,
+                new HashMap<>());
+
+        assertEquals(Sets.newLinkedHashSet(1L, 2L), userIds);
+    }
+
 }

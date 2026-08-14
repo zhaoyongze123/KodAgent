@@ -1905,11 +1905,11 @@ onUnmounted(() => {
 
                   <div v-else class="oa-lite-detail-panel oa-lite-detail-panel--full">
                     <div class="oa-lite-detail-header">
+                      <span class="oa-lite-detail-title">{{ currentListTitle }}详情</span>
                       <Button type="link" class="oa-lite-detail-back" @click="closeDetail">
                         <IconifyIcon icon="solar:arrow-left-outline" />
                         返回列表
                       </Button>
-                      <span class="oa-lite-detail-title">{{ currentListTitle }}详情</span>
                     </div>
                     <div v-if="currentDetailRequest" class="oa-lite-detail-scroll-region">
                       <ProcessDetail
@@ -2796,6 +2796,7 @@ onUnmounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  margin-left: auto;
   padding-inline: 0;
 }
 

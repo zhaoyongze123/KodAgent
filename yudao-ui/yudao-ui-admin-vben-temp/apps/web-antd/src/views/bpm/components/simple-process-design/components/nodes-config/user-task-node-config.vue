@@ -227,6 +227,7 @@ function changeCandidateStrategy() {
   configForm.value.roleIds = [];
   configForm.value.postIds = [];
   configForm.value.userGroups = [];
+  configForm.value.startUserSelectUserIds = [];
   configForm.value.deptLevel = 1;
   configForm.value.formUser = '';
   configForm.value.formDept = '';
@@ -400,6 +401,7 @@ function showUserTaskNodeConfig(node: SimpleFlowNode) {
 
   // 2.1 审批人设置
   configForm.value.candidateStrategy = node.candidateStrategy!;
+  configForm.value.startUserSelectUserIds = [];
   // 解析候选人参数
   parseCandidateParam(node.candidateStrategy!, node?.candidateParam);
   // 2.2 设置审批方式
@@ -767,6 +769,27 @@ onMounted(() => {
                 v-model:value="configForm.userIds"
                 clearable
                 mode="multiple"
+              >
+                <SelectOption
+                  v-for="item in userOptions"
+                  :key="item.id"
+                  :label="item.nickname"
+                  :value="item.id"
+                >
+                  {{ item.nickname }}
+                </SelectOption>
+              </Select>
+            </FormItem>
+            <FormItem
+              v-if="configForm.candidateStrategy === CandidateStrategy.START_USER_SELECT"
+              label="限定可选审批人"
+              name="startUserSelectUserIds"
+            >
+              <Select
+                v-model:value="configForm.startUserSelectUserIds"
+                clearable
+                mode="multiple"
+                placeholder="可选；不配置则发起人可从全部用户中选择"
               >
                 <SelectOption
                   v-for="item in userOptions"

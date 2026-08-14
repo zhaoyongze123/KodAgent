@@ -4,7 +4,7 @@ import type { SystemDeptApi } from '#/api/system/dept';
 import type { SystemUserApi } from '#/api/system/user';
 import type { OAModuleApiKey } from '#/views/bpm/oa/shared/config';
 
-import { computed, h, nextTick, ref, shallowRef, watch } from 'vue';
+import { computed, nextTick, ref, shallowRef, watch } from 'vue';
 
 import { prompt } from '@vben/common-ui';
 import {
@@ -15,6 +15,7 @@ import {
 } from '@vben/constants';
 import { IconifyIcon } from '@vben/icons';
 import { useUserStore } from '@vben/stores';
+import { formatDateTime } from '@vben/utils';
 import { useI18n } from '@vben/locales';
 
 import { Button, Empty, message, Modal, Spin, Tag, Textarea } from 'ant-design-vue';
@@ -535,23 +536,25 @@ function handleCancelProcess() {
     return;
   }
   prompt({
-    component: () =>
-      h(Textarea, {
-        allowClear: true,
-        placeholder: t('page.oaLite.processDetail.cancelReasonPlaceholder'),
-        rows: 2,
-      }),
+    component: Textarea,
+    componentProps: {
+      allowClear: true,
+      placeholder: t('page.oaLite.processDetail.cancelReasonPlaceholder'),
+      rows: 2,
+    },
     content: t('page.oaLite.processDetail.cancelReasonPlaceholder'),
     modelPropName: 'value',
     title: t('page.oaLite.processDetail.cancelProcess'),
+    validate: (reason) =>
+      String(reason || '').trim()
+        ? undefined
+        : t('page.oaLite.processDetail.cancelReasonPlaceholder'),
   }).then(async (reason) => {
-    if (!reason) {
-      return;
-    }
+    const cancelReason = String(reason).trim();
     if (props.section === 'manager') {
-      await cancelProcessInstanceByAdmin(processInstance.value!.id, reason);
+      await cancelProcessInstanceByAdmin(processInstance.value!.id, cancelReason);
     } else {
-      await cancelProcessInstanceByStartUser(processInstance.value!.id, reason);
+      await cancelProcessInstanceByStartUser(processInstance.value!.id, cancelReason);
     }
     message.success(t('page.oaLite.messages.cancelSuccess'));
     emit('refresh');
@@ -981,7 +984,7 @@ watch(
 
 .oa-lite-detail-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 320px);
+  grid-template-columns: minmax(0, 1fr) minmax(340px, 380px);
   gap: 12px;
   align-items: start;
 }

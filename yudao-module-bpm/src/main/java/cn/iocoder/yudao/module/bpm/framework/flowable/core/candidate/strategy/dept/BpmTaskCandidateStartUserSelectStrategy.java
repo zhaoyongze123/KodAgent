@@ -2,10 +2,14 @@ package cn.iocoder.yudao.module.bpm.framework.flowable.core.candidate.strategy.d
 
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.lang.Assert;
+import cn.hutool.core.text.StrPool;
+import cn.hutool.core.util.StrUtil;
+import cn.iocoder.yudao.framework.common.util.string.StrUtils;
 import cn.iocoder.yudao.module.bpm.framework.flowable.core.candidate.strategy.user.BpmTaskCandidateUserStrategy;
 import cn.iocoder.yudao.module.bpm.framework.flowable.core.enums.BpmTaskCandidateStrategyEnum;
 import cn.iocoder.yudao.module.bpm.framework.flowable.core.util.FlowableUtils;
 import cn.iocoder.yudao.module.bpm.service.task.BpmProcessInstanceService;
+import cn.iocoder.yudao.module.system.api.user.AdminUserApi;
 import com.google.common.collect.Sets;
 import org.flowable.bpmn.model.BpmnModel;
 import org.flowable.engine.delegate.DelegateExecution;
@@ -30,13 +34,20 @@ public class BpmTaskCandidateStartUserSelectStrategy extends AbstractBpmTaskCand
     @Lazy // 延迟加载，避免循环依赖
     private BpmProcessInstanceService processInstanceService;
 
+    @Resource
+    private AdminUserApi adminUserApi;
+
     @Override
     public BpmTaskCandidateStrategyEnum getStrategy() {
         return BpmTaskCandidateStrategyEnum.START_USER_SELECT;
     }
 
     @Override
-    public void validateParam(String param) {}
+    public void validateParam(String param) {
+        if (StrUtil.isNotBlank(param)) {
+            adminUserApi.validateUserList(StrUtils.splitToLongSet(param));
+        }
+    }
 
     @Override
     public boolean isParamRequired() {
@@ -58,16 +69,16 @@ public class BpmTaskCandidateStartUserSelectStrategy extends AbstractBpmTaskCand
     @Override
     public LinkedHashSet<Long> calculateUsersByActivity(BpmnModel bpmnModel, String activityId, String param,
                                                         Long startUserId, String processDefinitionId, Map<String, Object> processVariables) {
-        if (processVariables == null) {
-            return Sets.newLinkedHashSet();
+        if (processVariables != null) {
+            Map<String, List<Long>> startUserSelectAssignees = FlowableUtils.getStartUserSelectAssignees(processVariables);
+            if (startUserSelectAssignees != null && startUserSelectAssignees.containsKey(activityId)) {
+                List<Long> assignees = startUserSelectAssignees.get(activityId);
+                return CollUtil.isNotEmpty(assignees) ? new LinkedHashSet<>(assignees) : Sets.newLinkedHashSet();
+            }
         }
-        Map<String, List<Long>> startUserSelectAssignees = FlowableUtils.getStartUserSelectAssignees(processVariables);
-        if (startUserSelectAssignees == null) {
-            return Sets.newLinkedHashSet();
-        }
-        // 获得审批人
-        List<Long> assignees = startUserSelectAssignees.get(activityId);
-        return CollUtil.isNotEmpty(assignees) ? new LinkedHashSet<>(assignees) : Sets.newLinkedHashSet();
+        // Before selection, candidateParam is the optional whitelist configured on the node.
+        return StrUtil.isBlank(param) ? Sets.newLinkedHashSet()
+                : new LinkedHashSet<>(StrUtils.splitToLong(param, StrPool.COMMA));
     }
 
 }
