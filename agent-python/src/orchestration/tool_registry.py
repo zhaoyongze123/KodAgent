@@ -57,6 +57,15 @@ from ..tools.party_files.metadata import execute_party_file_metadata_plan
 from ..tools.party_files.knowledge import check_party_knowledge_health, search_party_knowledge
 from ..tools.party_files.manage import create_party_file_draft, update_party_file_draft, delete_party_file_draft, get_manage_party_file, confirm_create_party_file, confirm_update_party_file, confirm_delete_party_file
 from ..tools.reports import approval_report, meeting_report, party_file_report, schedule_report
+from ..tools.projects import (
+    analyze_project,
+    get_project_activity,
+    get_project_documents,
+    get_project_snapshot,
+    get_project_tasks,
+    list_accessible_projects,
+    search_project_knowledge,
+)
 from ..tools.workflows.party_files import check_approval_against_party_file, run_party_file_compare, run_party_file_understanding
 from ..tools.schedule.drafts import (
     confirm_personal_schedule,
@@ -68,6 +77,7 @@ from ..tools.common import (
     report_progress,
     route_conversation,
 )
+from ..tools.common.artifacts import create_document_artifact
 from ..tools.workflows.meeting_booking import run_meeting_booking_workflow
 from ..tools.workflows.personal_schedule import run_personal_schedule_workflow
 from ..tools.workflows.approval import run_approval_write_workflow
@@ -167,6 +177,14 @@ def business_tools() -> list:
         schedule_report,
         party_file_report,
         approval_report,
+        list_accessible_projects,
+        analyze_project,
+        get_project_snapshot,
+        get_project_tasks,
+        get_project_activity,
+        get_project_documents,
+        search_project_knowledge,
+        create_document_artifact,
     ]
 
 
@@ -181,6 +199,7 @@ def main_tools() -> list:
     return [
         report_progress,
         route_conversation,
+        create_document_artifact,
         confirm_meeting_booking,
         confirm_personal_schedule,
         confirm_approval_request_action,

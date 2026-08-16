@@ -8,8 +8,8 @@ import { Button } from "../ui/button";
 import { Checkpoint, Message } from "@langchain/langgraph-sdk";
 import {
   AssistantMessage,
-  AssistantMessageLoading,
   InterruptSlot,
+  StreamingAssistantMessage,
 } from "./messages/ai";
 import { HumanMessage } from "./messages/human";
 import { ensureToolCallsHaveResponses } from "@/lib/ensure-tool-responses";
@@ -28,15 +28,11 @@ import {
   Plus,
   ChevronRight,
   Building2,
-  CalendarCheck2,
   CalendarDays,
   ClipboardList,
   Cloud,
   FileText,
   RefreshCw,
-  UserRound,
-  Users,
-  Wrench,
   type LucideIcon,
 } from "lucide-react";
 import { useQueryState, parseAsBoolean, parseAsString } from "nuqs";
@@ -44,11 +40,13 @@ import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 import ThreadHistory from "./history";
 import { toast } from "sonner";
 import { ErrorCard } from "./cards/ErrorCard";
-import { normalizeAgentError } from "@/lib/agent-error";
+import {
+  normalizeAgentError,
+  normalizePersistedRunFailure,
+} from "@/lib/agent-error";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { Label } from "../ui/label";
 import { Switch } from "../ui/switch";
-import { MarkdownText } from "./markdown-text";
 import { SUPPORTED_FILE_TYPES, useFileUpload } from "@/hooks/use-file-upload";
 import { ContentBlocksPreview } from "./ContentBlocksPreview";
 import {
@@ -59,21 +57,22 @@ import {
 } from "./artifact";
 import {
   collectCustomProcessEvents,
-  firstVisibleProcessText,
-  normalizeProcessText,
-  readDurableCursor,
   reduceProcessEvents,
-  type ProcessEvent,
+  type ProcessRun,
 } from "./process-events";
 import {
   maxDurableEventCursor,
   mergePersistedProcessRuns,
 } from "@/lib/persisted-event-recovery";
-import { useThreadPresentation, type ProcessRun } from "./thread-presentation";
-import { inferToolName, toolLabel } from "./tool-labels";
+import { useThreadPresentation } from "./thread-presentation";
+import {
+  hasPersistedRunTerminalEvent,
+  parsePersistedProcessRuns,
+} from "@/lib/persisted-process-runs";
 import { createAgentStreamOptions } from "@/lib/agent-stream-options";
 import { ResultRenderScope } from "./results/result-render-context";
 import { modelSupportsAgentTools } from "@/lib/model-capabilities";
+import { RunActivity } from "./run-activity";
 
 function StickyToBottomContent(props: {
   content: ReactNode;
@@ -114,13 +113,6 @@ function ScrollToBottom(props: { className?: string }) {
       <span>Scroll to bottom</span>
     </Button>
   );
-}
-
-function formatElapsed(seconds: number) {
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-  if (minutes > 0) return `${minutes}m ${remainingSeconds}s`;
-  return `${remainingSeconds}s`;
 }
 
 const welcomeShortcuts: Array<{
@@ -176,295 +168,6 @@ function modelSupportsTools(model: SelectableModel): boolean {
   return modelSupportsAgentTools(model.capabilities);
 }
 
-function persistedProcessEvents(value: unknown): ProcessEvent[] {
-  if (!Array.isArray(value)) return [];
-
-  return value.flatMap((item, index) => {
-    if (!item || typeof item !== "object") return [];
-    const event = item as Record<string, unknown>;
-    const data = (event.data ?? {}) as Record<string, unknown>;
-    const eventType = String(event.type ?? "");
-    // Agent UI only shows readable process Markdown and tool names. Console
-    // lifecycle/status events are intentionally excluded from this view.
-    if (eventType === "run.started") return [];
-    const entryId =
-      typeof event.entryId === "string"
-        ? event.entryId
-        : typeof data.entryId === "string"
-          ? data.entryId
-          : undefined;
-    const isNarration = eventType === "narration.upsert" && !!entryId;
-    const isLegacyNarration = [
-      "plan.created",
-      "progress",
-      "workflow.started",
-      "workflow.node.started",
-      "workflow.node.completed",
-      "workflow.blocked",
-      "workflow.failed",
-      "workflow.completed",
-    ].includes(eventType);
-    const isMessage = isNarration || isLegacyNarration;
-    const isTool = ["tool.started", "tool.completed", "tool.failed"].includes(
-      eventType,
-    );
-    if (!isMessage && !isTool) return [];
-    const eventText = firstVisibleProcessText(
-      event.text,
-      data.text,
-      data.summary,
-      data.content,
-    );
-    const text = isTool
-      ? toolLabel(String(data.toolName ?? inferToolName(eventText)))
-      : eventText;
-    if (!text && !isTool) return [];
-    if (isTool && !text) return [];
-
-    const legacyEntryId = `legacy:${String(event.eventId ?? `${eventType}-${index}`)}`;
-
-    return [
-      {
-        id: isNarration
-          ? entryId
-          : isLegacyNarration
-            ? legacyEntryId
-            : String(event.eventId ?? `${eventType}-${index}-${text}`),
-        type: isMessage ? "message" : "tool",
-        text,
-        ...(isMessage && {
-          entryId: isNarration ? entryId : legacyEntryId,
-          revision:
-            typeof event.revision === "number"
-              ? event.revision
-              : typeof data.revision === "number"
-                ? data.revision
-                : 1,
-          narrationStatus:
-            event.status === "streaming" ||
-            event.status === "failed" ||
-            event.status === "completed"
-              ? event.status
-              : "completed",
-          actor:
-            event.actor === "main_agent" ||
-            event.actor === "sub_agent" ||
-            event.actor === "tool" ||
-            event.actor === "system"
-              ? event.actor
-              : undefined,
-          actorName:
-            typeof event.actorName === "string" ? event.actorName : undefined,
-          category:
-            event.category === "plan" ||
-            event.category === "progress" ||
-            event.category === "result" ||
-            event.category === "warning" ||
-            event.category === "confirmation"
-              ? event.category
-              : undefined,
-        }),
-        status: isTool
-          ? eventType === "tool.failed"
-            ? "failed"
-            : eventType === "tool.completed"
-              ? "completed"
-              : "started"
-          : undefined,
-        timestamp:
-          typeof event.timestamp === "string" ? event.timestamp : undefined,
-        sequence:
-          typeof event.sequence === "number" ? event.sequence : undefined,
-        cursorId: readDurableCursor(event.eventCursor),
-        source: "persisted",
-        eventType,
-        messageId:
-          typeof event.messageId === "string" && event.messageId
-            ? event.messageId
-            : undefined,
-        toolCallId:
-          typeof event.toolCallId === "string"
-            ? event.toolCallId
-            : typeof data.toolCallId === "string"
-              ? data.toolCallId
-              : undefined,
-        runId:
-          typeof event.runId === "string" && event.runId
-            ? event.runId
-            : undefined,
-      } satisfies ProcessEvent,
-    ];
-  });
-}
-
-function parsePersistedProcessRuns(value: unknown): ProcessRun[] {
-  if (!Array.isArray(value)) return [];
-  const rawEvents = (value as unknown[]).filter(
-    (item): item is Record<string, unknown> =>
-      !!item && typeof item === "object",
-  );
-  const processGroups = new Map<
-    string,
-    {
-      runId: string;
-      messageId?: string;
-      events: ProcessEvent[];
-      timestamps: number[];
-    }
-  >();
-
-  rawEvents.forEach((rawEvent) => {
-    const runId = String(rawEvent.runId ?? "thread-run");
-    const messageId =
-      typeof rawEvent.messageId === "string" && rawEvent.messageId
-        ? rawEvent.messageId
-        : undefined;
-    // A Run is the durable unit of execution. Message IDs only link a Run
-    // back to a user turn; they must not be used as the grouping key.
-    const groupKey = `run:${runId}`;
-    const group = processGroups.get(groupKey) ?? {
-      runId,
-      messageId,
-      events: [],
-      timestamps: [],
-    };
-    const rawTimestamp =
-      typeof rawEvent.timestamp === "string"
-        ? Date.parse(rawEvent.timestamp)
-        : NaN;
-    if (Number.isFinite(rawTimestamp)) group.timestamps.push(rawTimestamp);
-    const event = persistedProcessEvents([rawEvent])[0];
-    if (!event) return;
-    group.events.push(event);
-    if (!group.messageId && messageId) group.messageId = messageId;
-    processGroups.set(groupKey, group);
-  });
-
-  return [...processGroups.entries()]
-    .sort(
-      ([, left], [, right]) =>
-        Math.min(...left.timestamps, Number.MAX_SAFE_INTEGER) -
-        Math.min(...right.timestamps, Number.MAX_SAFE_INTEGER),
-    )
-    .map(([, group]) => {
-      const durationMs = rawEvents
-        .filter((event) => String(event.runId ?? "thread-run") === group.runId)
-        .reduce((max, event) => {
-          if (event.type !== "run.completed") return max;
-          const data = (event.data ?? {}) as Record<string, unknown>;
-          const duration =
-            typeof event.durationMs === "number"
-              ? event.durationMs
-              : typeof data.durationMs === "number"
-                ? data.durationMs
-                : 0;
-          return Math.max(max, duration);
-        }, 0);
-      const elapsedSeconds = durationMs
-        ? Math.floor(durationMs / 1000)
-        : group.timestamps.length > 1
-          ? Math.floor(
-              (Math.max(...group.timestamps) - Math.min(...group.timestamps)) /
-                1000,
-            )
-          : 0;
-      return {
-        runId: group.runId,
-        messageId: group.messageId,
-        events: reduceProcessEvents(group.events),
-        elapsedSeconds,
-      };
-    });
-}
-
-function ProcessHistory({
-  events,
-  elapsedSeconds,
-  hidden,
-  isRunning,
-}: {
-  events: ProcessEvent[];
-  elapsedSeconds: number;
-  hidden: boolean;
-  isRunning: boolean;
-}) {
-  const [isOpen, setIsOpen] = useState(isRunning);
-
-  useEffect(() => {
-    setIsOpen(isRunning);
-  }, [isRunning]);
-
-  if (hidden) return null;
-
-  if (!events.length) return null;
-
-  const blocks: Array<{
-    id: string;
-    messages: ProcessEvent[];
-    tools: ProcessEvent[];
-  }> = [];
-  events.forEach((event) => {
-    if (event.type === "message") {
-      blocks.push({ id: event.id, messages: [event], tools: [] });
-      return;
-    }
-    const current = blocks[blocks.length - 1];
-    if (current) {
-      current.tools.push(event);
-    } else {
-      blocks.push({
-        id: event.id,
-        messages: [],
-        tools: [event],
-      });
-    }
-  });
-
-  return (
-    <div className="mx-auto w-full max-w-3xl">
-      <button
-        type="button"
-        aria-expanded={isOpen}
-        aria-controls={`process-history-${events[0]?.id ?? "current"}`}
-        onClick={() => setIsOpen((open) => !open)}
-        className="text-muted-foreground border-border/70 flex w-full cursor-pointer items-center gap-2 border-b px-1 py-4 text-left text-base"
-      >
-        <span>已处理 {formatElapsed(elapsedSeconds)}</span>
-        <ChevronRight
-          aria-hidden="true"
-          className={cn("size-5 transition-transform", isOpen && "rotate-90")}
-        />
-      </button>
-      {isRunning && elapsedSeconds >= 15 && (
-        <div
-          className="text-muted-foreground flex items-center gap-2 px-1 pt-3 text-xs"
-          role="status"
-          aria-live="polite"
-        >
-          <span className="size-1.5 shrink-0 rounded-full bg-amber-500" />
-          <span>仍在处理，正在等待业务工具或模型返回结果。</span>
-        </div>
-      )}
-      {isOpen && (
-        <div
-          id={`process-history-${events[0]?.id ?? "current"}`}
-          className="px-1 py-4"
-        >
-          <div className="border-border grid gap-5 border-l-2 pl-4">
-            {blocks.map((block) => (
-              <ProcessBlock
-                key={block.id}
-                messages={block.messages}
-                tools={block.tools}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function ConnectionStatus({
   error,
   onRetry,
@@ -498,123 +201,6 @@ function ConnectionStatus({
         />
         重试
       </button>
-    </div>
-  );
-}
-
-function toolIcon(name: string): LucideIcon {
-  if (name.includes("attendees") || name.includes("参会人员")) return Users;
-  if (name.includes("current_user") || name.includes("当前用户")) {
-    return UserRound;
-  }
-  if (name.includes("room") || name.includes("会议室")) return Building2;
-  if (name.includes("calendar") || name.includes("日程")) return CalendarDays;
-  if (
-    name.includes("availability") ||
-    name.includes("conflict") ||
-    name.includes("可预约") ||
-    name.includes("冲突")
-  ) {
-    return CalendarCheck2;
-  }
-  return Wrench;
-}
-
-function ProcessBlock({
-  messages,
-  tools,
-}: {
-  messages: ProcessEvent[];
-  tools: ProcessEvent[];
-}) {
-  const [toolsOpen, setToolsOpen] = useState(false);
-  const visibleMessages = messages.filter((event) =>
-    normalizeProcessText(event.text),
-  );
-  const visibleTools = tools.filter((event) =>
-    normalizeProcessText(event.text),
-  );
-  const collapsedTools =
-    toolsOpen || visibleTools.length <= 1
-      ? visibleTools
-      : visibleTools.slice(-1);
-  if (!visibleMessages.length && !visibleTools.length) return null;
-
-  const ToolIcon = toolIcon(visibleTools[visibleTools.length - 1]?.text ?? "");
-
-  return (
-    <div className="grid gap-3 text-sm">
-      {visibleMessages.map((event) => (
-        <MarkdownText key={event.id}>{event.text}</MarkdownText>
-      ))}
-      {visibleTools.length > 0 && (
-        <div className="grid gap-2">
-          {visibleTools.length > 1 && !toolsOpen ? (
-            <button
-              type="button"
-              aria-label="展开工具调用"
-              title="展开工具调用"
-              onClick={() => setToolsOpen(true)}
-              className="text-muted-foreground flex items-center gap-2 text-left"
-            >
-              <ToolIcon
-                aria-hidden="true"
-                className="size-4"
-              />
-              <span>{visibleTools[visibleTools.length - 1].text}</span>
-              {visibleTools[visibleTools.length - 1].status === "completed" && (
-                <span className="text-muted-foreground text-xs">已完成</span>
-              )}
-              {visibleTools[visibleTools.length - 1].status === "failed" && (
-                <span className="text-destructive text-xs">失败</span>
-              )}
-              <ChevronRight
-                aria-hidden="true"
-                className="ml-auto size-4"
-              />
-            </button>
-          ) : (
-            collapsedTools.map((tool) => {
-              const Icon = toolIcon(tool.text);
-              return (
-                <div
-                  key={tool.id}
-                  className="text-muted-foreground flex items-center gap-2"
-                >
-                  <Icon
-                    aria-hidden="true"
-                    className="size-4"
-                  />
-                  <span>{tool.text}</span>
-                  {tool.status === "completed" && (
-                    <span className="text-muted-foreground text-xs">
-                      已完成
-                    </span>
-                  )}
-                  {tool.status === "failed" && (
-                    <span className="text-destructive text-xs">失败</span>
-                  )}
-                </div>
-              );
-            })
-          )}
-          {visibleTools.length > 1 && toolsOpen && (
-            <button
-              type="button"
-              aria-label="收起工具调用"
-              title="收起工具调用"
-              onClick={() => setToolsOpen(false)}
-              className="text-muted-foreground flex items-center gap-2 text-left text-xs"
-            >
-              <ChevronRight
-                aria-hidden="true"
-                className="size-3 -rotate-90"
-              />
-              <span>收起</span>
-            </button>
-          )}
-        </div>
-      )}
     </div>
   );
 }
@@ -653,15 +239,18 @@ export function Thread() {
     dragOver,
     handlePaste,
   } = useFileUpload();
-  const [firstTokenReceived, setFirstTokenReceived] = useState(false);
   const processStartedAt = useRef<number | null>(null);
   const [processElapsedSeconds, setProcessElapsedSeconds] = useState(0);
   const [persistedProcessRuns, setPersistedProcessRuns] = useState<
     ProcessRun[]
   >([]);
+  const [persistedProcessError, setPersistedProcessError] = useState<
+    string | undefined
+  >();
   const [persistedInterrupt, setPersistedInterrupt] = useState<unknown>();
   const persistedEventCursorRef = useRef<number | undefined>(undefined);
   const recoveredRunRef = useRef<string | null>(null);
+  const lastObservedRunIdRef = useRef<string | null>(null);
   const isLargeScreen = useMediaQuery("(min-width: 1024px)");
 
   const stream = useStreamContext();
@@ -673,6 +262,12 @@ export function Thread() {
     const human = messages.filter((message) => message.type === "human");
     return human.at(-1)?.id;
   })();
+
+  useEffect(() => {
+    if (stream.currentRunId) {
+      lastObservedRunIdRef.current = stream.currentRunId;
+    }
+  }, [stream.currentRunId]);
   const presentation = useThreadPresentation({
     messages,
     persistedProcessRuns,
@@ -704,8 +299,9 @@ export function Thread() {
     async (
       signal?: AbortSignal,
       mode: "snapshot" | "cursor" = "snapshot",
-    ) => {
-      if (!threadId) return;
+      terminalRunId?: string,
+    ): Promise<boolean> => {
+      if (!threadId) return false;
       try {
         const afterCursor =
           mode === "cursor" ? persistedEventCursorRef.current : undefined;
@@ -717,14 +313,18 @@ export function Thread() {
           `/api/agent-events/${encodeURIComponent(threadId)}${query}`,
           { signal, cache: "no-store" },
         );
-        if (!response.ok) return;
+        if (!response.ok) {
+          setPersistedProcessError(`过程事件服务返回 ${response.status}`);
+          return false;
+        }
         const payload = await response.json();
+        setPersistedProcessError(undefined);
         const parsed = parsePersistedProcessRuns(payload);
         const nextCursor = maxDurableEventCursor(payload);
         if (mode === "snapshot") {
           persistedEventCursorRef.current = nextCursor;
           setPersistedProcessRuns(parsed);
-          return;
+          return hasPersistedRunTerminalEvent(payload, terminalRunId ?? "");
         }
         if (
           nextCursor !== undefined &&
@@ -738,10 +338,13 @@ export function Thread() {
             mergePersistedProcessRuns(current, parsed),
           );
         }
+        return hasPersistedRunTerminalEvent(payload, terminalRunId ?? "");
       } catch (error: unknown) {
         if ((error as { name?: string })?.name !== "AbortError") {
+          setPersistedProcessError("过程事件服务暂时不可用");
           console.warn("读取 Agent 过程事件失败", error);
         }
+        return false;
       }
     },
     [threadId],
@@ -772,9 +375,11 @@ export function Thread() {
 
   useEffect(() => {
     setPersistedProcessRuns([]);
+    setPersistedProcessError(undefined);
     setPersistedInterrupt(undefined);
     persistedEventCursorRef.current = undefined;
     recoveredRunRef.current = null;
+    lastObservedRunIdRef.current = null;
     if (!threadId) return;
 
     const controller = new AbortController();
@@ -814,23 +419,35 @@ export function Thread() {
   useEffect(() => {
     const finishedRun = wasLoading.current && !isLoading;
     wasLoading.current = isLoading;
-    if (!finishedRun || !threadId || stream.processEvents.length === 0) {
+    const completedRunId = lastObservedRunIdRef.current;
+    if (!finishedRun || !threadId || !completedRunId) {
       return;
     }
 
-    // Run completion is a backend fact. The browser must not append a
-    // synthetic run.completed event: it has no authoritative tenant/user
-    // context and can race with LangGraph's durable run status. The persisted
-    // process history is reloaded below; terminal status comes from LangGraph
-    // and backend events.
-    const timer = window.setTimeout(() => {
-      void loadPersistedProcessRuns(undefined, "snapshot");
-    }, 300);
-    return () => window.clearTimeout(timer);
+    // Python writes process facts to its durable Outbox and the Java event
+    // service receives them asynchronously. A single 300ms refresh races the
+    // normal two-second publisher interval. Keep reading the cursor for one
+    // bounded hand-off window, and stop as soon as Java has the terminal Run
+    // fact. The browser never fabricates completion or stores event history.
+    let disposed = false;
+    const catchUp = async () => {
+      for (let attempt = 0; attempt < 7 && !disposed; attempt += 1) {
+        const terminal = await loadPersistedProcessRuns(
+          undefined,
+          attempt === 0 ? "snapshot" : "cursor",
+          completedRunId,
+        );
+        if (terminal || disposed) return;
+        await new Promise((resolve) => window.setTimeout(resolve, 500));
+      }
+    };
+    void catchUp();
+    return () => {
+      disposed = true;
+    };
   }, [
     isLoading,
     loadPersistedProcessRuns,
-    stream.processEvents.length,
     threadId,
   ]);
 
@@ -896,20 +513,6 @@ export function Thread() {
     ? normalizeAgentError(stream.error)
     : undefined;
 
-  // TODO: this should be part of the useStream hook
-  const prevMessageLength = useRef(0);
-  useEffect(() => {
-    if (
-      messages.length !== prevMessageLength.current &&
-      messages?.length &&
-      messages[messages.length - 1].type === "ai"
-    ) {
-      setFirstTokenReceived(true);
-    }
-
-    prevMessageLength.current = messages.length;
-  }, [messages]);
-
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
     if ((input.trim().length === 0 && contentBlocks.length === 0) || isLoading)
@@ -923,7 +526,6 @@ export function Thread() {
       setModelMenuSection("model");
       return;
     }
-    setFirstTokenReceived(false);
     processStartedAt.current = Date.now();
     setProcessElapsedSeconds(0);
     const traceId = crypto.randomUUID();
@@ -979,9 +581,6 @@ export function Thread() {
   const handleRegenerate = (
     parentCheckpoint: Checkpoint | null | undefined,
   ) => {
-    // Do this so the loading state is correct
-    prevMessageLength.current = prevMessageLength.current - 1;
-    setFirstTokenReceived(false);
     const traceId = crypto.randomUUID();
     stream.setTraceId(traceId);
     console.info(
@@ -1170,7 +769,7 @@ export function Thread() {
                     const {
                       visibleMessages,
                       currentTurnStart,
-                      currentTurnHasAssistant,
+                      currentTurnHasCommittedFinal,
                       currentInterrupt,
                       primaryResultMessageBySourceId,
                       processForTurn,
@@ -1196,14 +795,33 @@ export function Thread() {
                                   const process = processForTurn(message);
                                   return (
                                     <>
-                                      {process && (
-                                        <ProcessHistory
-                                          events={process.events}
+                                      {(process ||
+                                        (message.id ===
+                                          messages[currentTurnStart]?.id &&
+                                          isLoading)) && (
+                                        <RunActivity
+                                          events={process?.events ?? []}
                                           elapsedSeconds={
-                                            process.elapsedSeconds
+                                            process?.elapsedSeconds ??
+                                            processElapsedSeconds
                                           }
-                                          isRunning={process.isRunning}
+                                          isRunning={
+                                            process?.isRunning ?? isLoading
+                                          }
+                                          syncError={persistedProcessError}
                                           hidden={hideToolCalls ?? false}
+                                        />
+                                      )}
+                                      {process?.failure && (
+                                        <ErrorCard
+                                          error={normalizePersistedRunFailure(
+                                            process.failure,
+                                          )}
+                                          onAction={(action) => {
+                                            if (action.type === "retry") {
+                                              handleRegenerate(null);
+                                            }
+                                          }}
                                         />
                                       )}
                                       {message.id ===
@@ -1227,12 +845,20 @@ export function Thread() {
                           </Fragment>
                         ))}
                         {isLoading &&
-                          !currentTurnHasAssistant &&
+                          !currentTurnHasCommittedFinal &&
+                          stream.streamedAnswer && (
+                            <StreamingAssistantMessage
+                              markdown={stream.streamedAnswer.text}
+                            />
+                          )}
+                        {isLoading &&
+                          !currentTurnHasCommittedFinal &&
                           currentTurnStart < 0 && (
-                            <ProcessHistory
+                            <RunActivity
                               events={reduceProcessEvents(customProcessEvents)}
                               elapsedSeconds={processElapsedSeconds}
                               isRunning={isLoading}
+                              syncError={persistedProcessError}
                               hidden={hideToolCalls ?? false}
                             />
                           )}
@@ -1242,9 +868,6 @@ export function Thread() {
                       </ResultRenderScope>
                     );
                   })()}
-                  {isLoading && !firstTokenReceived && (
-                    <AssistantMessageLoading />
-                  )}
                   {recoveringRunId && (
                     <div
                       className="text-muted-foreground mx-auto flex w-full max-w-3xl items-center gap-2 px-1 py-2 text-xs"

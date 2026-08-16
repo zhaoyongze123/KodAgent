@@ -69,6 +69,12 @@ DOMAIN_DEFAULT_HELPERS: dict[str, tuple[str, ...]] = {
         "search_party_files", "execute_party_file_metadata_plan",
         "search_party_knowledge", "list_party_file_categories",
     ),
+    # 项目资料检索、统计和报告由 Java 复核项目成员关系和资料权限；这里的完整
+    # 目录只表示子 Agent 具备执行已编译只读计划的能力。
+    "projects_agent": (
+        "list_accessible_projects", "analyze_project", "get_project_snapshot", "get_project_tasks",
+        "get_project_activity", "get_project_documents", "search_project_knowledge",
+    ),
 }
 
 
@@ -112,6 +118,11 @@ EXECUTION_CONTRACTS: tuple[ExecutionContract, ...] = (
             "run_party_file_compare": "party_file_compare",
             "check_approval_against_party_file": "party_file_approval_check",
         },
+    ),
+    *_contracts(
+        "projects_agent",
+        "list_accessible_projects", "analyze_project", "get_project_snapshot", "get_project_tasks",
+        "get_project_activity", "get_project_documents", "search_project_knowledge",
     ),
 )
 

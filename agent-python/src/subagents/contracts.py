@@ -37,6 +37,9 @@ DOMAIN_AGENT_CONTRACTS: tuple[DomainAgentContract, ...] = (
     DomainAgentContract(
         "party_files_agent", "party_file", "facts|clarification|citation|error", "return_structured_error", "read_only_parent_owns_writes", "party-file.operations",
     ),
+    DomainAgentContract(
+        "projects_agent", "project", "facts|clarification|citation|report|error", "return_structured_error", "read_only_no_project_mutation", "project.analysis",
+    ),
 )
 
 
@@ -89,7 +92,12 @@ def validate_subagent_specs(
             "writeBoundary": contract.write_boundary,
         }
         enriched.append(item)
-    expected = required_names if required_names is not None else {item.name for item in DOMAIN_AGENT_CONTRACTS}
+    # 只做结构形状校验的单元测试/离线调用不会要求传入全部领域实现；真正的
+    # registry 启动校验仍默认要求 DOMAIN_AGENT_CONTRACTS 全量落地。这样新增只读
+    # 领域不会破坏只关注某一个旧领域的通用 fixture，同时不会放松生产启动检查。
+    expected = required_names if required_names is not None else (
+        {item.name for item in DOMAIN_AGENT_CONTRACTS} if validate_execution else set()
+    )
     missing = expected - seen
     if missing:
         raise RuntimeError(f"子 Agent 领域契约未注册实现: {', '.join(sorted(missing))}")

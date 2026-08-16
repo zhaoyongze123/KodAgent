@@ -75,6 +75,39 @@ def route_result(messages: list[Any]) -> dict[str, Any] | None:
     return _latest_route(current_turn_messages(list(messages or [])))
 
 
+def route_results(messages: list[Any]) -> tuple[dict[str, Any], ...]:
+    """按发生顺序读取当前用户回合的全部有效路由结果。
+
+    ``route_result`` 保持“最后一个结果”的单领域兼容语义。跨领域请求中，模型
+    可能错误地连续调用两次 ``route_conversation``，因此协调层还需要看到同一
+    回合中的完整结果集合：它只能消费这些工具返回的编译事实，不能从自然语言或
+    模型参数自行补出一个领域步骤。
+    """
+
+    results: list[dict[str, Any]] = []
+    for message in current_turn_messages(list(messages or [])):
+        if message_type(message) != "tool" or message_name(message) != "route_conversation":
+            continue
+        content = message_content(message)
+        if isinstance(content, dict):
+            value = content
+        else:
+            if isinstance(content, list):
+                content = "".join(
+                    str(item.get("text", "")) if isinstance(item, dict) else str(item)
+                    for item in content
+                )
+            try:
+                value = json.loads(content or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+        if isinstance(value, dict) and isinstance(value.get("data"), dict):
+            value = value["data"]
+        if isinstance(value, dict):
+            results.append(value)
+    return tuple(results)
+
+
 def _latest_route(messages: list[Any]) -> dict[str, Any] | None:
     """Read the last valid route envelope from an already-scoped sequence."""
     for message in reversed(messages):
@@ -265,4 +298,5 @@ __all__ = [
     "route_state",
     "route_requires_action_selection",
     "route_result",
+    "route_results",
 ]

@@ -178,6 +178,16 @@ logs/
 !/sql/postgresql/party_knowledge.sql
 !/sql/postgresql/party_knowledge_vector.sql
 
+# Java/OA 数据库中由 Agent 启动迁移实际执行的最小集合。它们定义日程效果、
+# 党务资料桥接以及 Agent 模型/项目权限，属于运行契约而非业务数据导出。
+!/sql/mysql/
+/sql/mysql/*
+!/sql/mysql/system-personal-schedule-init.sql
+!/sql/mysql/agent_personal_schedule_effect.sql
+!/sql/mysql/party-file-kod-schema-v2.sql
+!/sql/mysql/agent_model_menu.sql
+!/sql/mysql/agent_project_permissions.sql
+
 # 本地端到端验证会使用本机身份签名和测试数据，不作为运行时源码发布。
 /agent-python/e2e_runner.py
 
@@ -252,6 +262,11 @@ logs/
 /agent-chat-ui/*.tsbuildinfo
 /agent-chat-ui/next-env.d.ts
 
+# 项目 Agent 的生产迁移是源码契约，不是构建产物；允许提交这一份明确文件。
+!/sql/
+!/sql/postgresql/
+!/sql/postgresql/project_agent.sql
+
 /yudao-server/target/
 /yudao-server/.flattened-pom.xml
 
@@ -277,6 +292,16 @@ logs/
 /script/kodbox/.env.local.example
 /script/kodbox/docker-compose.local.yml
 /script/kodbox/sync-oa-entry-plugins.sh
+
+# KodCloud project 插件本身属于宿主应用，不把整套前端静态资源和第三方库复制进 Git。
+# Agent 只保留入口注册、只读桥接器以及防止查询初始化目录的必要任务方法补丁。
+!/script/kodbox/plugins/project/
+/script/kodbox/plugins/project/*
+!/script/kodbox/plugins/project/app.php
+!/script/kodbox/plugins/project/lib/
+/script/kodbox/plugins/project/lib/*
+!/script/kodbox/plugins/project/lib/ProjectAgentBridge.class.php
+!/script/kodbox/plugins/project/lib/ProjectModelTask.class.php
 /scripts/party_files/
 
 # Keep exactly two Agent integration files from the legacy admin frontend.

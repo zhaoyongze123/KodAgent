@@ -29,13 +29,17 @@ import { PasswordInput } from "@/components/ui/password-input";
 import { getApiKey } from "@/lib/api-key";
 import { useThreads } from "./Thread";
 import { toast } from "sonner";
-import { AGENT_SUBAGENT_STREAM_OPTIONS } from "@/lib/agent-stream-options";
 import { clearLiveRunId, storeLiveRunId } from "@/lib/run-stream-attachment";
 import { useRunStreamCoordinator } from "@/lib/use-run-stream-coordinator";
 import {
   adaptAgentCustomEvent,
+  mergeStreamedAnswer,
+  parseFinalAnswerStreamEvent,
+  isStreamedAnswerCommitted,
   type AgentCustomEvent,
+  type StreamedAnswer,
 } from "@/lib/agent-event-adapter";
+import { finalEntryIdFromAssistantMessage } from "@/lib/assistant-message-presentation";
 
 export type StateType = { messages: Message[]; ui?: UIMessage[] };
 
@@ -67,13 +71,13 @@ type StreamOptions = UseStreamOptions<
 > & {
   fetchStateHistory?: boolean | { limit: number };
   reconnectOnMount?: boolean;
-  subagentToolNames?: string[];
-  filterSubagentMessages?: boolean;
 };
 
 type StreamContextType = ReturnType<typeof useTypedStream>;
 type StreamContextValue = StreamContextType & {
   processEvents: AgentCustomEvent[];
+  /** 当前连接暂存的主 Agent 最终回答，不写入消息历史。 */
+  streamedAnswer: StreamedAnswer | null;
   /** Current Run identity shared by transient and durable process entries. */
   currentRunId: string | null;
   setTraceId: (traceId: string | null) => void;
@@ -124,6 +128,9 @@ const StreamSession = ({
   const [threadId, setThreadId] = useQueryState("threadId");
   const { reloadThreads } = useThreads();
   const [processEvents, setProcessEvents] = useState<AgentCustomEvent[]>([]);
+  const [streamedAnswer, setStreamedAnswer] = useState<StreamedAnswer | null>(
+    null,
+  );
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
   const [streamErrorRunId, setStreamErrorRunId] = useState<string | null>(null);
   const processEventOrder = React.useRef(0);
@@ -133,6 +140,8 @@ const StreamSession = ({
   const firstCustomLoggedRef = React.useRef(false);
   const activeRunIdRef = React.useRef<string | null>(null);
   const activeRunThreadIdRef = React.useRef<string | null>(null);
+  const acceptsFinalAnswerStreamRef = React.useRef(false);
+  const committedFinalEntryIdsRef = React.useRef(new Set<string>());
   const failedRunIdsRef = React.useRef(new Set<string>());
   const metricSentRef = React.useRef(new Set<string>());
   const recordMetric = React.useCallback(
@@ -156,6 +165,8 @@ const StreamSession = ({
   );
   useEffect(() => {
     setProcessEvents([]);
+    setStreamedAnswer(null);
+    acceptsFinalAnswerStreamRef.current = false;
     setCurrentRunId(null);
     setStreamErrorRunId(null);
   }, [threadId]);
@@ -177,10 +188,6 @@ const StreamSession = ({
     // the SDK reconnectOnMount enabled would create a second join on refresh
     // while the business recovery effect is also joining the same run.
     reconnectOnMount: false,
-    // Never put the task subgraph's full state/message history into the main
-    // conversation. User-visible sub-agent summaries and tool audit rows come
-    // from Python's durable custom events instead.
-    ...AGENT_SUBAGENT_STREAM_OPTIONS,
     callerOptions: useMemo(
       () => ({
         fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -225,6 +232,7 @@ const StreamSession = ({
     ),
     onCreated: (run) => {
       activeRunIdRef.current = run.run_id;
+      acceptsFinalAnswerStreamRef.current = true;
       setCurrentRunId(run.run_id);
       activeRunThreadIdRef.current = run.thread_id ?? threadId;
       failedRunIdsRef.current.delete(run.run_id);
@@ -238,6 +246,7 @@ const StreamSession = ({
       setStreamErrorRunId(null);
       metricSentRef.current = new Set();
       setProcessEvents([]);
+      setStreamedAnswer(null);
       processEventOrder.current = 0;
       firstUpdateLoggedRef.current = false;
       firstCustomLoggedRef.current = false;
@@ -301,6 +310,8 @@ const StreamSession = ({
       }
       traceIdRef.current = null;
       traceStartedAtRef.current = null;
+      // 传输结束不代表最终 checkpoint 已经到达。临时回答必须保留到同一
+      // finalEntryId 的 v2 final 消息提交，不能在此处制造“先显示后撤回”。
       // Transport completion is not durable Run completion. The
       // RunStreamCoordinator owns the status reconciliation and keeps this
       // marker/identity when the backend still says pending or running.
@@ -414,6 +425,27 @@ const StreamSession = ({
         return;
       }
 
+      // 最终回答流不经过 adaptAgentCustomEvent，也绝不能写入 processEvents。
+      // 它只接受根图事件，并绑定当前 Run/Thread，防止重连或旧 Run 的迟到
+      // 快照覆盖当前回合。
+      const finalAnswerEvent = parseFinalAnswerStreamEvent(
+        event,
+        options.namespace,
+      );
+      if (finalAnswerEvent) {
+        if (!acceptsFinalAnswerStreamRef.current) return;
+        if (committedFinalEntryIdsRef.current.has(finalAnswerEvent.entryId)) {
+          return;
+        }
+        setStreamedAnswer((current) =>
+          mergeStreamedAnswer(current, finalAnswerEvent, {
+            runId: activeRunIdRef.current,
+            threadId: activeRunThreadIdRef.current ?? threadId,
+          }),
+        );
+        return;
+      }
+
       const agentEvent = adaptAgentCustomEvent(event, {
         namespace: options.namespace,
         receivedOrder: processEventOrder.current++,
@@ -455,6 +487,18 @@ const StreamSession = ({
   } satisfies StreamOptions;
   const streamValue = useTypedStream(streamOptions);
 
+  useEffect(() => {
+    const committed = new Set(
+      streamValue.messages
+        .map((message) => finalEntryIdFromAssistantMessage(message))
+        .filter((entryId): entryId is string => Boolean(entryId)),
+    );
+    committedFinalEntryIdsRef.current = committed;
+    setStreamedAnswer((current) =>
+      isStreamedAnswerCommitted(current, committed) ? null : current,
+    );
+  }, [streamValue.messages]);
+
   const clearStreamRecoveryRun = React.useCallback((runId: string) => {
     failedRunIdsRef.current.delete(runId);
     if (activeRunIdRef.current === runId) {
@@ -495,7 +539,17 @@ const StreamSession = ({
     // them eagerly accesses toolProgress and registers the unsupported
     // `tools` stream mode against the local LangGraph Server.
     const value = Object.create(streamValue) as StreamContextValue;
+    // `messages-tuple` is explicitly requested by createAgentStreamOptions.
+    // Keep the SDK's streamed message projection here so the final answer can
+    // render token by token; process summaries and tool lifecycle still come
+    // from the durable custom event stream below.
+    Object.defineProperty(value, "messages", {
+      configurable: true,
+      enumerable: true,
+      value: streamValue.messages,
+    });
     value.processEvents = processEvents;
+    value.streamedAnswer = streamedAnswer;
     value.currentRunId = currentRunId;
     value.streamErrorRunId = streamErrorRunId;
     value.recoveringRunId = runCoordinator.recoveringRunId;
@@ -507,6 +561,7 @@ const StreamSession = ({
   }, [
     streamValue,
     processEvents,
+    streamedAnswer,
     currentRunId,
     streamErrorRunId,
     runCoordinator.recoveringRunId,

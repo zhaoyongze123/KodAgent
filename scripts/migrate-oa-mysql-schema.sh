@@ -12,6 +12,8 @@ MYSQL_PASSWORD="${OA_MYSQL_PASSWORD:-${MYSQL_ROOT_PASSWORD:-}}"
 SCHEMA_FILES=(
   "${ROOT_DIR}/sql/mysql/system-personal-schedule-init.sql"
   "${ROOT_DIR}/sql/mysql/agent_personal_schedule_effect.sql"
+  "${ROOT_DIR}/sql/mysql/agent_model_menu.sql"
+  "${ROOT_DIR}/sql/mysql/agent_project_permissions.sql"
   "${ROOT_DIR}/sql/mysql/party-file-kod-schema-v2.sql"
 )
 

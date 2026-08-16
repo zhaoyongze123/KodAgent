@@ -23,7 +23,8 @@ from langchain_core.messages import AIMessage, AIMessageChunk, message_chunk_to_
 
 from ..tools.common.events import (
     narration_validation_issues,
-    publish_model_narration,
+    new_final_answer_entry_id,
+    publish_final_answer_stream,
     publish_streaming_narration,
 )
 
@@ -31,19 +32,37 @@ from ..tools.common.events import (
 _STREAM_MODEL_OUTPUT: ContextVar[bool] = ContextVar(
     "kodagent_stream_model_output", default=False
 )
+_FINAL_ANSWER_ENTRY_ID: ContextVar[str | None] = ContextVar(
+    "kodagent_final_answer_entry_id", default=None
+)
 
 
 def stream_model_output_enabled() -> bool:
     return _STREAM_MODEL_OUTPUT.get()
 
 
+def current_final_answer_entry_id() -> str | None:
+    """返回当前收尾调用的最终答案标识。"""
+
+    return _FINAL_ANSWER_ENTRY_ID.get()
+
+
 @contextmanager
-def stream_model_output_scope(enabled: bool = True):
+def stream_model_output_scope(enabled: bool = True, *, entry_id: str | None = None):
+    """开启一次主 Agent 收尾的流式输出，并固定其 checkpoint 关联标识。"""
+
     token = _STREAM_MODEL_OUTPUT.set(enabled)
+    inherited = _FINAL_ANSWER_ENTRY_ID.get()
+    effective_entry_id = (
+        str(entry_id or inherited or new_final_answer_entry_id(uuid4().hex)).strip()
+        if enabled else None
+    )
+    entry_token = _FINAL_ANSWER_ENTRY_ID.set(effective_entry_id)
     try:
-        yield
+        yield effective_entry_id
     finally:
         _STREAM_MODEL_OUTPUT.reset(token)
+        _FINAL_ANSWER_ENTRY_ID.reset(entry_token)
 
 
 _STAGE_RE = re.compile(r'"stage"\s*:\s*"([^"\\]*)')
@@ -260,21 +279,29 @@ def _provider_safe_input(value: Any) -> Any:
 
 
 class ModelOutputChunkTracker:
-    """Legacy opt-in tracker for non-agent callers.
+    """仅在主 Agent 收尾范围内直播最终回答的全量快照。
 
-    The Agent runtime never opts a generated ``task`` into this path: child
-    final text belongs only to the parent Agent's synthesis, while explicit
-    ``report_progress`` calls remain visible through their separate tracker.
+    这个 tracker 不改变模型返回值，仍由 ``_merge_message_chunks`` 生成完整
+    ``AIMessage`` 写回图。它也不承担过程播报：``report_progress`` 继续由
+    ``ReportProgressChunkTracker`` 处理。收尾调用的工具面板已由计划投影层清空；
+    此处仍以 ``saw_tool_call`` 作防御，确保异常工具调用不会被当作最终文本直播。
     """
 
     def __init__(self, enabled: bool) -> None:
         self.enabled = enabled
         self.model_call_id = f"model-output:{uuid4()}"
+        self.final_entry_id = current_final_answer_entry_id()
         self.text = ""
         self.last_text = ""
+        self.saw_tool_call = False
 
     def observe(self, message: Any) -> None:
-        if not self.enabled or getattr(message, "tool_call_chunks", None):
+        if not self.enabled:
+            return
+        if getattr(message, "tool_call_chunks", None):
+            self.saw_tool_call = True
+            return
+        if self.saw_tool_call:
             return
         fragment = _content_text(message)
         if not fragment:
@@ -287,7 +314,7 @@ class ModelOutputChunkTracker:
         self._publish(completed=False)
 
     def complete(self) -> None:
-        if self.enabled and self.text:
+        if self.enabled and not self.saw_tool_call and self.text:
             self._publish(completed=True)
 
     def _publish(self, *, completed: bool) -> None:
@@ -296,11 +323,12 @@ class ModelOutputChunkTracker:
             writer = get_stream_writer()
         except Exception:
             writer = None
-        publish_model_narration(
+        publish_final_answer_stream(
             writer,
             message=self.text,
             model_call_id=self.model_call_id,
             completed=completed,
+            entry_id=self.final_entry_id,
         )
 
 
@@ -327,11 +355,9 @@ class NarrationStreamingRunnable:
         self,
         runnable: Any,
         *,
-        stream_model_output: bool = False,
         qwen3_extra_body: dict[str, Any] | None = None,
     ):
         self._runnable = runnable
-        self._stream_model_output = stream_model_output
         self._qwen3_extra_body = qwen3_extra_body
 
     def __getattr__(self, name: str) -> Any:
@@ -339,7 +365,9 @@ class NarrationStreamingRunnable:
 
     def stream(self, input: Any, config: Any = None, **kwargs: Any) -> Iterator[Any]:
         tracker = ReportProgressChunkTracker()
-        output_tracker = ModelOutputChunkTracker(self._stream_model_output)
+        # 最终回答流只能由计划投影层的收尾范围开启；不能由模型包装器实例
+        # 自行配置，以免子 Agent 或常规路由回合意外把自由文本推到前端。
+        output_tracker = ModelOutputChunkTracker(stream_model_output_enabled())
         input = _provider_safe_input(input)
         try:
             # Only Qwen3 carries a provider-specific request body.  Do not
@@ -355,7 +383,7 @@ class NarrationStreamingRunnable:
 
     async def astream(self, input: Any, config: Any = None, **kwargs: Any) -> AsyncIterator[Any]:
         tracker = ReportProgressChunkTracker()
-        output_tracker = ModelOutputChunkTracker(self._stream_model_output)
+        output_tracker = ModelOutputChunkTracker(stream_model_output_enabled())
         input = _provider_safe_input(input)
         try:
             if self._qwen3_extra_body is not None:
@@ -387,11 +415,9 @@ class NarrationStreamingModel:
         self,
         model: Any,
         *,
-        stream_model_output: bool = False,
         qwen3_extra_body: dict[str, Any] | None = None,
     ):
         self._model = model
-        self._stream_model_output = stream_model_output
         self._qwen3_extra_body = qwen3_extra_body
 
     def __getattr__(self, name: str) -> Any:
@@ -400,13 +426,11 @@ class NarrationStreamingModel:
     def bind_tools(self, *args: Any, **kwargs: Any) -> NarrationStreamingRunnable:
         return NarrationStreamingRunnable(
             self._model.bind_tools(*args, **kwargs),
-            stream_model_output=self._stream_model_output,
             qwen3_extra_body=self._qwen3_extra_body,
         )
 
     def bind(self, *args: Any, **kwargs: Any) -> NarrationStreamingRunnable:
         return NarrationStreamingRunnable(
             self._model.bind(*args, **kwargs),
-            stream_model_output=self._stream_model_output,
             qwen3_extra_body=self._qwen3_extra_body,
         )

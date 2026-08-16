@@ -3,6 +3,16 @@ server:
 
 yudao:
   agent:
+    artifact:
+      # 通用附件不属于项目报告；模型生成的文件由当前用户受控下载并自动过期。
+      ttl-seconds: ${OA_AGENT_ARTIFACT_TTL_SECONDS:86400}
+    project:
+      # Java 与 KodCloud project 插件共用的桥接密钥；仅本项目运行环境读取，
+      # 绝不传给浏览器、LangGraph 或模型提示词。
+      bridge-base-url: ${KOD_PROJECT_BRIDGE_BASE_URL:http://127.0.0.1:8001/index.php?plugin/project/agent}
+      bridge-secret: ${KOD_PROJECT_BRIDGE_SECRET:}
+      ticket-ttl-seconds: ${KOD_PROJECT_BRIDGE_TICKET_TTL_SECONDS:60}
+      report-ttl-seconds: ${KOD_PROJECT_REPORT_TTL_SECONDS:86400}
     batch-test:
       # Explicitly opt-in local-only fault injection for real OA batch tests.
       # Production profiles ignore this hook even if the environment leaks.
@@ -32,6 +42,7 @@ yudao:
     permit-all-urls:
       - /agent/tools/**
       - /agent/drafts/**
+      - /agent/artifacts/**
       - /agent/runs/**
       - /agent/threads/**
       - /admin-api/system/auth/kod-sso/start
@@ -42,6 +53,7 @@ yudao:
     ignore-urls:
       - /agent/tools/**
       - /agent/drafts/**
+      - /agent/artifacts/**
       - /agent/runs/**
       - /agent/threads/**
       - /admin-api/system/auth/kod-sso/start

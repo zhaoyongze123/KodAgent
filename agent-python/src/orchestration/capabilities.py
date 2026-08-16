@@ -123,6 +123,14 @@ CAPABILITIES = (
         direct_tools=("create_party_file_draft", "confirm_create_party_file", "confirm_update_party_file", "confirm_delete_party_file"),
     ),
     Capability(
+        "project",
+        "查询当前用户可参与项目的进度、任务、成员负责情况、近期动态和项目资料；例如“项目卡在哪里”“张三负责事项进展如何”。",
+        "项目、任务、资料和统计均由 Java Project Provider 根据 KodCloud project 插件实时权限确定；项目资料和制度知识检索只返回可引用证据，不能把索引副本当成权限事实。第一期不支持创建或修改项目、任务和文件。",
+        "未指定项目或存在同名项目时先展示项目候选；无项目成员权限、KodCloud 用户未绑定或资料已失效时如实说明，不能改用共享账号或猜选项目。",
+        allowed_strategies=("delegate", "clarify"),
+        delegate_agent="projects_agent",
+    ),
+    Capability(
         "reporting",
         "对审批、会议、个人日程和当前用户可见党务文件做只读汇总和分布分析。",
         "时间范围、权限和聚合由 Java Facade 确定性执行；Agent 只选择报表域并补齐时间范围。",
@@ -302,6 +310,49 @@ ACTION_SPECS = (
         permission="party-file:delete",
     ),
     ActionSpec(
+        "project.list", "project", "查询当前用户可参与的项目",
+        "metadata_query", "LIST", ("LIST", "PROJECT_LIST", "list_projects"), True, False,
+        "list_accessible_projects", (), permission="project:read",
+    ),
+    ActionSpec(
+        "project.snapshot", "project", "读取指定项目的概览、成员、配置和资料状态",
+        "metadata_query", "SNAPSHOT", ("DETAIL", "PROJECT_DETAIL", "project_detail"), True, False,
+        "get_project_snapshot", ("project_id",), permission="project:read",
+    ),
+    ActionSpec(
+        "project.tasks", "project", "读取指定项目当前用户可见的任务树",
+        "metadata_query", "TASKS", ("TASK", "TASK_LIST", "project_tasks"), True, False,
+        "get_project_tasks", ("project_id",), permission="project:read",
+    ),
+    ActionSpec(
+        "project.activity", "project", "读取指定项目的项目和任务动态",
+        "metadata_query", "ACTIVITY", ("LOG", "LOGS", "PROJECT_ACTIVITY"), True, False,
+        "get_project_activity", ("project_id",), permission="project:read",
+    ),
+    ActionSpec(
+        "project.documents", "project", "读取指定项目资料目录的文件与同步状态",
+        "metadata_query", "DOCUMENTS", ("FILES", "PROJECT_FILES", "PROJECT_DOCUMENTS"), True, False,
+        "get_project_documents", ("project_id",), permission="project:read",
+    ),
+    ActionSpec(
+        "project.investigate", "project", "根据问题自主调查项目进度、任务、动态和资料",
+        "fallback_react", "INVESTIGATE", (
+            "ANALYZE", "ANALYSIS", "ANALYZE_PROJECT", "PROJECT_ANALYSIS",
+            "PROJECT_RISK_ANALYSIS", "RISK_ANALYSIS", "PROJECT_INVESTIGATION",
+            # 部分 OpenAI 兼容模型会按资源/动作顺序生成进度概览名称。这些仅是
+            # 只读调查的传输别名，解析后仍必须编译为唯一正式动作
+            # ``project.investigate``，不会新增执行器或放宽项目权限。
+            "PROJECT_PROGRESS_OVERVIEW", "project.progress_overview",
+            "project_progress_overview", "progress_overview",
+        ), True, False,
+        "analyze_project", ("project_id",), permission="project:read",
+    ),
+    ActionSpec(
+        "project.knowledge.search", "project", "检索指定项目资料和管理员制度知识库",
+        "content_search", "KNOWLEDGE_SEARCH", ("SEARCH", "KNOWLEDGE", "PROJECT_KNOWLEDGE"), True, False,
+        "search_project_knowledge", ("project_id", "query"), permission="project:read",
+    ),
+    ActionSpec(
         "reporting.approval", "reporting", "生成审批报表",
         "report", "APPROVAL", (), True, False, "approval_report",
     ),
@@ -437,6 +488,27 @@ _ACTION_FIELD_SPECS: dict[str, tuple[ActionFieldSpec, ...]] = {
                            _field("summary", "string"), _field("attachment_file_ids", "array")),
     "party_file.delete": (_field("source_party_file_id", "integer", required=True, source_policy="authorized_query_fact"),
                            _field("reason", "string")),
+    # 项目编号由 Java Project Provider 每次重新校验成员关系与任务隐私；它不是
+    # 旧候选直接授予的授权 ID，因此保持 user_input，而不是 authorized_query_fact。
+    "project.list": (
+        _field("page_no", "integer"), _field("page_size", "integer"),
+    ),
+    "project.snapshot": (_field("project_id", "string", required=True),),
+    "project.tasks": (_field("project_id", "string", required=True),),
+    "project.activity": (
+        _field("project_id", "string", required=True),
+        _field("from_time", "datetime", format="yyyy-MM-dd HH:mm:ss"),
+    ),
+    "project.documents": (_field("project_id", "string", required=True),),
+    "project.investigate": (
+        _field("project_id", "string", required=True),
+        _field("user_question", "string", required=True),
+    ),
+    "project.knowledge.search": (
+        _field("project_id", "string", required=True),
+        _field("query", "string", required=True), _field("top_k", "integer"),
+        _field("include_policy_library", "boolean"),
+    ),
     # Reporting actions are still deterministic read-only calls.  The
     # explicit range fields prevent the planner from asking a backend report
     # tool to aggregate an unbounded dataset.
@@ -671,6 +743,26 @@ _READ_ACTION_ENTITY_SCOPES: dict[str, tuple[str, frozenset[str]]] = {
     "party_file.attachments": (
         "party_file",
         frozenset({"party_file", "party_files", "partyfile", "party_document", "party_attachment"}),
+    ),
+    "project.list": (
+        "project",
+        frozenset({"project", "projects", "project_list"}),
+    ),
+    "project.snapshot": (
+        "project",
+        frozenset({"project", "project_snapshot", "project_detail"}),
+    ),
+    "project.tasks": (
+        "project_task",
+        frozenset({"project_task", "project_tasks", "task", "tasks"}),
+    ),
+    "project.activity": (
+        "project_activity",
+        frozenset({"project_activity", "project_log", "project_logs", "activity"}),
+    ),
+    "project.documents": (
+        "project_document",
+        frozenset({"project_document", "project_documents", "project_file", "project_files"}),
     ),
 }
 
@@ -934,6 +1026,7 @@ _CAPABILITY_ALIASES = {
     "meeting_booking": "meeting",
     "meeting_rooms_agent": "meeting",
     "party_files_agent": "party_file",
+    "projects_agent": "project",
     # Providers may use the plural/domain label from the user-facing
     # capability description.  The runtime registry is intentionally
     # singular; normalize all aliases at this boundary before strategy and
@@ -943,6 +1036,8 @@ _CAPABILITY_ALIASES = {
     "partyfile": "party_file",
     "party_documents": "party_file",
     "party_document": "party_file",
+    "projects": "project",
+    "project_agent": "project",
 }
 
 
@@ -1011,6 +1106,12 @@ FIELD_LABELS: dict[str, str] = {
     "taskIds": "已授权任务编号列表",
     "task_ids": "已授权任务编号列表",
     "source_party_file_id": "已授权党务文件编号",
+    "project_id": "项目编号",
+    "page_no": "页码",
+    "page_size": "每页数量",
+    "from_time": "动态起始时间",
+    "include_policy_library": "是否同时检索制度知识库",
+    "report_type": "报告类型",
     "left_file_id": "已授权左侧文件编号",
     "right_file_id": "已授权右侧文件编号",
     "title": "文件或日程标题",

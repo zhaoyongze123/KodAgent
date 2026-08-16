@@ -37,6 +37,12 @@ class ConversationRoute(BaseModel):
     # Business tools and confirmation boundaries remain independently guarded.
     task_complexity: TaskComplexity = "complex"
     reasoning_effort: ReasoningEffort = "low"
+    # ``needs_tools`` means that tools may help the model answer.  It must not
+    # by itself force a route_conversation retry after the model has already
+    # produced a valid natural-language response.  Only requests with an
+    # explicit structured-business contract set this flag, so writes and
+    # recoverable field clarifications cannot silently bypass routing.
+    requires_structured_route: bool = False
     needs_tools: bool = False
     needs_memory: bool = True
     needs_confirmation: bool = False

@@ -295,6 +295,35 @@ public class AgentActionCatalogRegistry {
                 fields(field("source_party_file_id", "integer", true, "来源文件编号", "authorized_query_fact"),
                         field("reason", "string", false, "删除或作废原因", "user_input"))));
 
+        // KodCloud project 插件领域：第一期严格只读。任何新建、修改任务或文件写入
+        // 必须以后续版本接入统一的编译、HITL、执行回执链路，不能在此处偷偷放行。
+        actions.add(action("project.list", "project", "查询当前用户可参与的项目",
+                "metadata_query", "LIST", true, false, "project:read",
+                fields(field("page_no", "integer", false, "页码", "user_input"),
+                        field("page_size", "integer", false, "每页条数", "user_input"))));
+        actions.add(action("project.snapshot", "project", "查询项目基本信息、成员和进度快照",
+                "metadata_query", "SNAPSHOT", true, false, "project:read",
+                fields(field("project_id", "string", true, "项目编号", "user_input"))));
+        actions.add(action("project.tasks", "project", "查询当前用户可见的项目任务",
+                "metadata_query", "TASKS", true, false, "project:read",
+                fields(field("project_id", "string", true, "项目编号", "user_input"))));
+        actions.add(action("project.activity", "project", "查询项目和任务近期活动",
+                "metadata_query", "ACTIVITY", true, false, "project:read",
+                fields(field("project_id", "string", true, "项目编号", "user_input"),
+                        field("from_time", "datetime", false, "活动起始时间", "user_input"))));
+        actions.add(action("project.documents", "project", "查询项目资料目录状态",
+                "metadata_query", "DOCUMENTS", true, false, "project:read",
+                fields(field("project_id", "string", true, "项目编号", "user_input"))));
+        actions.add(action("project.investigate", "project", "根据问题自主调查项目进度、任务、动态和资料",
+                "fallback_react", "INVESTIGATE", true, false, "project:read",
+                fields(field("project_id", "string", true, "项目编号", "user_input"),
+                        field("user_question", "string", true, "项目调查问题", "user_input"))));
+        actions.add(action("project.knowledge.search", "project", "检索项目资料和共享制度知识",
+                "content_search", "KNOWLEDGE_SEARCH", true, false, "project:read",
+                fields(field("project_id", "string", true, "项目编号", "user_input"),
+                        field("query", "string", true, "资料检索问题或关键词", "user_input"),
+                        field("top_k", "integer", false, "召回条数", "user_input"),
+                        field("include_policy_library", "boolean", false, "是否同时检索制度库", "user_input"))));
         // Reports
         actions.add(action("reporting.approval", "reporting", "生成审批报表",
                 "report", "APPROVAL", true, false, "approval:read",

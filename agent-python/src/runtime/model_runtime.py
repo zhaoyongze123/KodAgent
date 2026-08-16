@@ -16,8 +16,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import time
@@ -48,6 +50,7 @@ from ..services.conversation_router import (
     get_route_reasoning_policy,
 )
 from ..services.narration_stream import NarrationStreamingModel
+from ..presentation.message_contract import presentation_kind
 
 
 _MODEL_CONTEXT: ContextVar[tuple[str, str, str, str, ChatOpenAI] | None] = ContextVar(
@@ -58,6 +61,7 @@ _RUN_STARTED_AT: ContextVar[float | None] = ContextVar(
 )
 _RUN_START_TIMES: dict[str, float] = {}
 _RUN_START_TIMES_LOCK = Lock()
+_LOGGER = logging.getLogger(__name__)
 
 
 class ModelRuntimeError(RuntimeError):
@@ -174,6 +178,21 @@ def _classify_provider_error(exc: Exception, messages: list | None = None) -> Mo
     history_hint = _inspect_message_history(messages) if messages else None
     exception_type = type(exc)
     exception_module = exception_type.__module__ or ""
+    # 这不是供应商能力、网络或模型输出问题。历史中同一调用 ID 对应多条
+    # ToolMessage 时，任何兼容 OpenAI 的供应商都会拒绝后续请求；在原 Thread
+    # 上重试只会再次发送同一段坏历史。把它单独归类，以便前端提示新建对话，
+    # 同时保留真实 ID 到受限审计详情中供定位签发方。
+    if history_hint:
+        return ModelRuntimeError(
+            "MODEL_TOOL_HISTORY_INVALID",
+            "当前对话包含无法继续使用的旧工具调用记录，请新建对话后重试。",
+            details={
+                "statusCode": status,
+                "exceptionType": exception_type.__name__,
+                "upstreamMessage": upstream,
+                "historyHint": history_hint,
+            },
+        )
     is_known_provider_error = (
         exception_module.startswith("openai")
         or exception_module.startswith("anthropic")
@@ -196,6 +215,30 @@ def _classify_provider_error(exc: Exception, messages: list | None = None) -> Mo
                 "exceptionModule": exception_module,
                 "upstreamMessage": upstream,
                 "traceback": traceback_dump,
+            },
+        )
+    if status == 429 and _is_provider_quota_exhausted(exc):
+        return ModelRuntimeError(
+            "MODEL_QUOTA_EXHAUSTED",
+            "当前模型供应商的可用配额已耗尽，请在模型设置中恢复配额或切换到可用模型后重试："
+            f"{truncated}（HTTP 429）",
+            details={
+                "statusCode": status,
+                "exceptionType": exception_type.__name__,
+                "upstreamMessage": upstream,
+                "historyHint": history_hint,
+            },
+        )
+    if status == 429:
+        return ModelRuntimeError(
+            "MODEL_RATE_LIMITED",
+            "当前模型供应商触发请求频率限制，请稍后重试："
+            f"{truncated}（HTTP 429）",
+            details={
+                "statusCode": status,
+                "exceptionType": exception_type.__name__,
+                "upstreamMessage": upstream,
+                "historyHint": history_hint,
             },
         )
     if status is not None and 400 <= status < 500:
@@ -241,6 +284,121 @@ def _strict_tool_calling_enabled() -> bool:
     return os.getenv("OA_AGENT_STRICT_TOOL_CALLING", "false").strip().lower() in {
         "1", "true", "yes", "on",
     }
+
+
+def _provider_status_code(exc: BaseException) -> int | None:
+    """从兼容网关异常中安全读取 HTTP 状态码。"""
+
+    value = getattr(exc, "status_code", None)
+    if value is None:
+        value = getattr(getattr(exc, "response", None), "status_code", None)
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_provider_quota_exhausted(exc: BaseException) -> bool:
+    """识别账户/订阅配额耗尽；它与短时频率限流同为 429，但不可等待恢复。"""
+
+    message = _extract_provider_message(exc) if isinstance(exc, Exception) else str(exc)
+    normalized = str(message or "").lower()
+    return any(marker in normalized for marker in (
+        "insufficient_quota",
+        "quota exceeded",
+        "quota_exceeded",
+        "billing hard limit",
+        "balance not enough",
+    ))
+
+
+def _is_provider_rate_limited(exc: BaseException) -> bool:
+    """仅识别明确的供应商限流，绝不把普通 4xx 重试成慢请求。"""
+
+    if _is_provider_quota_exhausted(exc):
+        return False
+    if _provider_status_code(exc) == 429:
+        return True
+    message = _extract_provider_message(exc) if isinstance(exc, Exception) else str(exc)
+    return "limit_burst_rate" in str(message or "").lower()
+
+
+def _rate_limit_retry_count() -> int:
+    """返回单个模型回合允许的同供应商重试次数，默认最多两次。"""
+
+    try:
+        return min(3, max(0, int(os.getenv("OA_AGENT_MODEL_RATE_LIMIT_RETRIES", "2"))))
+    except ValueError:
+        return 2
+
+
+def _rate_limit_retry_delay(exc: BaseException, attempt: int) -> float:
+    """优先服从上游 Retry-After；缺失时使用短指数退避，避免长时间假死。"""
+
+    headers = getattr(getattr(exc, "response", None), "headers", None)
+    retry_after = headers.get("retry-after") if hasattr(headers, "get") else None
+    try:
+        if retry_after is not None:
+            return min(8.0, max(0.25, float(str(retry_after).strip())))
+    except (TypeError, ValueError):
+        pass
+    return min(8.0, 1.0 * (2 ** max(0, attempt)))
+
+
+def _record_rate_limit_retry(*, attempt: int, delay_seconds: float) -> None:
+    """写入不含提示词和工具参数的限流重试审计事件。"""
+
+    try:
+        sync_runtime_event_context()
+        run_id = current_agent_context().get("runId")
+        if not run_id or run_id == "local-run":
+            return
+        event = build_event(
+            "model.retry",
+            {
+                "reason": "rate_limit",
+                "attempt": attempt,
+                "delayMs": int(delay_seconds * 1000),
+            },
+            "模型请求频率受限，正在短暂等待后重试",
+        )
+        event["eventId"] = f"{run_id}:model-rate-limit-retry:{attempt}"
+        persist_agent_event(event)
+    except Exception:
+        # 运行审计不可反向阻断模型的可恢复限流重试。
+        return
+
+
+def _call_with_rate_limit_retry(call):
+    """执行一个模型回合；只有 429 在原供应商上做有限重试。"""
+
+    max_retries = _rate_limit_retry_count()
+    for attempt in range(max_retries + 1):
+        try:
+            return call()
+        except Exception as exc:
+            if not _is_provider_rate_limited(exc) or attempt >= max_retries:
+                raise
+            delay_seconds = _rate_limit_retry_delay(exc, attempt)
+            _record_rate_limit_retry(attempt=attempt + 1, delay_seconds=delay_seconds)
+            time.sleep(delay_seconds)
+    raise AssertionError("不可达：模型限流重试循环未返回")
+
+
+async def _acall_with_rate_limit_retry(call):
+    """异步模型回合的限流重试版本，等待时不阻塞其他 Run。"""
+
+    max_retries = _rate_limit_retry_count()
+    for attempt in range(max_retries + 1):
+        try:
+            return await call()
+        except Exception as exc:
+            if not _is_provider_rate_limited(exc) or attempt >= max_retries:
+                raise
+            delay_seconds = _rate_limit_retry_delay(exc, attempt)
+            _record_rate_limit_retry(attempt=attempt + 1, delay_seconds=delay_seconds)
+            await asyncio.sleep(delay_seconds)
+    raise AssertionError("不可达：模型限流重试循环未返回")
 
 
 class _StrictToolCallingChatOpenAI(ChatOpenAI):
@@ -341,7 +499,12 @@ def _effective_reasoning_effort() -> str:
 
 
 def _wrap_runtime_model(model: Any) -> NarrationStreamingModel:
-    """Wrap the model to stream explicit progress tools, never model prose."""
+    """包装模型的过程播报和受控的最终回答流。
+
+    默认只解析 ``report_progress``。计划投影层仅在主 Agent 完成工具执行后的
+    无工具收尾调用中开启 ContextVar，包装器在真正消费 chunk 时读取该范围，
+    因此路由、工具决策和子 Agent 自由文本都不会进入最终回答流。
+    """
     configured_extra_body = getattr(model, "extra_body", None)
     qwen3_extra_body = (
         configured_extra_body
@@ -443,6 +606,26 @@ def _capability_values(model_config: dict[str, Any], *names: str) -> set[str]:
     return {str(value).strip().lower() for value in values if str(value).strip()}
 
 
+def _supports_reasoning_effort(model_config: dict[str, Any], reasoning_effort: str) -> bool:
+    """判断模型是否明确支持指定的推理预算档位。
+
+    参数：
+        model_config：Java 模型目录返回的能力声明。
+        reasoning_effort：路由层希望使用的推理预算，例如 ``low``。
+
+    返回：只有能力目录列出了当前档位时才返回 ``True``。未声明能力的
+    OpenAI 兼容模型保持普通工具调用，避免“选路”也被网关转成较长的隐藏推理。
+    """
+    effort = str(reasoning_effort or "").strip().lower()
+    if effort not in {"low", "medium", "high"}:
+        return False
+    levels = _capability_values(
+        model_config,
+        "reasoningEffortLevels", "reasoning_effort_levels", "reasoningLevels",
+    )
+    return effort in levels
+
+
 def _reasoning_experiment_enabled() -> bool:
     """是否允许在规划阶段试验 medium reasoning；默认关闭以保持现网稳定。"""
 
@@ -534,10 +717,10 @@ def _build_model(model_config: dict[str, Any], reasoning_effort: str = "auto") -
         # NarrationStreamingModel consumes the provider's chunks to emit
         # report_progress updates, so the underlying ChatOpenAI must stream.
         "streaming": True,
-        # Keep provider retries bounded.  A provider 4xx is never retried by
-        # the OpenAI client, while transient 5xx/network failures get only a
-        # short, finite retry window and never switch providers.
-        "max_retries": min(2, max(0, int(os.getenv("OA_AGENT_MODEL_MAX_RETRIES", "2")))),
+        # SDK 内置重试会把 429 的等待隐藏在模型客户端里，既难以审计又会让
+        # 单回合等待无上限。统一由下面中间件只对 429 做可观测的同供应商短退避；
+        # 其他错误立即透出，绝不改用其它供应商。
+        "max_retries": 0,
         "timeout": 120,
     }
     # Qwen3's vLLM chat template requires its thinking switch in the nested
@@ -549,9 +732,9 @@ def _build_model(model_config: dict[str, Any], reasoning_effort: str = "auto") -
                 "enable_thinking": False,
             }
         }
-    elif reasoning_effort != "auto" and reasoning_effort != "off":
-        # All non-Qwen models keep the existing OpenAI-compatible route-level
-        # reasoning option. No Qwen/vLLM chat-template body is sent to them.
+    elif _supports_reasoning_effort(model_config, reasoning_effort):
+        # reasoning_effort 不是 Chat Completions 的通用字段。只有模型能力
+        # 明确声明支持时才下发，避免兼容网关把普通路由误转为长思考模式。
         options["reasoning_effort"] = reasoning_effort
     # 无论模型是否需要 reasoning 重放，都通过同一个出站 payload 适配器发送
     # strict function calling；两种模型只在 reasoning 字段重放行为上有差异。
@@ -684,6 +867,41 @@ def resolve_run_model(
     return model
 
 
+def _log_model_turn(
+    *,
+    messages: list[Any],
+    model_id: str | None,
+    reasoning_effort: str,
+    started_at: float,
+    response: Any | None = None,
+    error: BaseException | None = None,
+) -> None:
+    """记录单次模型回合的实际墙钟耗时，供定位流式卡顿。
+
+    这是运行日志诊断，不写业务审计事件，也不记录用户原文、提示词、工具参数或
+    模型回复。流式请求收到 HTTP 200 只代表首字节已到达，真正的等待必须以这里
+    的“从模型调用开始到完整工具调用/文本合并完成”为准。
+    """
+    duration_ms = max(1, int((time.perf_counter() - started_at) * 1000))
+    phase = classify_main_agent_phase(messages)
+    tool_names: list[str] = []
+    for item in getattr(response, "result", []) or []:
+        for call in getattr(item, "tool_calls", None) or []:
+            name = str(call.get("name") or "").strip() if isinstance(call, dict) else ""
+            if name:
+                tool_names.append(name)
+    level = _LOGGER.warning if duration_ms >= 15_000 else _LOGGER.info
+    level(
+        "模型回合完成 phase=%s model_id=%s reasoning_effort=%s duration_ms=%s tool_calls=%s error=%s",
+        phase,
+        model_id or "default",
+        reasoning_effort or "auto",
+        duration_ms,
+        ",".join(tool_names[:4]) or "none",
+        type(error).__name__ if error is not None else "none",
+    )
+
+
 class DynamicModelMiddleware(AgentMiddleware):
     """Replace the startup model with the model selected for this Run."""
 
@@ -694,16 +912,27 @@ class DynamicModelMiddleware(AgentMiddleware):
         reasoning_effort = _effective_reasoning_effort()
         experiment_eligible = _request_is_reasoning_experiment_eligible(request)
         messages = list((getattr(request, "state", {}) or {}).get("messages") or [])
+        started_at = time.perf_counter()
         # Model resolution errors and provider errors must remain visible to
         # the caller.  Falling back to the startup model could silently switch
         # away from the model selected in OA settings and hide the real cause.
         try:
-            return handler(request.override(
+            model_request = request.override(
                 model=_wrap_runtime_model(resolve_run_model(
                     model_id, reasoning_effort, experiment_eligible=experiment_eligible,
                 ))
-            ))
+            )
+            response = _call_with_rate_limit_retry(lambda: handler(model_request))
+            _log_model_turn(
+                messages=messages, model_id=model_id, reasoning_effort=reasoning_effort,
+                started_at=started_at, response=response,
+            )
+            return response
         except ModelRuntimeError as exc:
+            _log_model_turn(
+                messages=messages, model_id=model_id, reasoning_effort=reasoning_effort,
+                started_at=started_at, error=exc,
+            )
             RunLifecycleMiddleware._persist_failure(exc)
             raise
         except RuntimeError as exc:
@@ -711,6 +940,10 @@ class DynamicModelMiddleware(AgentMiddleware):
                 runtime_error = ModelRuntimeError("MODEL_CONFIG_INVALID", str(exc))
             else:
                 runtime_error = _classify_provider_error(exc, messages)
+            _log_model_turn(
+                messages=messages, model_id=model_id, reasoning_effort=reasoning_effort,
+                started_at=started_at, error=runtime_error,
+            )
             RunLifecycleMiddleware._persist_failure(runtime_error)
             raise runtime_error from exc
         except Exception as exc:
@@ -724,6 +957,10 @@ class DynamicModelMiddleware(AgentMiddleware):
             )
             _tb.print_exc()
             runtime_error = _classify_provider_error(exc, messages)
+            _log_model_turn(
+                messages=messages, model_id=model_id, reasoning_effort=reasoning_effort,
+                started_at=started_at, error=runtime_error,
+            )
             RunLifecycleMiddleware._persist_failure(runtime_error)
             raise runtime_error from exc
 
@@ -732,13 +969,24 @@ class DynamicModelMiddleware(AgentMiddleware):
         reasoning_effort = _effective_reasoning_effort()
         experiment_eligible = _request_is_reasoning_experiment_eligible(request)
         messages = list((getattr(request, "state", {}) or {}).get("messages") or [])
+        started_at = time.perf_counter()
         try:
-            return await handler(request.override(
+            model_request = request.override(
                 model=_wrap_runtime_model(resolve_run_model(
                     model_id, reasoning_effort, experiment_eligible=experiment_eligible,
                 ))
-            ))
+            )
+            response = await _acall_with_rate_limit_retry(lambda: handler(model_request))
+            _log_model_turn(
+                messages=messages, model_id=model_id, reasoning_effort=reasoning_effort,
+                started_at=started_at, response=response,
+            )
+            return response
         except ModelRuntimeError as exc:
+            _log_model_turn(
+                messages=messages, model_id=model_id, reasoning_effort=reasoning_effort,
+                started_at=started_at, error=exc,
+            )
             RunLifecycleMiddleware._persist_failure(exc)
             raise
         except RuntimeError as exc:
@@ -746,6 +994,10 @@ class DynamicModelMiddleware(AgentMiddleware):
                 runtime_error = ModelRuntimeError("MODEL_CONFIG_INVALID", str(exc))
             else:
                 runtime_error = _classify_provider_error(exc, messages)
+            _log_model_turn(
+                messages=messages, model_id=model_id, reasoning_effort=reasoning_effort,
+                started_at=started_at, error=runtime_error,
+            )
             RunLifecycleMiddleware._persist_failure(runtime_error)
             raise runtime_error from exc
         except Exception as exc:
@@ -758,6 +1010,10 @@ class DynamicModelMiddleware(AgentMiddleware):
             )
             _tb.print_exc()
             runtime_error = _classify_provider_error(exc, messages)
+            _log_model_turn(
+                messages=messages, model_id=model_id, reasoning_effort=reasoning_effort,
+                started_at=started_at, error=runtime_error,
+            )
             RunLifecycleMiddleware._persist_failure(runtime_error)
             raise runtime_error from exc
 
@@ -821,6 +1077,10 @@ class RunLifecycleMiddleware(AgentMiddleware):
             for message in reversed(messages):
                 if getattr(message, "type", "") != "ai":
                     continue
+                # 路由、代码签发工具调用和审批协议同样会进入 checkpoint；只有
+                # 已提交为 final 的模型消息才是可审计的用户回答。
+                if presentation_kind(message) != "final":
+                    continue
                 content = getattr(message, "content", "")
                 if isinstance(content, str) and content.strip():
                     final_text = content
@@ -841,6 +1101,37 @@ class RunLifecycleMiddleware(AgentMiddleware):
                 )
                 message_event["eventId"] = f"{run_id}:message.completed"
                 persist_agent_event(message_event)
+
+            if not final_text:
+                # A control message is intentionally not a chat response. If
+                # it is the graph's terminal output, marking the Run completed
+                # would leave the user with neither a final answer nor an
+                # error card. Persist the code-owned failure fact instead;
+                # the browser maps it to a structured system card and never
+                # reconstructs a fake Agent sentence from the code.
+                control_failure = next(
+                    (
+                        str((getattr(message, "response_metadata", {}) or {}).get("routeFailure") or "").strip()
+                        for message in reversed(messages)
+                        if getattr(message, "type", "") == "ai"
+                        and str((getattr(message, "response_metadata", {}) or {}).get("routeFailure") or "").strip()
+                    ),
+                    "",
+                )
+                if control_failure:
+                    failed = build_event(
+                        "run.failed",
+                        {
+                            "source": "agent-lifecycle",
+                            "code": control_failure,
+                            "message": "未能生成可展示的最终回复，请重试该请求。",
+                        },
+                        "Agent 未生成最终回复",
+                    )
+                    failed["eventId"] = f"{run_id}:failed"
+                    failed["durationMs"] = duration_ms
+                    persist_agent_event(failed)
+                    return
 
             completed = build_event(
                 "run.completed",

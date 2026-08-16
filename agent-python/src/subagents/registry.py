@@ -25,6 +25,7 @@ from ..middleware import (
     MeetingPrepareFirstMiddleware,
     WorkOrderToolProjectionMiddleware,
     WorkflowPlanBinderMiddleware,
+    ToolVisibilityMiddleware,
 )
 from ..runtime.model_runtime import DynamicModelMiddleware
 from ..tools.common import report_progress
@@ -68,6 +69,15 @@ from ..tools.workflows.party_files import check_approval_against_party_file, run
 from ..tools.schedule.drafts import create_personal_schedule_draft, get_personal_schedule
 from ..tools.schedule.query import find_calendar_conflicts, get_my_calendar
 from ..tools.reports import approval_report, meeting_report, party_file_report, schedule_report
+from ..tools.projects import (
+    analyze_project,
+    get_project_activity,
+    get_project_documents,
+    get_project_snapshot,
+    get_project_tasks,
+    list_accessible_projects,
+    search_project_knowledge,
+)
 from ..tools.workflows.meeting_booking import run_meeting_booking_workflow
 from ..tools.workflows.personal_schedule import run_personal_schedule_workflow
 from ..tools.workflows.approval import run_approval_write_workflow
@@ -129,6 +139,7 @@ def build_subagents(current_business_time: str, *, include_meeting_agent: bool =
         ExecutionReceiptMiddleware(
             skip_tools=frozenset({"run_meeting_booking_workflow"})
         ),
+        ToolVisibilityMiddleware(),
     ]
     if meeting_workflow_enabled:
         meeting_middleware = [
@@ -158,6 +169,7 @@ def build_subagents(current_business_time: str, *, include_meeting_agent: bool =
         DynamicModelMiddleware(), WorkOrderToolProjectionMiddleware(),
         # 通用回执中间件会把 DRAFT_READY 提升为个人日程专用回执。
         WorkflowPlanBinderMiddleware(), ExecutionReceiptMiddleware(),
+        ToolVisibilityMiddleware(),
     ]
     if workflow_registry.enabled("personal_schedule"):
         schedule_middleware.append(personal_schedule_workflow_once_middleware())
@@ -174,7 +186,7 @@ def build_subagents(current_business_time: str, *, include_meeting_agent: bool =
 处理待办时：普通列表或单条详情继续使用原有查询工具；用户同时给出审批类型、金额、时间、部门、待办时长或排序等多个条件时，使用 search_my_pending_approvals，把条件转换为结构化字段。该工具会由 Java 在当前用户权限范围内确定性筛选并返回候选和排除原因；不可根据模型判断自行增删结果。单条和批量待办的确认预览均由 run_approval_write_workflow 生成；绝不可直接调用批量执行或 BPM 写接口。不接受或生成任意流程变量和下一审批人。若流程要求选择下一审批人，说明当前第一期不支持该动作，请用户回 OA 页面处理。""",
             "tools": [report_progress, list_startable_approval_types, preview_approval_request, create_approval_request_draft, create_generic_approval_request_draft, create_approval_withdraw_draft, list_my_approval_applications, get_my_approval_application, list_my_approval_history, list_my_pending_approvals, search_my_pending_approvals, analyze_my_pending_approvals, run_approval_query_plan, get_approval_task_detail, preview_approval_task_action, preview_approval_batch_action, approval_report, run_approval_write_workflow],
             "skills": ["/skills/approvals/"],
-            "middleware": [DynamicModelMiddleware(), WorkOrderToolProjectionMiddleware(), WorkflowPlanBinderMiddleware(), ExecutionReceiptMiddleware()],
+            "middleware": [DynamicModelMiddleware(), WorkOrderToolProjectionMiddleware(), WorkflowPlanBinderMiddleware(), ExecutionReceiptMiddleware(), ToolVisibilityMiddleware()],
         },
         {
             "name": "meeting_rooms_agent", "description": "处理会议室查询、参会人员日程检查及会议预约待确认草稿。",
@@ -197,12 +209,19 @@ def build_subagents(current_business_time: str, *, include_meeting_agent: bool =
         {
             "name": "party_files_agent", "description": "处理党务文件查询、内容理解、比较和制度校验。",
             "system_prompt": """你是党务文件领域 Agent，只处理当前用户有权限看到的文件查询、理解、比较和受控草稿生成。每次处理业务请求时先调用 report_progress(stage=\"plan\")，再调用一个领域工具；不要输出隐藏思考过程。需要读取正文时，再按文件 ID 获取详情；获取详情会记录已读，附件工具只返回元数据，不会传输二进制文件。涉及发布时间、分类、已读状态、排序、分页等结构化元数据时，统一调用 execute_party_file_metadata_plan；计划会由 Java 在当前用户权限范围内确定性筛选、排序和分页，不能先取前 N 条再由模型比较日期，也不能自行转换时间戳。只有用户明确询问正文、条款或制度语义时才调用 search_party_knowledge；普通元数据任务不得进入向量检索。收到 KODAGENT_WORK_ORDER 时，canonicalPlan 是唯一权威业务字段，写操作只能调用 run_party_file_write_workflow 一次；它会根据 CREATE、UPDATE、DELETE 生成持久化草稿。绝不调用确认工具或后台 /system/party-file/*。根图会从已验证的 Operation/Approval 回执生成确认卡。不得编造文件 ID、分类、附件或发布结果。完成工具调用后，只返回工具中的匹配结果和必要事实，不输出长篇自由推理；主 Agent 会负责最终答复的提炼和排版。""",
-            "tools": [report_progress, search_party_files, execute_party_file_metadata_plan, search_party_knowledge, get_party_file_detail, get_party_file_attachments, get_party_file_attachment, list_party_file_categories, get_manage_party_file, create_party_file_draft, update_party_file_draft, delete_party_file_draft, run_party_file_understanding, run_party_file_compare, check_approval_against_party_file, party_file_report, run_party_file_write_workflow], "skills": ["/skills/party-files/"], "middleware": [DynamicModelMiddleware(), WorkOrderToolProjectionMiddleware(), WorkflowPlanBinderMiddleware(), ExecutionReceiptMiddleware()],
+            "tools": [report_progress, search_party_files, execute_party_file_metadata_plan, search_party_knowledge, get_party_file_detail, get_party_file_attachments, get_party_file_attachment, list_party_file_categories, get_manage_party_file, create_party_file_draft, update_party_file_draft, delete_party_file_draft, run_party_file_understanding, run_party_file_compare, check_approval_against_party_file, party_file_report, run_party_file_write_workflow], "skills": ["/skills/party-files/"], "middleware": [DynamicModelMiddleware(), WorkOrderToolProjectionMiddleware(), WorkflowPlanBinderMiddleware(), ExecutionReceiptMiddleware(), ToolVisibilityMiddleware()],
+        },
+        {
+            "name": "projects_agent", "description": "处理项目进度、任务、成员负责和资料检索的只读调查。",
+            "system_prompt": """你是项目分析领域 Agent，只处理主图已编译委派的项目只读调查。项目、任务、成员、日志、资料权限和统计数字都以 Java Project Provider 返回结果为准；不能根据聊天历史、候选卡片或模型猜测项目编号、成员角色、任务状态和完成率。\n每次处理请求时，先单独调用 report_progress(stage=\"plan\")，用一句简短中文说明将查询什么；收到结果后再调用项目工具。不要输出隐藏思考过程，也不要绕过工具自行汇总任务数量、完成率或逾期数。\n收到 project.investigate 委托时，这是受控的领域内自主调查：先调用 analyze_project 获取同一时点的确定性统计、风险、成员进度、活动和资料状态；再根据用户问题和真实返回结果，自主决定补充查询的次序和范围。canonicalPlan.requested_scopes 是用户已经明确提出、必须覆盖的子目标：documents 必须调用 get_project_documents；knowledge 必须调用 search_project_knowledge；tasks 必须调用 get_project_tasks；activity 必须调用 get_project_activity。完成基础分析和这些子目标后，调查事实即已齐备：知识检索返回零命中也是有效结论，不能换关键词、调整数量或改变制度库开关再次检索；不能为了“完整”调用全部工具。业务工具调用最多 6 次（不含 report_progress），相同工具和相同参数不要重复调用；事实已经足够时立即结束。\n文件交付不属于你的职责：绝不生成 Word、Excel 或下载链接。主 Agent 会在基于真实事实写完最终说明后，按用户明确要求决定是否创建通用附件。\n收到 KODAGENT_WORK_ORDER 时，canonicalPlan 是唯一的请求范围，userContext 只用于理解；只能调用项目领域已投影的安全只读工具，不能重新路由到其他领域。项目编号即使来自计划，也会由 Java 按当前用户重新校验成员关系和 taskShowOnlySelf，遇到无权限、用户未绑定或资料已失效时如实返回结构化错误，不得改用共享账号或扩大查询范围。\n资料检索结果只是带引用的索引证据，不能把索引当作权限事实，不能输出文件下载链接、KodCloud 访问令牌、文件路径或全文。需要制度依据时使用 search_project_knowledge；普通项目概览、任务、动态和资料目录查询不能把数据拿回后自行筛选替代后端口径。完成工具调用后，返回完整、可核验的事实、统计口径、风险项和引用给主 Agent，由主 Agent 负责面向用户的最终提炼和排版。""",
+            "tools": [report_progress, list_accessible_projects, analyze_project, get_project_snapshot, get_project_tasks, get_project_activity, get_project_documents, search_project_knowledge],
+            "skills": ["/skills/project-analysis/"],
+            "middleware": [DynamicModelMiddleware(), WorkOrderToolProjectionMiddleware(), WorkflowPlanBinderMiddleware(), ExecutionReceiptMiddleware(), ToolVisibilityMiddleware()],
         },
     ]
     if include_meeting_agent:
         return validate_subagent_specs(specs)
     return validate_subagent_specs(
         [spec for spec in specs if spec.get("name") != "meeting_rooms_agent"],
-        required_names={"approvals_agent", "schedules_agent", "party_files_agent"},
+        required_names={"approvals_agent", "schedules_agent", "party_files_agent", "projects_agent"},
     )

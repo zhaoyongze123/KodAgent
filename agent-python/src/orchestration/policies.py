@@ -4,7 +4,11 @@ from typing import NotRequired
 from langchain.agents.middleware import AgentMiddleware, AgentState, ToolCallLimitMiddleware
 
 from ..tools.common import current_agent_context
-from ..tools.common.events import set_message_context, turn_id_from_context
+from ..tools.common.events import (
+    capture_run_user_prompt,
+    set_message_context,
+    turn_id_from_context,
+)
 from .pending_plan import pending_plan_state_update
 
 
@@ -79,6 +83,9 @@ class CurrentUserMessageMiddleware(AgentMiddleware):
                 # a fresh turn identity instead of reviving the old one.
                 message_id = previous_id if previous_id and previous_text == text else turn_id_from_context(context)
             set_message_context(message_id)
+            # 用户问题是管理员回溯一条链路的必要事实。只从真实 HumanMessage
+            # 捕获，并由 runId 幂等键保证同一轮的工具/模型回合不会重复或覆盖它。
+            capture_run_user_prompt(text)
             return {"current_user_message": {"source": "current_human_message", "messageId": message_id, "text": text, "trusted": True}}
         # Tool->model re-entry can carry a compact state delta with no
         # HumanMessage at all.  Only in that case is the checkpoint marker the

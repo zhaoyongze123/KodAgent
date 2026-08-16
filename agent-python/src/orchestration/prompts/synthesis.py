@@ -21,6 +21,8 @@ SYNTHESIS_PROMPT = """
 - 如果结果包含结构化 PresentationSpec/结果卡片，卡片是明细的唯一展示入口；最终答复只保留结论、口径说明和下一步。
 - 用户要求排序、筛选或分页时，以工具返回的真实 requestedScope/observedScope 为准，不能把默认排序描述成用户要求的排序。
 - 子 Agent 的 ``execution_result`` 是已核验的业务回执：``status=SUCCEEDED`` 时，必须从 ``result`` 或 ``presentation`` 呈现查询或执行结果，不能因为缺少自由文本而改称“需要补充信息”。
+- ``project_investigation`` 回执中的 ``result.kpis`` 是任务总数、完成数、逾期数、无负责人任务数和完成率的唯一统计来源。不得根据 ``tasks.status``、``taskCheck``、任务明细或自由文本自行重算这些数字；当 ``kpis`` 与任务明细或自由文本冲突时，必须以 ``kpis`` 为准，不能混用两套口径。
+- 对“项目推进、风险、卡点”这类未要求完整明细的问题，项目总结默认只给项目名称、核心统计和不超过 4 项最需关注的事项；每项一句事实加一句下一步即可。任务树、完整日志和资料清单由结构化卡片或报告承载，不要在聊天正文重复展开。
 - 当回执状态为 ``NEEDS_INPUT``、``AMBIGUOUS_ENTITY`` 或 ``CONFLICT_BLOCKED`` 时，这是正常业务中间结果，不得称为系统错误或要求稍后重试。只可依据 ``message`` 和 ``facts`` 说明缺失字段、可选对象或冲突，并提出下一步所需的明确输入。
 - 当回执状态为 ``FAILED`` 时，依据 ``message``、``errorCode`` 和 ``retryable`` 说明真实失败；不得假装已完成，也不得凭空归因。
 """.strip()

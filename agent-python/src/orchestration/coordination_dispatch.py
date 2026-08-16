@@ -26,6 +26,7 @@ from .delegated_receipt import (
     parse_meeting_draft_receipt,
     parse_party_file_draft_receipt,
     parse_personal_schedule_draft_receipt,
+    parse_project_investigation_receipt,
 )
 from .capabilities import action_read_only, resolve_action
 from .domain_dispatch import WorkOrder, parse_work_order, serialize_work_order
@@ -219,6 +220,19 @@ def _receipt_outcome(step: CoordinationStep, content: Any) -> tuple[str, dict[st
         if execution.status == "SUCCEEDED":
             return ("SUCCEEDED", receipt, None, None, None)
         return ("FAILED", receipt, None, execution.error_code or "EXECUTOR_FAILED", execution.message or "领域执行未成功。")
+
+    project = parse_project_investigation_receipt(content)
+    if project is not None:
+        if (
+            step.domain != "project"
+            or step.action_id != "project.investigate"
+            or project.plan_id != str(step.work_order.get("planId") or "")
+        ):
+            return ("FAILED", None, None, "PROJECT_RECEIPT_MISMATCH", "项目调查回执与当前步骤契约不匹配。")
+        receipt = project.model_dump(by_alias=True, exclude_none=True)
+        if project.status == "SUCCEEDED":
+            return ("SUCCEEDED", receipt, None, None, None)
+        return ("FAILED", receipt, None, "PROJECT_INVESTIGATION_FAILED", "项目调查未取得可用事实。")
 
     parsers = (
         parse_meeting_draft_receipt,

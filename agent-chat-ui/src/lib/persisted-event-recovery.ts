@@ -2,8 +2,8 @@ import {
   readDurableCursor,
   reduceProcessEvents,
   type ProcessEvent,
+  type ProcessRun,
 } from "../components/thread/process-events.ts";
-import type { ProcessRun } from "../components/thread/thread-presentation.ts";
 
 function numericValue(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) return undefined;

@@ -3,6 +3,7 @@
 # Import the event-only middleware first. It depends on the event module but
 # not on the domain middleware, keeping startup imports acyclic.
 from .tool_audit import ToolAuditMiddleware
+from .tool_visibility import ToolVisibilityMiddleware
 from .meeting_task_guard import MeetingTaskCallGuardMiddleware
 from .workflow_task_guard import DeterministicWorkflowTaskGuardMiddleware
 from .meeting_draft_idempotency import MeetingDraftIdempotencyMiddleware
@@ -36,4 +37,5 @@ __all__ = [
     "ApprovalRequestAutoConfirmMiddleware",
     "PartyFileApprovalAutoConfirmMiddleware",
     "ToolAuditMiddleware",
+    "ToolVisibilityMiddleware",
 ]

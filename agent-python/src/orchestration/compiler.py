@@ -28,6 +28,7 @@ from .planning.common import plan_id
 from .planning.contracts import CompileContext
 from .planning.normalization import normalize_action_payload
 from .planning.party_file import PartyFilePlanCompiler, normalize_party_file_operation
+from .planning.project import ProjectPlanCompiler
 from .planning.registry import build_plan_compiler_registry
 from .planning.resources import ResourcePlanCompiler, infer_workflow_capability
 from .planning.reports import ReportPlanCompiler
@@ -279,7 +280,7 @@ def compile_plan(**kwargs: Any) -> CompiledTaskPlan | None:
 
 __all__ = [
     "CandidateQueryIntent", "CandidateTaskPlan", "CompiledTaskPlan", "ExecutionClass", "PlanStatus",
-    "ApprovalPlanCompiler", "ApprovalProcessPlanCompiler", "PartyFilePlanCompiler",
+    "ApprovalPlanCompiler", "ApprovalProcessPlanCompiler", "PartyFilePlanCompiler", "ProjectPlanCompiler",
     "ResourcePlanCompiler", "ReportPlanCompiler", "PlanCompiler", "compile_plan",
     "compile_task_plan", "infer_workflow_capability", "normalize_party_file_operation",
 ]

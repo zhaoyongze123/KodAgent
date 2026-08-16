@@ -16,6 +16,9 @@ import { useQueryState, parseAsBoolean } from "nuqs";
 import { GenericInterruptView } from "./generic-interrupt";
 import { useArtifact } from "../artifact";
 import { CardRenderer } from "../cards/CardRenderer";
+import { assistantCardFromMessage } from "@/types/agent-block";
+import { attachmentsFromAssistantMessage } from "@/lib/assistant-message-presentation";
+import { AttachmentList } from "./attachment-list";
 import {
   approvalPayloadFromInterrupt,
   isApprovalInterruptAction,
@@ -23,6 +26,10 @@ import {
 import { isRenderableAssistantMessage } from "./message-visibility";
 
 export { isRenderableAssistantMessage } from "./message-visibility";
+export {
+  isCommittedFinalAssistantMessage,
+  isInternalAssistantMessage,
+} from "./message-visibility";
 
 function CustomComponent({
   message,
@@ -154,6 +161,8 @@ export function AssistantMessage({
     );
   const hasAnthropicToolCalls = !!anthropicStreamedToolCalls?.length;
   const isToolResult = message?.type === "tool";
+  const presentationCard = assistantCardFromMessage(message);
+  const attachments = attachmentsFromAssistantMessage(message);
 
   // Keep all hooks above this branch. The predicate is still evaluated before
   // the outer layout node is mounted, without changing Hook order between
@@ -182,7 +191,12 @@ export function AssistantMessage({
                 <AgentBlockRenderer
                   block={{ kind: "narration", markdown: contentString }}
                 />
+                <AttachmentList attachments={attachments} />
               </div>
+            )}
+
+            {presentationCard && (
+              <AgentBlockRenderer block={presentationCard} />
             )}
 
             {!hideToolCalls && (
@@ -228,6 +242,23 @@ export function AssistantMessage({
             )}
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 正式 AIMessage 尚未写回图状态时的临时回答气泡。
+ *
+ * 内容只来自主 Agent 的受限最终回答流，不包含工具、卡片、操作按钮或任何
+ * 子 Agent 自由文本；它不会成为 LangGraph 消息，因此不参与历史、分支或重试。
+ */
+export function StreamingAssistantMessage({ markdown }: { markdown: string }) {
+  if (!markdown.trim()) return null;
+  return (
+    <div className="mr-auto flex w-full items-start gap-2" aria-live="polite">
+      <div className="flex w-full flex-col gap-2 py-1">
+        <AgentBlockRenderer block={{ kind: "narration", markdown }} />
       </div>
     </div>
   );

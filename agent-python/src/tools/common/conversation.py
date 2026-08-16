@@ -75,6 +75,7 @@ from ...orchestration.coordination_compiler import (
 from ...orchestration.conversation_context import ContextIntent, verify_context_candidate_proof
 from ...orchestration.target_resolution import target_resolution_compiled_route
 from ...orchestration.planning.party_file import normalize_party_file_operation
+from ...orchestration.attachment_request import artifact_requested
 from ...orchestration.planning.resources import infer_workflow_capability
 from ...persistence.operation_store import OperationStore
 from .events import current_agent_context, emit
@@ -263,6 +264,21 @@ def route_conversation_model_schema(
             required.remove("action_id")
     parameters["required"] = required
 
+    # ``steps[]`` 是跨领域路由的嵌套结构，早期只收紧了顶层
+    # action_id，弱模型仍可以在步骤中编造 ``query_project_risk``
+    # 这样的动作名。这里把嵌套动作限制在当前实时目录的全集；各步骤与领域
+    # 的对应关系仍由中央编译器核验，不在 Schema 层伪造业务选择。
+    step_definition = (parameters.get("$defs") or {}).get("CoordinationCandidateStep")
+    if isinstance(step_definition, dict):
+        step_properties = step_definition.get("properties")
+        if isinstance(step_properties, dict):
+            available_action_ids = [item.action_id for item in _visible_action_specs_for_schema()]
+            step_properties["action_id"] = {
+                "type": "string",
+                "enum": available_action_ids,
+                "description": "从当前 Action Catalog 的正式 action_id 中选择，不得编造语义名称。",
+            }
+
     return _ModelToolSchema({
         "type": "function",
         "function": {
@@ -271,6 +287,23 @@ def route_conversation_model_schema(
             "parameters": parameters,
         },
     })
+
+
+def _visible_action_specs_for_schema():
+    """返回跨领域 steps Schema 可见的正式动作。
+
+    复用现有 capability 目录的公开读取接口，避免在提示词或 Schema 再写一份固定
+    动作表。全局去重仅是为了产生 JSON Schema；真正的领域归属验证仍在
+    ``compile_coordination_batch`` 完成。
+    """
+    seen: set[str] = set()
+    result = []
+    for capability in CAPABILITIES:
+        for action in actions_for_capability(capability.name):
+            if action.action_id not in seen:
+                seen.add(action.action_id)
+                result.append(action)
+    return tuple(result)
 
 
 def _meeting_write_contains_explicit_field_signal(message: str) -> bool:
@@ -814,6 +847,69 @@ def _coordination_step_summaries(steps: tuple[Any, ...]) -> list[dict[str, Any]]
     ]
 
 
+def _normalized_step_action_reference(value: Any) -> str:
+    """将模型输入的步骤动作名变成仅用于比较的词元。
+
+    它不产生或展示新的 Action ID；仅识别两个系统已定义的只读语义适配器，
+    避免弱模型把 ``project.investigate`` 写成自然语言形式后进入无限重试。
+    """
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+def _normalize_coordination_proposal(
+    proposal: CoordinationCandidateStep,
+    *,
+    user_message: str,
+) -> CoordinationCandidateStep:
+    """在批次编译前收敛两类无歧义的只读语义。
+
+    跨领域 steps 的 action_id 不是事实源，不能因模型写了 ``analyze_project_risk``
+    就产生一个新执行能力。只对下面两种有唯一官方 Action 的语义做定向适配：
+
+    * 项目分析/风险/调查 -> ``project.investigate``；
+    * 个人日程的查询/列表 -> ``schedule.query``。
+
+    其他非法 Action 仍交给中央编译器拒绝，不存在“按模糊语义选执行器”的后门。
+    """
+    capability = canonical_capability_id(proposal.capability_id)
+    # 已经是当前领域的注册动作时不做任何改写。
+    if resolve_action(capability, proposal.action_id) is not None:
+        return proposal
+
+    reference = _normalized_step_action_reference(proposal.action_id)
+    intent_text = " ".join([
+        str(user_message or ""), str(proposal.query_intent or ""), reference,
+    ]).lower()
+    candidate = dict(proposal.candidate_plan or {})
+
+    if (
+        capability == "project"
+        and candidate.get("project_id") not in {None, ""}
+        and any(token in intent_text for token in ("risk", "analysis", "analy", "investig", "风险", "分析", "调查", "卡点", "进度"))
+    ):
+        candidate["project_id"] = str(candidate["project_id"])
+        candidate["user_question"] = str(user_message or "").strip()
+        candidate["attachment_requested"] = artifact_requested(user_message)
+        return proposal.model_copy(update={
+            "action_id": "project.investigate",
+            "execution_class": "fallback_react",
+            "candidate_plan": candidate,
+        })
+
+    if (
+        capability == "schedule"
+        and any(token in intent_text for token in ("schedule", "calendar", "日程", "日历"))
+        and any(token in intent_text for token in ("query", "list", "get", "today", "查", "看", "今天"))
+    ):
+        return proposal.model_copy(update={
+            "action_id": "schedule.query",
+            "execution_class": "metadata_query",
+            "candidate_plan": candidate,
+        })
+
+    return proposal
+
+
 def _compile_coordination_route(
     *,
     message: str,
@@ -849,6 +945,11 @@ def _compile_coordination_route(
                 "missingFields": ["steps"],
             },
         })
+
+    proposals = [
+        _normalize_coordination_proposal(proposal, user_message=message)
+        for proposal in proposals
+    ]
 
     runtime = current_agent_context()
     required_context = {
@@ -1450,6 +1551,12 @@ def route_conversation(
         candidate_plan = _recover_explicit_reference_fields(
             selected_action.action_id, message, candidate_plan
         )
+        if selected_action.action_id == "project.investigate":
+            # 调查问题就是当前用户输入本身，属于可安全复制的 user_input，而不是
+            # 模型补写的业务事实。附件意图仅供主图控制工具面板，不能由项目 Agent
+            # 当作创建文件的授权。
+            candidate_plan["user_question"] = message.strip()
+            candidate_plan["attachment_requested"] = artifact_requested(message)
         if selected_action.action_id == "meeting.query":
             normalized_meeting = normalize_meeting_query_candidate(
                 message, candidate_plan, query_intent

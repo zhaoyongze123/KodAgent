@@ -1,4 +1,5 @@
 export const TOOL_LABELS: Record<string, string> = {
+  create_document_artifact: "制作附件",
   report_progress: "播报执行计划",
   list_available_meeting_rooms: "查询可用会议室",
   search_meeting_attendees: "查询参会人员",
@@ -22,6 +23,13 @@ export const TOOL_LABELS: Record<string, string> = {
   get_party_file_detail: "读取党务文件详情",
   get_party_file_attachment: "获取文件附件信息",
   list_party_file_categories: "查询党务文件分类",
+  list_accessible_projects: "查询可参与项目",
+  get_project_snapshot: "读取项目概览",
+  analyze_project: "分析项目进度与风险",
+  get_project_tasks: "读取项目任务",
+  get_project_activity: "读取项目动态",
+  get_project_documents: "读取项目资料",
+  search_project_knowledge: "检索项目资料与制度",
 };
 
 export function toolLabel(name?: string | null): string {

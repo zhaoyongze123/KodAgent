@@ -65,6 +65,8 @@ const SAFE_ERROR_MESSAGES: Record<AgentErrorCode, string> = {
   UPSTREAM_TIMEOUT: "业务系统暂时没有响应，请稍后再试。",
   UPSTREAM_BAD_REQUEST: "模型请求参数不兼容，请切换模型后再试。",
   MODEL_NOT_SUPPORTED: "当前模型不支持 Agent 工具调用，请切换模型后再试。",
+  MODEL_OUTPUT_INVALID: "当前模型未能生成可展示的回复，请重试或切换模型。",
+  CONVERSATION_HISTORY_INVALID: "当前对话记录异常，请新建对话后重新发起请求。",
   CLIPBOARD_UNAVAILABLE: "当前环境不允许复制到剪贴板，请手动复制。",
   VALIDATION_FAILED: "请求信息不完整或不合法，请检查后再试。",
   UNKNOWN: "处理请求时发生异常，请稍后再试。",

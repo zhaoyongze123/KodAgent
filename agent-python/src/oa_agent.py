@@ -10,7 +10,12 @@ import os
 from datetime import datetime
 
 from deepagents.backends.utils import create_file_data
-from deepagents import create_deep_agent
+from deepagents import (
+    GeneralPurposeSubagentProfile,
+    HarnessProfile,
+    create_deep_agent,
+    register_harness_profile,
+)
 from langchain_openai import ChatOpenAI
 from .tools.common import (
     AGENT_TIMEZONE,
@@ -61,6 +66,43 @@ from .orchestration.policies import (
 from .orchestration.graph import build_checkpointer
 from .subagents.registry import build_subagents
 from .orchestration.tool_registry import business_tools, main_tools, meeting_workflow_enabled
+
+
+# OA 主图不是代码执行助手。DeepAgents 默认附带的文件系统、待办和通用子 Agent
+# 会把较长的工具说明注入每一轮模型上下文，既不参与业务闭环，也会显著拉长小模型的
+# 工具选路时间。这里仅从“模型可见工具”中移除它们：底层中间件仍保留，确保
+# DeepAgents 的 task 分发基础设施不被破坏；业务领域 task 和全部领域子 Agent 不受影响。
+_OA_HARNESS_EXCLUDED_TOOLS = frozenset({
+    "write_todos", "ls", "read_file", "write_file", "edit_file", "glob", "grep", "execute",
+})
+
+
+def _configure_oa_harness_profile() -> None:
+    """注册 OA 专用的 DeepAgents 运行外壳，缩小无关上下文。
+
+    参数：无。当前主图建图占位模型是 ``ChatOpenAI``，因此使用 ``openai``
+    provider profile；真实模型仍由 ``DynamicModelMiddleware`` 在每个 Run
+    按 Java 配置替换。该 profile 不改写领域提示词、不改变 WorkOrder、不改变
+    工具执行权限，只收缩模型看到的默认控制面。
+    """
+
+    register_harness_profile(
+        "openai",
+        HarnessProfile(
+            excluded_tools=_OA_HARNESS_EXCLUDED_TOOLS,
+            # OA 只允许中央编译后委派明确的领域 Agent；默认 general-purpose
+            # 子 Agent 没有业务契约，保留它只会扩大 task 描述和误委派空间。
+            general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
+            tool_description_overrides={
+                "task": """委派已编译的业务工作单给指定领域 Agent。只能使用中央计划投影签发的 task，不能自行补造 task 参数或改写工作单。\n\n可用领域 Agent：\n{available_agents}""",
+            },
+        ),
+    )
+
+
+# 本模块会在 LangGraph worker 进程启动时只导入一次。提前注册使主图和其声明式
+# 子 Agent 使用同一份精简外壳；不在请求处理期间注册，避免跨 Run 累积配置。
+_configure_oa_harness_profile()
 
 def skill_files() -> dict[str, dict[str, str]]:
     """向 StateBackend 暴露 Skill 文件资源，但不在启动时全量加载到提示词中。"""

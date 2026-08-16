@@ -36,7 +36,7 @@ def describe_error_code(code: str | None) -> ErrorDescriptor:
     normalized = str(code or "UNKNOWN_ERROR").strip().upper() or "UNKNOWN_ERROR"
     if normalized.startswith("MODEL_"):
         kind: ErrorKind = "model"
-        retryable = normalized in {"MODEL_PROVIDER_UNAVAILABLE", "MODEL_TIMEOUT"}
+        retryable = normalized in {"MODEL_PROVIDER_UNAVAILABLE", "MODEL_TIMEOUT", "MODEL_RATE_LIMITED"}
     elif any(token in normalized for token in ("INVALID", "REQUIRED", "MISSING", "NEEDS_INPUT", "UNSUPPORTED")):
         kind: ErrorKind = "validation"
         retryable = False

@@ -21,6 +21,7 @@ _IMAGE = re.compile(r"画一张|生成图片|生成一张图|海报|插画|图�
 _WORKFLOW = re.compile(r"工作流|流程图|架构图|时序图|审批流程|流程设计|mermaid")
 _ACTION = re.compile(
     r"预约|预定|提交|创建|修改|取消|确认|通过|同意|驳回|"
+    r"订(?:会议室|[一二三四五六七八九十\\d]+(?:间|个)?会议室)|"
     r"起草|拟定|生成(?:一份|一个)?(?:待确认)?草稿|"
     r"安排(?:会议|日程|.*(?:参加|出席))|申请(?:请假|出差)|发起(?:审批|申请)"
 )
@@ -138,15 +139,16 @@ def classify_message(message: str, *, task_complexity: TaskComplexity = "simple"
     if not text:
         return _route("chat", complexity="simple", reasoning_effort="off", reason="empty message")
     if _IMAGE.search(text):
-        return _route("image_generation", complexity="complex", reasoning_effort="low", needs_tools=True, show_progress=True, reason="image request")
+        return _route("image_generation", complexity="complex", reasoning_effort="low", requires_structured_route=True, needs_tools=True, show_progress=True, reason="image request")
     if _WORKFLOW.search(text):
-        return _route("workflow", complexity="complex", reasoning_effort="low", needs_tools=True, show_progress=True, reason="workflow or diagram request")
+        return _route("workflow", complexity="complex", reasoning_effort="low", requires_structured_route=True, needs_tools=True, show_progress=True, reason="workflow or diagram request")
     if _FOLLOW_UP.search(text):
         if _FOLLOW_UP_WRITE.search(text):
             return _route(
                 "business_action",
                 complexity="complex",
                 reasoning_effort="low",
+                requires_structured_route=True,
                 needs_tools=True,
                 needs_confirmation=True,
                 show_progress=True,
@@ -168,22 +170,26 @@ def classify_message(message: str, *, task_complexity: TaskComplexity = "simple"
             "business_action",
             complexity="complex",
             reasoning_effort="low",
+            requires_structured_route=True,
             needs_tools=True,
             needs_confirmation=bool(re.search(r"预约|预定|提交|创建|修改|取消|确认|通过|同意|驳回", text)),
             show_progress=True,
             reason="business action",
         )
     if _MULTI_STEP.search(text):
-        return _route("fresh_query", complexity="complex", reasoning_effort="low", needs_tools=True, show_progress=True, reason="multi-step request")
+        return _route("fresh_query", complexity="complex", reasoning_effort="low", requires_structured_route=True, needs_tools=True, show_progress=True, reason="multi-step request")
     if _ENTITY_DISAMBIGUATION.search(text):
-        return _route("fresh_query", complexity="complex", reasoning_effort="low", needs_tools=True, show_progress=True, reason="business entity disambiguation")
+        return _route("fresh_query", complexity="complex", reasoning_effort="low", requires_structured_route=True, needs_tools=True, show_progress=True, reason="business entity disambiguation")
     if _RICH_OUTPUT.search(text):
-        return _route("fresh_query", complexity="complex", reasoning_effort="low", needs_tools=True, show_progress=True, reason="request with synthesis")
+        return _route("fresh_query", complexity="complex", reasoning_effort="low", requires_structured_route=True, needs_tools=True, show_progress=True, reason="request with synthesis")
     if _SMALL_TALK.search(text):
         return _route("chat", complexity="simple", reasoning_effort="off", needs_tools=False, show_progress=False, reason="simple conversation")
     # Domain selection is intentionally deferred to the model's capability
-    # contracts and tool schemas. Unknown wording must not be downgraded to a
-    # no-tools chat route merely because it misses a keyword pattern.
+    # contracts and tool schemas. Unknown wording still receives the planning
+    # palette, but it is not forced into a structured route after the model
+    # has already answered naturally. This preserves context-only requests
+    # such as "详细说下" while the model remains free to call the router for a
+    # genuine business request expressed in unfamiliar wording.
     return _route("fresh_query", complexity=task_complexity,
                   reasoning_effort="low" if task_complexity == "complex" else "off",
                   needs_tools=True, show_progress=task_complexity == "complex",

@@ -23,6 +23,8 @@ SCHEMA_FILES=(
   "${ROOT_DIR}/sql/postgresql/agent_model_config.sql"
   "${ROOT_DIR}/sql/postgresql/party_knowledge.sql"
   "${ROOT_DIR}/sql/postgresql/party_knowledge_vector.sql"
+  "${ROOT_DIR}/sql/postgresql/project_agent.sql"
+  "${ROOT_DIR}/sql/postgresql/agent_artifact.sql"
 )
 
 for schema_file in "${SCHEMA_FILES[@]}"; do

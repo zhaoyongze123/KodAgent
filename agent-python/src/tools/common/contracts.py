@@ -86,6 +86,7 @@ class ToolContract:
 
 TOOL_CONTRACTS = {
     "report_progress": ToolContract("report_progress", "播报用户可见的执行摘要", True, False, False, permission="agent:progress", timeout_seconds=5),
+    "create_document_artifact": ToolContract("create_document_artifact", "按用户要求创建受控 DOCX 或 XLSX 附件", False, True, False, permission="agent:artifact", timeout_seconds=60, retryable=True, max_retries=1, idempotency="artifact"),
     "resolve_agent_model": ToolContract("resolve_agent_model", "解析当前 Run 允许使用的模型配置", True, False, False, permission="model:read", timeout_seconds=10),
     "route_conversation": ToolContract("route_conversation", "校验能力 ID、执行策略和任务复杂度，生成结构化路由决策", True, False, False, permission="agent:conversation", timeout_seconds=3),
     "get_agent_action_catalog": ToolContract("get_agent_action_catalog", "读取 Java 权威 Agent 业务动作契约", True, False, False, permission="agent:contract", timeout_seconds=10, retryable=True, max_retries=1, input_schema="AgentActionCatalog"),
@@ -139,6 +140,15 @@ TOOL_CONTRACTS = {
     "schedule_report": ToolContract("schedule_report", "日程只读报表", True, False, False, permission="schedule:read", timeout_seconds=30, retryable=True, max_retries=1, idempotency="report"),
     "party_file_report": ToolContract("party_file_report", "党务文件只读报表", True, False, False, permission="party-file:read", timeout_seconds=30, retryable=True, max_retries=1, idempotency="report"),
     "approval_report": ToolContract("approval_report", "审批只读报表", True, False, False, permission="approval:read", timeout_seconds=30, retryable=True, max_retries=1, idempotency="report"),
+    # 项目工具统一由 Java Project Provider 复核 KodCloud 成员关系、任务隐私和
+    # 资料权限。报告导出只创建受控临时文件，不改变项目业务事实。
+    "list_accessible_projects": ToolContract("list_accessible_projects", "查询当前用户可参与项目", True, False, False, permission="project:read", timeout_seconds=20, retryable=True, max_retries=1),
+    "analyze_project": ToolContract("analyze_project", "读取 Java 确定性项目统计与风险事实", True, False, False, permission="project:read", timeout_seconds=45, retryable=True, max_retries=1),
+    "get_project_snapshot": ToolContract("get_project_snapshot", "读取项目概览、成员、配置与资料状态", True, False, False, permission="project:read", timeout_seconds=20, retryable=True, max_retries=1),
+    "get_project_tasks": ToolContract("get_project_tasks", "读取当前用户可见的项目任务", True, False, False, permission="project:read", timeout_seconds=30, retryable=True, max_retries=1),
+    "get_project_activity": ToolContract("get_project_activity", "读取项目和任务动态", True, False, False, permission="project:read", timeout_seconds=30, retryable=True, max_retries=1),
+    "get_project_documents": ToolContract("get_project_documents", "读取项目资料目录的元信息与同步状态", True, False, False, permission="project:read", timeout_seconds=30, retryable=True, max_retries=1),
+    "search_project_knowledge": ToolContract("search_project_knowledge", "检索授权项目资料与制度知识库并返回引用", True, False, False, permission="project:read", timeout_seconds=45, retryable=True, max_retries=1),
     "get_manage_party_file": ToolContract("get_manage_party_file", "读取可编辑党务文件", True, False, False, permission="party-file:update", timeout_seconds=10),
     "create_party_file_draft": ToolContract("create_party_file_draft", "生成党务文件发布、修改或删除草稿", False, True, False, permission="party-file:create", timeout_seconds=15, idempotency="request-key"),
     "update_party_file_draft": ToolContract("update_party_file_draft", "生成党务文件更新草稿", False, True, False, permission="party-file:update", timeout_seconds=15, idempotency="request-key"),

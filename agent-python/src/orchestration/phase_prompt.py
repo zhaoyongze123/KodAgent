@@ -191,6 +191,10 @@ def main_agent_phase_instructions(
     value = prompts[phase]
     if phase == "planning":
         value += "\n\n" + CapabilityRegistry().catalog_prompt()
+    if phase == "synthesizing":
+        global_skill = skill_registry.prompt_for_global()
+        if global_skill:
+            value += "\n\n" + global_skill
     if phase in {"planning", "executing"} and route is not None:
         value += _route_skill_prompt(route)
     return value

@@ -67,6 +67,10 @@
                     <artifactId>maven-compiler-plugin</artifactId>
                     <version>${maven-compiler-plugin.version}</version>
                     <configuration>
+                        <!-- Spring MVC 需要运行时参数名来解析未显式命名的
+                             @PathVariable / @RequestParam。统一保留该元数据，
+                             避免本地构建环境差异把接口调用变成 500。 -->
+                        <parameters>true</parameters>
                         <annotationProcessorPaths>
                             <path>
                                 <groupId>org.springframework.boot</groupId>

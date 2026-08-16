@@ -18,7 +18,8 @@ export async function GET(
   const suffix = query.toString() ? `?${query.toString()}` : "";
   let response: Response;
   try {
-    const agentHeaders = await getOaAgentHeaders("agent:audit");
+    // 读取当前用户自己的过程进度，不需要管理员审计权限。
+    const agentHeaders = await getOaAgentHeaders("agent:progress");
     response = await fetch(
       `${baseUrl}/agent/threads/${encodeURIComponent(threadId)}/events${suffix}`,
       {

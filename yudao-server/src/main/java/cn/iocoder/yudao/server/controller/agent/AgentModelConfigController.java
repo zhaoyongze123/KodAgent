@@ -1,6 +1,7 @@
 package cn.iocoder.yudao.server.controller.agent;
 
 import cn.iocoder.yudao.server.service.agent.AgentModelService;
+import cn.iocoder.yudao.framework.apilog.core.annotation.ApiAccessLog;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.web.bind.annotation.*;
@@ -78,6 +79,8 @@ public class AgentModelConfigController {
     public List<Map<String,Object>> availableModels() { return service.listModels(getTenantId(), null); }
 
     /** Java-owned model gateway; provider credentials never leave this service. */
+    // 请求体含提示词、用户输入及工具 Schema，只保留常规接口元数据，禁止写入访问日志。
+    @ApiAccessLog(requestEnable = false, responseEnable = false)
     @PostMapping(value = "/agent/internal/models/{modelId}/chat/completions",
             consumes = "application/json")
     @Operation(summary = "代理模型聊天完成请求")

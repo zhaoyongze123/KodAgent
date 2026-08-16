@@ -470,15 +470,17 @@ public class AgentAnalyticsService {
     }
 
     /**
-     * 返回一个 Run 的安全追踪时间线。所有字段都通过 allowlist 投影，避免把工具参数、
-     * 业务返回体、隐藏思考或确认令牌带到管理员页面。
+     * 返回一个 Run 的安全追踪时间线。所有字段都通过 allowlist 投影；仅具有
+     * agent:analytics:read 权限的调用方可看到该运行首次捕获的用户原始提问，
+     * 不返回工具参数、业务返回体、隐藏思考或确认令牌。
      */
     public Map<String, Object> runTrace(Long tenantId, String runId) {
         if (runId == null || runId.trim().isEmpty() || runId.length() > 128) {
             throw ServiceExceptionUtil.exception0(400, "runId 无效");
         }
         List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                "SELECT run_id, status, started_at, completed_at, duration_ms, error_code, error_message "
+                "SELECT run_id, status, started_at, completed_at, duration_ms, error_code, error_message, "
+                        + "user_prompt, prompt_truncated "
                         + "FROM agent_run WHERE run_id = ? AND tenant_id = ?", runId, String.valueOf(tenantId));
         if (rows.isEmpty()) throw ServiceExceptionUtil.exception0(404, "运行记录不存在");
         Map<String, Object> run = new LinkedHashMap<>(rows.get(0));
@@ -493,6 +495,8 @@ public class AgentAnalyticsService {
         result.put("run", run);
         result.put("events", events);
         result.put("traceId", runId);
+        result.put("prompt", run.remove("user_prompt"));
+        result.put("promptTruncated", Boolean.TRUE.equals(run.remove("prompt_truncated")));
         return result;
     }
 

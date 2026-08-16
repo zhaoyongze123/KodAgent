@@ -31,6 +31,9 @@ import java.util.concurrent.TimeUnit;
 @Service
 public class AgentRunEventService {
 
+    /** 管理员追踪保留用户原话的最大长度；不保存系统提示、模型推理或工具结果。 */
+    private static final int USER_PROMPT_MAX_LENGTH = 8192;
+
     @Resource
     private StringRedisTemplate stringRedisTemplate;
 
@@ -73,6 +76,7 @@ public class AgentRunEventService {
         }
 
         String eventType = required(event, "type");
+        PromptCapture promptCapture = extractPromptCapture(event, eventType);
         if ("narration.upsert".equals(eventType)) {
             validateNarration(event);
         }
@@ -105,7 +109,7 @@ public class AgentRunEventService {
                 canonicalJson, stored.databaseId);
         stored.eventData = canonicalJson;
 
-        upsertRun(userId, tenantId, canonical);
+        upsertRun(userId, tenantId, canonical, promptCapture);
         String streamKey = key(userId, runId);
         jdbcTemplate.update("INSERT INTO agent_run_event_outbox (event_id, stream_key, payload) "
                         + "VALUES (?, ?, CAST(? AS jsonb)) ON CONFLICT (event_id) DO NOTHING",
@@ -325,7 +329,14 @@ public class AgentRunEventService {
                 }, args);
     }
 
-    private void upsertRun(Long userId, Long tenantId, Map<String, Object> event) {
+    /**
+     * 将事件投影为运行终态，并在首次 ``run.created`` 时固定用户原始提问。
+     *
+     * 用户提问不是时间线事件详情：写入前已从 event_data 移除，避免 Redis/outbox
+     * 或普通事件查询意外暴露正文。后续事件始终不能覆盖首次提问。
+     */
+    private void upsertRun(Long userId, Long tenantId, Map<String, Object> event,
+                           PromptCapture promptCapture) {
         String runId = required(event, "runId");
         String threadId = required(event, "threadId");
         String eventType = required(event, "type");
@@ -345,10 +356,13 @@ public class AgentRunEventService {
         String metadata = JsonUtils.toJsonString(metadataMap);
         int affected = jdbcTemplate.update(
                 "INSERT INTO agent_run (run_id, thread_id, message_id, tenant_id, user_id, status, "
-                        + "started_at, completed_at, duration_ms, error_code, error_message, metadata, last_event_cursor) "
-                        + "VALUES (?, ?, ?, ?, ?, ?, CAST(? AS timestamptz), CAST(? AS timestamptz), ?, ?, ?, CAST(? AS jsonb), ?) "
+                        + "started_at, completed_at, duration_ms, error_code, error_message, user_prompt, prompt_truncated, metadata, last_event_cursor) "
+                        + "VALUES (?, ?, ?, ?, ?, ?, CAST(? AS timestamptz), CAST(? AS timestamptz), ?, ?, ?, ?, ?, CAST(? AS jsonb), ?) "
                         + "ON CONFLICT (run_id) DO UPDATE SET thread_id = agent_run.thread_id, "
                         + "message_id = COALESCE(agent_run.message_id, EXCLUDED.message_id), "
+                        + "user_prompt = COALESCE(agent_run.user_prompt, EXCLUDED.user_prompt), "
+                        + "prompt_truncated = CASE WHEN agent_run.user_prompt IS NULL THEN EXCLUDED.prompt_truncated "
+                        + "ELSE agent_run.prompt_truncated END, "
                         + "status = CASE "
                         + "WHEN EXCLUDED.last_event_cursor <= COALESCE(agent_run.last_event_cursor, 0) "
                         + "THEN agent_run.status "
@@ -384,10 +398,52 @@ public class AgentRunEventService {
                         + "AND agent_run.user_id = EXCLUDED.user_id "
                         + "AND agent_run.thread_id = EXCLUDED.thread_id",
                 runId, threadId, messageId, String.valueOf(tenantId), String.valueOf(userId), status,
-                eventTime, completedAt, durationMs, errorCode, errorMessage, metadata, eventCursor);
+                eventTime, completedAt, durationMs, errorCode, errorMessage,
+                promptCapture.prompt, promptCapture.truncated, metadata, eventCursor);
         if (affected == 0) {
             throw ServiceExceptionUtil.exception0(409,
                     "RUN_SCOPE_CONFLICT：运行 ID 已绑定到其他租户、用户或 Thread");
+        }
+    }
+
+    /**
+     * 仅接收主图 ``run.created`` 事件携带的用户原始提问，并从事件 JSON 中删除正文。
+     *
+     * 这样 ``agent_run`` 是唯一的 Prompt 事实源；event_data、Redis outbox 和一般
+     * 事件回放都不会包含用户正文。历史控制台使用的 userMessage 字段也兼容读取。
+     */
+    @SuppressWarnings("unchecked")
+    private PromptCapture extractPromptCapture(Map<String, Object> event, String eventType) {
+        if (!"run.created".equals(eventType) || !(event.get("data") instanceof Map)) {
+            return PromptCapture.empty();
+        }
+        Map<String, Object> data = new LinkedHashMap<>((Map<String, Object>) event.get("data"));
+        event.put("data", data);
+        Object rawPrompt = data.remove("userPrompt");
+        if (rawPrompt == null) rawPrompt = data.remove("userMessage");
+        Object rawTruncated = data.remove("promptTruncated");
+        if (rawPrompt == null) return PromptCapture.empty();
+        String prompt = String.valueOf(rawPrompt).trim();
+        if (prompt.isEmpty()) return PromptCapture.empty();
+        boolean truncated = Boolean.TRUE.equals(rawTruncated) || prompt.length() > USER_PROMPT_MAX_LENGTH;
+        if (prompt.length() > USER_PROMPT_MAX_LENGTH) {
+            prompt = prompt.substring(0, USER_PROMPT_MAX_LENGTH);
+        }
+        return new PromptCapture(prompt, truncated);
+    }
+
+    /** 用户原始提问的受限投影，避免把 Event 数据对象传递到运行表投影层。 */
+    private static final class PromptCapture {
+        private final String prompt;
+        private final boolean truncated;
+
+        private PromptCapture(String prompt, boolean truncated) {
+            this.prompt = prompt;
+            this.truncated = truncated;
+        }
+
+        private static PromptCapture empty() {
+            return new PromptCapture(null, false);
         }
     }
 

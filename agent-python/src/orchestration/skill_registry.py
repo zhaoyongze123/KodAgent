@@ -86,8 +86,29 @@ class SkillRegistry:
         return tuple(
             item
             for item in self.specs()
-            if value in {part.strip() for part in item.capability_id.split(",") if part.strip()}
+            if "*" in {part.strip() for part in item.capability_id.split(",") if part.strip()}
+            or value in {part.strip() for part in item.capability_id.split(",") if part.strip()}
         )
+
+    def global_specs(self) -> tuple[SkillSpec, ...]:
+        return tuple(
+            item for item in self.specs()
+            if "*" in {part.strip() for part in item.capability_id.split(",") if part.strip()}
+        )
+
+    def prompt_for_global(self) -> str:
+        parts: list[str] = []
+        for spec in self.global_specs():
+            try:
+                text = _FRONT_MATTER.sub("", spec.path.read_text(encoding="utf-8"), count=1).strip()
+            except OSError:
+                continue
+            if text:
+                parts.append(
+                    f"全局 Skill：{spec.skill_id}（版本 {spec.version}）。"
+                    "Skill 只提供交付语义，不能替代工具权限或业务事实。\n" + text
+                )
+        return "\n\n".join(parts)
 
     def select(self, capability_id: str | None, action_id: str | None = None) -> SkillSpec | None:
         candidates = self.for_capability(capability_id)

@@ -9,7 +9,6 @@ from langchain_core.messages import AIMessage, ToolMessage
 
 from ..services.personal_schedule_approval import (
     approval_status,
-    consume_rejected_personal_schedule_resume,
     load_personal_schedule_confirmation,
 )
 from ..tools.common import tool_failure
@@ -47,17 +46,6 @@ class PersonalScheduleApprovalResumeMiddleware(AgentMiddleware):
                 )
                 return context if context is not None and approval_status(context) == "REJECTED" else None
         return None
-
-    def after_model(self, state, runtime):
-        context = self._rejected_context(state)
-        if context is None or not consume_rejected_personal_schedule_resume(context):
-            return None
-        latest = ((state or {}).get("messages") or [])[-1]
-        title = str(context.draft.get("title") or "个人日程")
-        return {"messages": [AIMessage(id=latest.id, name=getattr(latest, "name", None), content=f"已取消“{title}”的日程草稿，未提交任何变更。", response_metadata={**(getattr(latest, "response_metadata", None) or {}), "approvalStatus": "REJECTED", "draftStatus": "CANCELLED", "deterministicTerminal": True})]}
-
-    async def aafter_model(self, state, runtime):
-        return self.after_model(state, runtime)
 
     def wrap_tool_call(self, request, handler):
         call = request.tool_call or {}

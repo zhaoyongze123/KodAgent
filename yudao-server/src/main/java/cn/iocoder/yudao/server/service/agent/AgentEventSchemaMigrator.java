@@ -27,6 +27,8 @@ public final class AgentEventSchemaMigrator {
     static final String APPROVAL_OPERATION_BINDING_V1 = "agent_approval_operation_binding_v1";
     static final String MODEL_CONFIG_V1 = "agent_model_config_v1";
     static final String PARTY_KNOWLEDGE_V1 = "agent_party_knowledge_v1";
+    static final String PROJECT_PROVIDER_V1 = "agent_project_provider_v1";
+    static final String DOCUMENT_ARTIFACT_V1 = "agent_generated_artifact_v1";
     private static final String DURABLE_CURSOR_V1 = "agent_run_event_durable_cursor_v1";
 
     private final JdbcTemplate jdbcTemplate;
@@ -96,6 +98,20 @@ public final class AgentEventSchemaMigrator {
         requireColumn("knowledge_fact", "fact_key");
         requireColumn("knowledge_fact", "required_material");
         requireColumn("knowledge_ingest_job", "requested_by_user_id");
+
+        // 项目插件只读 Provider 的持久化状态。项目/任务/文件本身仍位于 KodCloud，
+        // 这里只保存用户绑定、索引副本、受控导出和审计，不得替代业务事实源。
+        requireColumn("agent_kod_user_binding", "kod_user_id");
+        requireColumn("agent_policy_library_binding", "kod_folder_id");
+        requireColumn("agent_policy_library_binding", "kod_service_user_id");
+        requireColumn("agent_project_report", "analysis_data");
+        requireColumn("agent_project_report", "expires_at");
+        requireColumn("agent_knowledge_source", "source_type");
+        requireColumn("agent_knowledge_source", "extraction_status");
+        requireColumn("agent_project_document_sync", "status");
+        requireColumn("agent_project_analysis_audit", "statistics_rule_version");
+        requireColumn("agent_generated_artifact", "content_data");
+        requireColumn("agent_generated_artifact", "expires_at");
     }
 
     private void requireColumn(String tableName, String columnName) {
@@ -114,6 +130,6 @@ public final class AgentEventSchemaMigrator {
                 MEETING_BOOKING_CONTRACT_V1, PERSONAL_SCHEDULE_CONTRACT_V1,
                 PARTY_FILE_CONTRACT_V1, PARTY_FILE_OPERATION_BINDING_V1,
                 APPROVAL_OPERATION_BINDING_V1,
-                MODEL_CONFIG_V1, PARTY_KNOWLEDGE_V1));
+                MODEL_CONFIG_V1, PARTY_KNOWLEDGE_V1, PROJECT_PROVIDER_V1, DOCUMENT_ARTIFACT_V1));
     }
 }

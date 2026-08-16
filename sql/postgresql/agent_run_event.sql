@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS agent_run (
     duration_ms BIGINT,
     error_code VARCHAR(128),
     error_message VARCHAR(1000),
+    user_prompt TEXT,
+    prompt_truncated BOOLEAN NOT NULL DEFAULT FALSE,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     last_event_cursor BIGINT NOT NULL DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -22,6 +24,8 @@ CREATE TABLE IF NOT EXISTS agent_run (
 );
 
 ALTER TABLE agent_run ADD COLUMN IF NOT EXISTS last_event_cursor BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE agent_run ADD COLUMN IF NOT EXISTS user_prompt TEXT;
+ALTER TABLE agent_run ADD COLUMN IF NOT EXISTS prompt_truncated BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE INDEX IF NOT EXISTS idx_agent_run_thread_scope_time
     ON agent_run (tenant_id, user_id, thread_id, started_at, run_id);
@@ -405,6 +409,8 @@ COMMENT ON COLUMN agent_run.completed_at IS '运行结束时间';
 COMMENT ON COLUMN agent_run.duration_ms IS '运行总耗时，毫秒';
 COMMENT ON COLUMN agent_run.error_code IS '运行失败错误码';
 COMMENT ON COLUMN agent_run.error_message IS '运行失败摘要，禁止写入密钥';
+COMMENT ON COLUMN agent_run.user_prompt IS '触发本次运行的用户原始提问，仅供具有 Agent 审计权限的管理员查看';
+COMMENT ON COLUMN agent_run.prompt_truncated IS '用户原始提问是否因审计长度上限被截断';
 COMMENT ON COLUMN agent_run.metadata IS '运行元数据，不保存敏感凭据';
 COMMENT ON COLUMN agent_run.last_event_cursor IS '最近一次成功落库并应用到运行状态的 durable event cursor，保证状态单调推进';
 

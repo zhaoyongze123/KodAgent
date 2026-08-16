@@ -10,6 +10,9 @@ services:
     environment:
       LANGGRAPH_SERVER_HOST: 0.0.0.0
       PORT: 8000
+      # 本地源码通过 volume 挂载；显式开启 LangGraph 开发重载，避免 Python
+      # 已加载的 Graph/Middleware 与工作区源码版本脱节。生产部署不使用此文件。
+      LANGSMITH_LANGGRAPH_DESKTOP: "true"
       LANGSERVE_GRAPHS: '{"oa_agent":"/deps/agent-python/src/langgraph_app.py:graph"}'
       LANGGRAPH_RUNTIME_EDITION: postgres
       # 该镜像直接启动 Uvicorn，不经过 langgraph CLI；必须显式传入自定义认证配置。

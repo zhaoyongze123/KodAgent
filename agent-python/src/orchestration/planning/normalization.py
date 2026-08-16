@@ -186,6 +186,18 @@ def _schema_normalize(action: Any, values: dict[str, Any]) -> None:
             continue
         value = values[name]
         kind = str(field.field_type).strip().lower()
+        # KodCloud/Java 的项目主键是数值，项目领域对外传输契约则统一使用
+        # 字符串。项目列表后的受控自动转接会携带同一份 Java 返回值，因此在
+        # 编译边界无损地标准化整数，避免把可信定位线索误判为类型非法。
+        # 不对其他 string 字段做泛化强转，防止隐藏模型给错业务字段的错误。
+        if (
+            str(getattr(action, "action_id", "")).startswith("project.")
+            and name == "project_id"
+            and isinstance(value, int)
+            and not isinstance(value, bool)
+        ):
+            values[name] = str(value)
+            value = values[name]
         if kind == "datetime" and isinstance(value, str):
             normalized = _normalize_datetime_text(value)
             if normalized is not None:

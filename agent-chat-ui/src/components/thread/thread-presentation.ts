@@ -1,6 +1,11 @@
 import { useCallback, useMemo } from "react";
 import { Message } from "@langchain/langgraph-sdk";
-import { isRenderableAssistantMessage } from "./messages/ai";
+import {
+  isCommittedFinalAssistantMessage,
+  isInternalAssistantMessage,
+  isRenderableAssistantMessage,
+} from "./messages/ai";
+import { rawAssistantMessagePresentation } from "../../lib/assistant-message-presentation.ts";
 import { DO_NOT_RENDER_ID_PREFIX } from "@/lib/ensure-tool-responses";
 import { getContentString } from "./utils";
 import { resultEnvelopeFromToolResult } from "@/types/agent-block";
@@ -8,19 +13,17 @@ import {
   buildProcessRunTurnMap,
   reduceProcessEvents,
   type ProcessEvent,
+  type PersistedRunFailure,
+  type ProcessRun,
 } from "./process-events";
 
-export type ProcessRun = {
-  runId: string;
-  messageId?: string;
-  events: ProcessEvent[];
-  elapsedSeconds: number;
-};
+export type { ProcessRun } from "./process-events";
 
 export type ProcessPresentation = {
   events: ProcessEvent[];
   isRunning: boolean;
   elapsedSeconds: number;
+  failure?: PersistedRunFailure;
 };
 
 type Options = {
@@ -46,18 +49,29 @@ export function useThreadPresentation({
   processStartedAt,
 }: Options) {
   const visibleMessages = useMemo(() => {
-    const internalMessages = messages.filter(
+    const firstV2Presentation = messages.findIndex(
       (message) =>
+        rawAssistantMessagePresentation(message)?.schemaVersion === 2,
+    );
+
+    return messages.filter((message, index) => {
+      if (
+        message.id?.startsWith(DO_NOT_RENDER_ID_PREFIX) ||
+        isInternalAssistantMessage(message)
+      ) {
+        return false;
+      }
+      if (isRenderableAssistantMessage(message)) return true;
+
+      // Threads written before this contract contain no presentation marker.
+      // Keep that transcript readable, but only before the first v2 message.
+      // New malformed messages after v2 still fail closed.
+      return (
         message.type === "ai" &&
-        "tool_calls" in message &&
-        !!message.tool_calls?.length,
-    );
-    return messages.filter(
-      (message) =>
-        !message.id?.startsWith(DO_NOT_RENDER_ID_PREFIX) &&
-        !internalMessages.includes(message) &&
-        isRenderableAssistantMessage(message),
-    );
+        (firstV2Presentation < 0 || index < firstV2Presentation) &&
+        getContentString(message.content).trim().length > 0
+      );
+    });
   }, [messages]);
 
   const humanMessageIndexes = useMemo(
@@ -78,13 +92,10 @@ export function useThreadPresentation({
   const currentTurnIndex = humanMessageIndexes.length - 1;
   const currentTurnStart =
     currentTurnIndex >= 0 ? humanMessageIndexes[currentTurnIndex] : -1;
-  const currentTurnHasAssistant = useMemo(
+  const currentTurnHasCommittedFinal = useMemo(
     () =>
       visibleMessages.some((message) => {
-        if (
-          message.type !== "ai" ||
-          getContentString(message.content).length === 0
-        ) {
+        if (!isCommittedFinalAssistantMessage(message)) {
           return false;
         }
         const messageIndex = message.id
@@ -176,6 +187,7 @@ export function useThreadPresentation({
         (total, run) => total + run.elapsedSeconds,
         0,
       );
+      const failure = persistedRunsForTurn.findLast((run) => run.failure)?.failure;
       const customEventsForCurrentTurn =
         turnIndex === currentTurnIndex
           ? customProcessEvents.filter(
@@ -188,21 +200,16 @@ export function useThreadPresentation({
         ...persistedEventsForTurn,
         ...customEventsForCurrentTurn,
       ]);
+      // 当前回合在流结束后仍保留实时事件，等待 Java 持久化回放追上来。
+      // 两者会经过同一个 entryId/revision 归并器，因此不会重复，也不会因为
+      // 持久化存在几百毫秒延迟而让模型摘要从页面上消失。
       const events =
-        turnIndex === currentTurnIndex &&
-        (isLoading || persistedRunsForTurn.length === 0)
-          ? eventsForCurrentTurn.length > 0
-            ? eventsForCurrentTurn
-            : [
-                {
-                  id: `pending-${humanMessageId ?? "current"}`,
-                  type: "message" as const,
-                  text: "正在连接 Agent…",
-                  source: "custom" as const,
-                },
-              ]
+        turnIndex === currentTurnIndex
+          ? eventsForCurrentTurn
           : reduceProcessEvents(persistedEventsForTurn);
-      if (!events.length) return null;
+      // ProcessRun 是运行头部的事实源，events 只决定是否展示展开后的摘要和工具。
+      // 因此一个纯正文回复在持久化后仍保留玻璃球和耗时，而不是随正文出现而消失。
+      if (!events.length && persistedRunsForTurn.length === 0) return null;
       return {
         events,
         isRunning: isLoading && turnIndex === humanMessageIndexes.length - 1,
@@ -211,6 +218,7 @@ export function useThreadPresentation({
           processStartedAt !== null
             ? processElapsedSeconds
             : persistedElapsedSeconds,
+        ...(failure ? { failure } : {}),
       };
     },
     [
@@ -231,7 +239,7 @@ export function useThreadPresentation({
   return {
     visibleMessages,
     currentTurnStart,
-    currentTurnHasAssistant,
+    currentTurnHasCommittedFinal,
     currentInterrupt,
     primaryResultMessageBySourceId,
     processForTurn,

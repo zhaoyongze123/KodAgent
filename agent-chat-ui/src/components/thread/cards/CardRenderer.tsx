@@ -10,6 +10,7 @@ import { PartyFileKnowledgeCard } from "./PartyFileKnowledgeCard";
 import { PartyFileCompareCard } from "./PartyFileCompareCard";
 import { PartyFileComplianceCard } from "./PartyFileComplianceCard";
 import { BusinessReportCard } from "./BusinessReportCard";
+import { ProjectCard } from "./ProjectCard";
 import type { AgentCard } from "@/types/agent-block";
 
 export function CardRenderer({
@@ -51,6 +52,15 @@ export function CardRenderer({
       return <PartyFileComplianceCard payload={card.payload} />;
     case "business_report":
       return <BusinessReportCard payload={card.payload} />;
+    case "project_list":
+    case "project_snapshot":
+    case "project_analysis":
+    case "project_tasks":
+    case "project_activity":
+    case "project_documents":
+    case "project_knowledge":
+    case "project_report":
+      return <ProjectCard kind={card.type} payload={card.payload} />;
     default:
       return null;
   }

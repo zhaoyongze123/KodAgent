@@ -25,6 +25,21 @@ export type ProcessEvent = {
   category?: "plan" | "progress" | "result" | "warning" | "confirmation";
 };
 
+/** 一次后端 Run 归并后的用户回合过程记录。 */
+export type ProcessRun = {
+  runId: string;
+  messageId?: string;
+  events: ProcessEvent[];
+  elapsedSeconds: number;
+  /** Durable terminal failure from the backend, never inferred from text. */
+  failure?: PersistedRunFailure;
+};
+
+export type PersistedRunFailure = {
+  code: string;
+  message: string;
+};
+
 export type ProcessEntryIdentity = string;
 
 /**
@@ -378,13 +393,7 @@ export function collectCustomProcessEvents(
     // is already durable, so no namespace/tool-call inference is reintroduced.
     if (
       eventType === "plan.created" ||
-      eventType === "progress" ||
-      eventType === "workflow.started" ||
-      eventType === "workflow.node.started" ||
-      eventType === "workflow.node.completed" ||
-      eventType === "workflow.blocked" ||
-      eventType === "workflow.failed" ||
-      eventType === "workflow.completed"
+      eventType === "progress"
     ) {
       if (!eventText) return [];
       const legacyEntryId = `legacy:${String(event.eventId ?? `custom-${index}`)}`;

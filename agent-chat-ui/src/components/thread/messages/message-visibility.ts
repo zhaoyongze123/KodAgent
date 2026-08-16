@@ -1,4 +1,9 @@
 import type { Message } from "@langchain/langgraph-sdk";
+import {
+  isCardAssistantPresentation,
+  isFinalAssistantPresentation,
+  isInternalAssistantPresentation,
+} from "../../../lib/assistant-message-presentation.ts";
 import { getContentString } from "../utils.ts";
 import { normalizeProcessText } from "../process-events.ts";
 
@@ -11,6 +16,7 @@ const PROCESS_ONLY_TOOL_NAMES = new Set([
   "report_progress",
   "task",
   "route_conversation",
+  "create_document_artifact",
 ]);
 
 /**
@@ -43,6 +49,26 @@ function hasAnthropicToolUse(message: Message): boolean {
   );
 }
 
+/** Tool-call AIMessage is an execution protocol carrier, never a chat row. */
+export function isInternalAssistantMessage(message: Message): boolean {
+  return (
+    message.type === "ai" &&
+    (isInternalAssistantPresentation(message) ||
+      hasToolCalls(message) ||
+      hasAnthropicToolUse(message))
+  );
+}
+
+/** Only a v2 final message may complete the current live user turn. */
+export function isCommittedFinalAssistantMessage(message: Message): boolean {
+  return (
+    message.type === "ai" &&
+    isFinalAssistantPresentation(message) &&
+    !isInternalAssistantMessage(message) &&
+    normalizeProcessText(getContentString(message.content)).length > 0
+  );
+}
+
 export function isProcessOnlyToolMessage(message: Message): boolean {
   return message.type === "tool" && isProcessOnlyToolName(message.name);
 }
@@ -65,11 +91,14 @@ export function isRenderableAssistantMessage(
   }
 
   if (message.type === "ai") {
-    return (
-      normalizeProcessText(getContentString(message.content)).length > 0 ||
-      hasToolCalls(message) ||
-      hasAnthropicToolUse(message)
-    );
+    if (isInternalAssistantMessage(message)) return false;
+    if (isCardAssistantPresentation(message)) return true;
+    if (isCommittedFinalAssistantMessage(message)) return true;
+
+    // 普通正文必须显式标记为 v2 final。无标记的 AIMessage 可能是旧路由、
+    // 中间模型回合或被覆盖前的控制输出，不能因“文本非空”重新泄漏到正文。
+    // 历史卡片已在上方通过 v1/v2 card 单独兼容。
+    return false;
   }
 
   // AssistantMessage is normally called for AI/Tool messages, but retaining

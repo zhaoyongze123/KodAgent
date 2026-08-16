@@ -23,6 +23,7 @@ from ..workflows.meeting_booking.contracts import MeetingBookingWorkflowOutcome
 DELEGATED_EXECUTION_RECEIPT_SCHEMA_VERSION = 1
 EXECUTION_RECEIPT_KIND = "execution_result"
 DRAFT_RECEIPT_KIND = "draft_ready"
+PROJECT_INVESTIGATION_RECEIPT_KIND = "project_investigation"
 # 会议回执已对接根图与历史 checkpoint，保留它既有的 kind，避免本次扩展
 # 日程/党务/审批回执时破坏已上线的会议确认链路。
 MEETING_DRAFT_RECEIPT_KIND = EXECUTION_RECEIPT_KIND
@@ -135,6 +136,213 @@ class DelegatedExecutionReceipt(BaseModel):
     facts: dict[str, Any] | None = None
     error_code: str | None = Field(default=None, alias="errorCode")
     retryable: bool = False
+
+
+class ProjectInvestigationToolTrace(BaseModel):
+    """一次项目调查中由真实 ToolResponse 产生的工具轨迹。"""
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True, extra="forbid")
+
+    tool: str
+    status: Literal["SUCCEEDED", "FAILED"]
+    error_code: str | None = Field(default=None, alias="errorCode")
+
+
+class DelegatedProjectInvestigationReceipt(BaseModel):
+    """项目子 Agent 的多工具调查回执。
+
+    该回执由中间件从所有真实项目工具响应汇总，模型自由文本不能创建或补写
+    ``facts``、``citations`` 和 ``exports``。项目子 Agent 的自由文本不再作为
+    跨 Agent 协议的一部分：主图只消费这些结构化事实，避免将内部工作笔记、协议
+    字段或未经核验的推断直接呈现在用户界面。它与普通单 executor 回执分开，避免
+    将一次 helper 查询误判为整个项目调查的唯一事实。
+    """
+
+    model_config = ConfigDict(frozen=True, populate_by_name=True, extra="forbid")
+
+    schema_version: Literal[DELEGATED_EXECUTION_RECEIPT_SCHEMA_VERSION] = Field(
+        default=DELEGATED_EXECUTION_RECEIPT_SCHEMA_VERSION, alias="schemaVersion"
+    )
+    kind: Literal[PROJECT_INVESTIGATION_RECEIPT_KIND] = PROJECT_INVESTIGATION_RECEIPT_KIND
+    plan_id: str = Field(alias="planId", min_length=1)
+    domain: Literal["project"] = "project"
+    project_id: str = Field(alias="projectId", min_length=1)
+    status: Literal["SUCCEEDED", "FAILED"]
+    tool_trace: tuple[ProjectInvestigationToolTrace, ...] = Field(alias="toolTrace", min_length=1)
+    facts: dict[str, tuple[Any, ...]] = Field(default_factory=dict)
+    presentations: dict[str, tuple[dict[str, Any], ...]] = Field(default_factory=dict)
+    citations: tuple[dict[str, Any], ...] = ()
+    # 仅用于读取历史 checkpoint。新项目调查不再在子 Agent 阶段导出文件；文件
+    # 只能由主 Agent 最终正文的交付步骤创建。
+    exports: tuple[dict[str, Any], ...] = ()
+    data_gaps: tuple[str, ...] = Field(default=(), alias="dataGaps")
+    snapshot_at: str | None = Field(default=None, alias="snapshotAt")
+    # 兼容已持久化的旧回执。新回执不会写入，主图也不会读取或转交它。
+    narrative: str | None = Field(default=None, max_length=1800)
+
+
+_PROJECT_INVESTIGATION_TOOLS = frozenset({
+    "analyze_project", "get_project_snapshot", "get_project_tasks",
+    "get_project_activity", "get_project_documents", "search_project_knowledge",
+})
+
+
+def _compact_project_task(value: Any) -> Any:
+    """把任务原始行投影为主 Agent 汇总真正需要的字段。
+
+    参数：
+        value：Java Project Provider 返回的一条任务记录。
+
+    返回：保留任务编号、名称、负责人、完成/优先级/截止时间和最近修改时间的
+    小对象。原始描述、创建修改人详情、参与人列表等仍保留在项目子 Agent 的
+    工具 checkpoint 中，不应跨 Agent 重复注入模型上下文。
+    """
+    if not isinstance(value, dict):
+        return value
+    meta = value.get("metaInfo") if isinstance(value.get("metaInfo"), dict) else {}
+    owner = value.get("ownerUserInfo") if isinstance(value.get("ownerUserInfo"), dict) else {}
+    return {
+        "taskID": value.get("taskID"),
+        "name": value.get("name"),
+        "ownerUser": value.get("ownerUser"),
+        "ownerName": owner.get("nickName") or owner.get("name"),
+        "status": value.get("status"),
+        "taskCheck": meta.get("taskCheck"),
+        "taskLevel": meta.get("taskLevel"),
+        "timeTo": meta.get("timeTo"),
+        "modifyTime": value.get("modifyTime"),
+    }
+
+
+def _compact_project_activity(value: Any) -> Any:
+    """投影项目动态，防止完整历史日志占满最终总结上下文。"""
+    if not isinstance(value, dict):
+        return value
+    return {
+        "id": value.get("id"),
+        "taskID": value.get("taskID"),
+        "userID": value.get("userID"),
+        "logType": value.get("logType"),
+        "createdAt": value.get("createdAt"),
+        "description": value.get("description"),
+    }
+
+
+def _compact_project_document(value: Any) -> Any:
+    """投影资料元信息，不向父 Agent 传递无关存储字段。"""
+    if not isinstance(value, dict):
+        return value
+    return {
+        "fileID": value.get("fileID"),
+        "name": value.get("name"),
+        "mimeType": value.get("mimeType"),
+        "modifiedAt": value.get("modifiedAt"),
+        "version": value.get("version"),
+        "supported": value.get("supported"),
+    }
+
+
+def _compact_project_analysis(value: Any) -> Any:
+    """生成项目分析的跨 Agent 事实投影。
+
+    ``analyze_project`` 原始响应包含完整任务树和全部活动日志，适合项目子 Agent
+    在同一 ReAct 回合继续调查，却不适合主 Agent 最终排版。这里保留统计、风险、
+    成员和可追溯的轻量任务/动态/资料字段，使最终回复仍有事实依据，且不因大段
+    重复 JSON 增加模型生成等待。
+    """
+    if not isinstance(value, dict):
+        return value
+    result = dict(value)
+    if isinstance(value.get("tasks"), list):
+        result["tasks"] = [_compact_project_task(item) for item in value["tasks"]]
+    if isinstance(value.get("activity"), list):
+        # 当前页面只需说明近期活跃依据；完整日志由项目动态卡片按需加载。
+        result["activity"] = [_compact_project_activity(item) for item in value["activity"][:12]]
+    if isinstance(value.get("documents"), list):
+        result["documents"] = [_compact_project_document(item) for item in value["documents"]]
+    return result
+
+
+def _project_parent_fact(tool_name: str, value: Any) -> Any:
+    """按工具类型生成可跨 Agent 传递的只读事实投影。"""
+    if tool_name == "analyze_project":
+        return _compact_project_analysis(value)
+    if tool_name == "get_project_tasks" and isinstance(value, dict):
+        result = dict(value)
+        for key in ("items", "tasks", "records"):
+            if isinstance(value.get(key), list):
+                result[key] = [_compact_project_task(item) for item in value[key]]
+        return result
+    if tool_name == "get_project_activity" and isinstance(value, dict):
+        result = dict(value)
+        for key in ("items", "activity", "records"):
+            if isinstance(value.get(key), list):
+                result[key] = [_compact_project_activity(item) for item in value[key][:12]]
+        return result
+    if tool_name == "get_project_documents" and isinstance(value, dict):
+        result = dict(value)
+        for key in ("items", "documents", "records"):
+            if isinstance(value.get(key), list):
+                result[key] = [_compact_project_document(item) for item in value[key]]
+        return result
+    return value
+
+
+def project_investigation_receipt_from_tool_messages(
+    messages: list[Any], *, plan_id: str, project_id: str,
+) -> DelegatedProjectInvestigationReceipt | None:
+    """从一次子 Agent 调查的全部项目工具结果构造强类型回执。
+
+    子 Agent 的最终自由文本不会进入跨 Agent 回执。事实、权限、引用和导出文件
+    都只从真实 ToolResponse 构造；主图需要生成资料语义结论时，会以这个回执的
+    受控事实投影作为唯一输入。
+    """
+    trace: list[ProjectInvestigationToolTrace] = []
+    facts: dict[str, list[Any]] = {}
+    presentations: dict[str, list[dict[str, Any]]] = {}
+    citations: list[dict[str, Any]] = []
+    exports: list[dict[str, Any]] = []
+    data_gaps: list[str] = []
+    snapshot_at: str | None = None
+    for message in messages:
+        name = str(getattr(message, "name", "") or "")
+        if name not in _PROJECT_INVESTIGATION_TOOLS:
+            continue
+        try:
+            result = ToolResponse.model_validate_json(str(getattr(message, "content", "") or ""))
+        except (TypeError, ValueError):
+            continue
+        if result.ok:
+            trace.append(ProjectInvestigationToolTrace(tool=name, status="SUCCEEDED"))
+            # 父图只接收完成总结所需的投影；子 Agent 原始工具结果仍存在于
+            # 自己的 checkpoint，便于审计和后续工具调用，不会被这一步丢弃。
+            facts.setdefault(name, []).append(_project_parent_fact(name, result.data))
+            if isinstance(result.presentation, dict):
+                presentations.setdefault(name, []).append(result.presentation)
+            if name == "search_project_knowledge" and isinstance(result.data, dict):
+                citations.extend(item for item in result.data.get("hits") or [] if isinstance(item, dict))
+            if name == "analyze_project" and isinstance(result.data, dict):
+                kpis = result.data.get("kpis") if isinstance(result.data.get("kpis"), dict) else {}
+                snapshot_at = str(result.data.get("asOf") or kpis.get("asOf") or "").strip() or snapshot_at
+        else:
+            error = result.error
+            code = str(error.code) if error is not None else "PROJECT_TOOL_FAILED"
+            trace.append(ProjectInvestigationToolTrace(tool=name, status="FAILED", errorCode=code))
+            data_gaps.append(str(error.message) if error is not None else f"{name} 未返回可用结果。")
+    if not trace:
+        return None
+    return DelegatedProjectInvestigationReceipt(
+        planId=plan_id,
+        projectId=str(project_id),
+        status="SUCCEEDED" if facts else "FAILED",
+        toolTrace=tuple(trace),
+        facts={name: tuple(values) for name, values in facts.items()},
+        presentations={name: tuple(values) for name, values in presentations.items()},
+        citations=tuple(citations),
+        exports=tuple(exports),
+        dataGaps=tuple(data_gaps),
+        snapshotAt=snapshot_at,
+    )
 
 
 def execution_receipt_from_tool_response(
@@ -324,18 +532,163 @@ def parse_execution_receipt(content: Any) -> DelegatedExecutionReceipt | None:
         return None
 
 
+def parse_project_investigation_receipt(content: Any) -> DelegatedProjectInvestigationReceipt | None:
+    """解析项目调查专用回执；普通子 Agent 文本一律不视为调查结果。"""
+    if isinstance(content, str):
+        try:
+            content = json.loads(content)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+    try:
+        return DelegatedProjectInvestigationReceipt.model_validate(content)
+    except (ValidationError, TypeError, ValueError):
+        return None
+
+
+def _short_text(value: Any, *, maximum: int) -> str:
+    """将跨 Agent 证据压缩为有限长度的可见文本。"""
+
+    text = str(value or "").strip()
+    return text[:maximum]
+
+
+def _project_analysis_model_facts(receipt: DelegatedProjectInvestigationReceipt) -> dict[str, Any]:
+    """生成项目调查回执的主 Agent 可见事实投影。
+
+    项目子 Agent 需要完整任务树、动态和资料元数据执行受控 ReAct；主 Agent 的
+    职责只是根据已核验事实写面向用户的总结。两者的上下文需求不同，若把原始
+    ``task`` 回执再次传给主模型，会同时造成延迟上升、来源 ID 泄露和“主 Agent
+    重新计算 KPI”的风险。因此该投影是跨图通信的第二层契约：只保留最终说明
+    所需的有限事实，不改变 checkpoint 中的原始回执。
+    """
+
+    analyses = receipt.facts.get("analyze_project") or ()
+    analysis = analyses[-1] if analyses and isinstance(analyses[-1], dict) else {}
+    project = analysis.get("project") if isinstance(analysis.get("project"), dict) else {}
+    kpis = analysis.get("kpis") if isinstance(analysis.get("kpis"), dict) else {}
+    risks = analysis.get("risks") if isinstance(analysis.get("risks"), list) else []
+    members = analysis.get("members") if isinstance(analysis.get("members"), list) else []
+    documents = analysis.get("documents") if isinstance(analysis.get("documents"), list) else []
+
+    risk_facts = [
+        {
+            "severity": _short_text(item.get("severity"), maximum=24),
+            "type": _short_text(item.get("type"), maximum=40),
+            "taskName": _short_text(item.get("taskName"), maximum=120),
+            "message": _short_text(item.get("message"), maximum=240),
+        }
+        for item in risks[:4]
+        if isinstance(item, dict)
+    ]
+    member_facts = [
+        {
+            "name": _short_text(item.get("name"), maximum=80),
+            "assigned": item.get("assigned"),
+            "completed": item.get("completed"),
+            "overdue": item.get("overdue"),
+        }
+        for item in members[:16]
+        if isinstance(item, dict)
+    ]
+    document_facts = [
+        {
+            "name": _short_text(item.get("name"), maximum=160),
+            "documentType": _short_text(item.get("documentType") or item.get("mimeType"), maximum=80),
+            "supported": item.get("supported"),
+        }
+        for item in documents[:12]
+        if isinstance(item, dict)
+    ]
+    citation_facts = [
+        {
+            "sourceType": _short_text(item.get("sourceType"), maximum=40),
+            "name": _short_text(item.get("name"), maximum=160),
+            "section": _short_text(item.get("section"), maximum=120),
+            "content": _short_text(item.get("content"), maximum=480),
+        }
+        for item in receipt.citations[:5]
+        if isinstance(item, dict)
+    ]
+    export_facts = [
+        {
+            "format": _short_text(item.get("format"), maximum=12).lower(),
+            "filename": _short_text(item.get("filename"), maximum=200),
+        }
+        for item in receipt.exports
+        if isinstance(item, dict)
+    ]
+    return {
+        "schemaVersion": receipt.schema_version,
+        "kind": receipt.kind,
+        "domain": receipt.domain,
+        "status": receipt.status,
+        "toolTrace": [
+            {
+                "tool": item.tool,
+                "status": item.status,
+                "errorCode": item.error_code,
+            }
+            for item in receipt.tool_trace
+        ],
+        "facts": {
+            "project": {"name": _short_text(project.get("name"), maximum=160)},
+            # KPI 只能由 Java Project Provider 计算；主模型只可引用，不能按
+            # 任务明细或自然语言自行重算。
+            "kpis": {
+                key: kpis.get(key)
+                for key in (
+                    "total", "completed", "overdue", "withoutOwner", "completionRate",
+                    "manualProgress", "asOf",
+                )
+                if key in kpis
+            },
+            "risks": risk_facts,
+            "members": member_facts,
+            "documents": document_facts,
+            "methodology": [
+                _short_text(item, maximum=240)
+                for item in (analysis.get("methodology") or [])[:5]
+                if _short_text(item, maximum=240)
+            ],
+        },
+        "knowledge": {"total": len(citation_facts), "citations": citation_facts},
+        "exports": export_facts,
+        "dataGaps": [_short_text(item, maximum=240) for item in receipt.data_gaps[:5]],
+        "snapshotAt": receipt.snapshot_at,
+    }
+
+
+def model_visible_delegated_receipt(content: Any) -> dict[str, Any] | None:
+    """返回可提交给父级模型的受控领域事实，未知回执保持原有处理。
+
+    这不是把回执“摘要化后重新作为事实源”，而是明确区分：完整回执保留在
+    checkpoint 供审计与程序消费；本函数输出仅是一次模型调用的输入视图。新增
+    领域级多工具回执时应在这里登记对应投影，不能让其原始 ``task`` 内容穿透
+    到父级提示词。
+    """
+
+    receipt = parse_project_investigation_receipt(content)
+    if receipt is not None:
+        return _project_analysis_model_facts(receipt)
+    return None
+
+
 __all__ = [
     "DELEGATED_EXECUTION_RECEIPT_SCHEMA_VERSION",
     "DRAFT_RECEIPT_KIND", "EXECUTION_RECEIPT_KIND", "MEETING_DRAFT_RECEIPT_KIND",
+    "PROJECT_INVESTIGATION_RECEIPT_KIND",
     "DelegatedApprovalDraftReceipt", "DelegatedPartyFileDraftReceipt",
     "DelegatedPersonalScheduleDraftReceipt",
     "DelegatedExecutionStatus",
     "DelegatedMeetingDraftReceipt",
     "DelegatedExecutionReceipt",
+    "DelegatedProjectInvestigationReceipt", "ProjectInvestigationToolTrace",
     "execution_receipt_from_tool_response",
     "draft_receipt_from_tool_response",
     "meeting_workflow_receipt_from_workflow_message",
     "parse_execution_receipt",
+    "parse_project_investigation_receipt", "project_investigation_receipt_from_tool_messages",
+    "model_visible_delegated_receipt",
     "parse_approval_draft_receipt", "parse_party_file_draft_receipt",
     "parse_personal_schedule_draft_receipt",
     "parse_meeting_draft_receipt",

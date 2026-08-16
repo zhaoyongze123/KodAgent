@@ -3,6 +3,7 @@ import {
   type ResultEnvelope,
   type ResultPresentation,
 } from "./result-presentation.ts";
+import { rawAssistantMessagePresentation } from "../lib/assistant-message-presentation.ts";
 
 export type AgentErrorCode =
   | "SESSION_EXPIRED"
@@ -11,6 +12,8 @@ export type AgentErrorCode =
   | "UPSTREAM_TIMEOUT"
   | "UPSTREAM_BAD_REQUEST"
   | "MODEL_NOT_SUPPORTED"
+  | "MODEL_OUTPUT_INVALID"
+  | "CONVERSATION_HISTORY_INVALID"
   | "CLIPBOARD_UNAVAILABLE"
   | "VALIDATION_FAILED"
   | "UNKNOWN";
@@ -230,6 +233,9 @@ export type BusinessReportPayload = {
   events?: Array<Record<string, unknown>>;
 };
 
+export type ProjectCardKind = "project_list" | "project_snapshot" | "project_analysis" | "project_tasks" | "project_activity" | "project_documents" | "project_knowledge" | "project_report";
+export type ProjectPayload = Record<string, unknown>;
+
 export type AgentCard =
   | { type: "approval"; payload: ApprovalPayload }
   | { type: "approval_workflow"; payload: ApprovalWorkflowPayload }
@@ -243,7 +249,8 @@ export type AgentCard =
   | { type: "party_file_knowledge"; payload: PartyFileKnowledgePayload }
   | { type: "party_file_compare"; payload: PartyFileComparePayload }
   | { type: "party_file_compliance"; payload: PartyFileCompliancePayload }
-  | { type: "business_report"; payload: BusinessReportPayload };
+  | { type: "business_report"; payload: BusinessReportPayload }
+  | { type: ProjectCardKind; payload: ProjectPayload };
 
 export type ToolPresentation = {
   blockType?: "narration" | "process" | "card" | "error";
@@ -256,7 +263,7 @@ export type ToolPresentation = {
   summary?: string;
   headline?: string;
   displayPolicy?: ResultPresentation["displayPolicy"];
-  cardType?: "approval" | "approval_template" | "approval_preview" | "approval_submission" | "approval_task" | "approval_request" | "approval_withdraw" | "approval_request_result" | "approval_inbox" | "approval_applications" | "approval_application" | "approval_history" | "approval_batch_preview" | "approval_batch_result" | "approval_batch" | "approval_insights" | "business_report" | "calendar" | "todo" | "party_file" | "party_file_approval" | "party_file_knowledge" | "party_file_compare" | "party_file_compliance";
+  cardType?: "approval" | "approval_template" | "approval_preview" | "approval_submission" | "approval_task" | "approval_request" | "approval_withdraw" | "approval_request_result" | "approval_inbox" | "approval_applications" | "approval_application" | "approval_history" | "approval_batch_preview" | "approval_batch_result" | "approval_batch" | "approval_insights" | "business_report" | "calendar" | "todo" | "party_file" | "party_file_approval" | "party_file_knowledge" | "party_file_compare" | "party_file_compliance" | ProjectCardKind;
 };
 
 export type AgentError = {
@@ -276,6 +283,54 @@ export type AgentBlock =
   | { kind: "card"; card: AgentCard }
   | { kind: "result"; result: ResultEnvelope }
   | { kind: "error"; error: AgentError };
+
+const PROJECT_CARD_KINDS = new Set<ProjectCardKind>([
+  "project_list",
+  "project_snapshot",
+  "project_analysis",
+  "project_tasks",
+  "project_activity",
+  "project_documents",
+  "project_knowledge",
+  "project_report",
+]);
+
+/**
+ * 从代码拥有的 AssistantMessage 元数据读取一张受控业务卡片。
+ *
+ * 一般业务工具通过 ToolMessage 输出卡片；项目报告的最终摘要由父图直接返回
+ * AssistantMessage，子 Agent 的 ToolMessage 不会穿透到聊天消息流。因此这里仅
+ * 接收后端明确写入 ``additional_kwargs.kodagentPresentation`` 的受限协议，绝不
+ * 从 Markdown、模型文本或任意 URL 猜测下载链接。
+ */
+export function assistantCardFromMessage(
+  message: unknown,
+): Extract<AgentBlock, { kind: "card" }> | undefined {
+  const presentation = rawAssistantMessagePresentation(message);
+  if (!presentation) return undefined;
+
+  // The final answer owns Markdown visibility while the provider owns this
+  // card payload. A project report must render both in one response.
+  const isCard =
+    (presentation.schemaVersion === 1 && presentation.blockType === "card") ||
+    (presentation.schemaVersion === 2 &&
+      (presentation.kind === "card" || presentation.kind === "final"));
+  if (!isCard) return undefined;
+  const cardType = presentation.cardType;
+  const payload = presentation.payload;
+  if (
+    typeof cardType !== "string" ||
+    !PROJECT_CARD_KINDS.has(cardType as ProjectCardKind) ||
+    !payload ||
+    typeof payload !== "object"
+  ) {
+    return undefined;
+  }
+  return {
+    kind: "card",
+    card: { type: cardType as ProjectCardKind, payload: payload as ProjectPayload },
+  };
+}
 
 export type NormalizedToolResponse = {
   ok: boolean;
@@ -865,6 +920,10 @@ export function agentBlockFromToolResult(
     if (cardType === "business_report") {
       const payload = response.data && typeof response.data === "object" ? response.data as BusinessReportPayload : undefined;
       if (payload) return { kind: "card", card: { type: "business_report", payload } };
+    }
+    if (cardType && ["project_list", "project_snapshot", "project_analysis", "project_tasks", "project_activity", "project_documents", "project_knowledge", "project_report"].includes(cardType)) {
+      const payload = response.data && typeof response.data === "object" ? response.data as ProjectPayload : undefined;
+      if (payload) return { kind: "card", card: { type: cardType as ProjectCardKind, payload } };
     }
     if (cardType === "party_file") {
       const payload = partyFilePayloadFromData(response.data);

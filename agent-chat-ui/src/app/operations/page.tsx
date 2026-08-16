@@ -4,8 +4,8 @@
  * Agent 管理员运行台。
  *
  * 本页只面向具有 agent:analytics:read 权限的管理员，展示全院 Agent 的真实运行事实：
- * agent_run 是一次运行的终态，agent_run_event 是阶段事件。页面不读取聊天正文、Prompt、
- * 模型隐藏推理或完整工具返回体；单次失败只能在右侧安全追踪中查看脱敏后的阶段摘要。
+ * agent_run 是一次运行的终态，agent_run_event 是阶段事件。管理员打开单条追踪时可查看
+ * 该 Run 首次捕获的用户原始提问；页面不展示系统提示、模型隐藏推理或完整工具返回体。
  *
  * 页面结构：概览指标 -> 可交互执行拓扑 -> 趋势与漏斗 -> 优化信号/工具健康 -> 运行表 -> 安全追踪抽屉。
  *
@@ -222,6 +222,8 @@ type RunTrace = {
   traceId: string;
   run: RunRow;
   events: TraceEvent[];
+  prompt?: string | null;
+  promptTruncated?: boolean;
 };
 
 type RunPage = {
@@ -379,6 +381,7 @@ export default function OperationsPage() {
   const [trace, setTrace] = useState<RunTrace | null>(null);
   const [traceLoading, setTraceLoading] = useState(false);
   const [traceError, setTraceError] = useState<string | null>(null);
+  const [promptExpanded, setPromptExpanded] = useState(false);
 
   const refreshOverview = useCallback(async () => {
     setLoading(true);
@@ -468,6 +471,7 @@ export default function OperationsPage() {
   async function openTrace(runId: string) {
     setTrace(null);
     setTraceError(null);
+    setPromptExpanded(false);
     setTraceLoading(true);
     try {
       setTrace(await loadTrace(runId));
@@ -481,6 +485,13 @@ export default function OperationsPage() {
   async function copyTraceId() {
     if (trace?.traceId && navigator.clipboard)
       await navigator.clipboard.writeText(trace.traceId);
+  }
+
+  /** 复制管理员详情中已授权返回的原始用户提问。 */
+  async function copyPrompt() {
+    if (trace?.prompt && navigator.clipboard) {
+      await navigator.clipboard.writeText(trace.prompt);
+    }
   }
 
   function setWindow(windowDays: (typeof DAY_OPTIONS)[number]) {
@@ -1153,6 +1164,7 @@ export default function OperationsPage() {
           if (!open) {
             setTrace(null);
             setTraceError(null);
+            setPromptExpanded(false);
           }
         }}
       >
@@ -1163,8 +1175,8 @@ export default function OperationsPage() {
           <SheetHeader className="border-b border-slate-200 pr-12">
             <SheetTitle>安全运行追踪</SheetTitle>
             <SheetDescription>
-              只包含阶段、工具、状态、耗时和脱敏错误摘要，不展示
-              Prompt、业务返回体或模型推理。
+              包含本次用户提问、阶段、工具、状态、耗时和脱敏错误摘要；不展示
+              系统提示、业务返回体或模型推理。
             </SheetDescription>
           </SheetHeader>
           {traceLoading ? (
@@ -1206,6 +1218,55 @@ export default function OperationsPage() {
                   ) : null}
                 </div>
               </div>
+              <section
+                aria-label="用户提问"
+                className="mt-3 border border-slate-200 bg-white p-3"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <h2 className="text-xs font-medium text-slate-700">用户提问</h2>
+                  {trace.prompt ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 px-2 text-xs"
+                      onClick={() => void copyPrompt()}
+                    >
+                      <Copy className="mr-1 size-3.5" />
+                      复制
+                    </Button>
+                  ) : null}
+                </div>
+                {trace.prompt ? (
+                  <>
+                    <p
+                      className={`mt-2 whitespace-pre-wrap break-words text-pretty text-sm leading-6 text-slate-700 ${
+                        promptExpanded ? "" : "line-clamp-5"
+                      }`}
+                    >
+                      {trace.prompt}
+                    </p>
+                    {trace.prompt.length > 220 ? (
+                      <Button
+                        size="sm"
+                        variant="link"
+                        className="mt-1 h-auto px-0 text-xs text-sky-700"
+                        onClick={() => setPromptExpanded((expanded) => !expanded)}
+                      >
+                        {promptExpanded ? "收起提问" : "展开完整提问"}
+                      </Button>
+                    ) : null}
+                    {trace.promptTruncated ? (
+                      <p className="mt-1 text-xs text-amber-700">
+                        该提问超过审计长度上限，已截断保存。
+                      </p>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="mt-2 text-pretty text-sm text-slate-500">
+                    该历史运行未采集用户提问。
+                  </p>
+                )}
+              </section>
               <ol className="mt-5 space-y-0">
                 {trace.events.map((event, index) => (
                   <li

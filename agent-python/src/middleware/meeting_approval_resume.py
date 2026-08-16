@@ -9,7 +9,6 @@ from langchain_core.messages import AIMessage, ToolMessage
 
 from ..services.meeting_approval import (
     approval_status,
-    consume_rejected_resume,
     load_confirmation_context,
 )
 from ..tools.common import tool_failure
@@ -64,41 +63,6 @@ class MeetingApprovalResumeMiddleware(AgentMiddleware):
                     return context
                 return None
         return None
-
-    @classmethod
-    def _settle_rejected_message(cls, state: Any):
-        """Replace model narration with the deterministic cancelled terminal state.
-
-        A reject is a normal control-flow outcome, not a failed business Tool.
-        The model may still see the historical PENDING draft after the official
-        HITL ToolMessage, so it must not be the authority for the terminal
-        response. Java's durable REJECTED/CANCELLED state is authoritative.
-        """
-        context = cls._rejected_context(state)
-        if context is None:
-            return None
-        if not consume_rejected_resume(context):
-            return None
-        latest = ((state or {}).get("messages") or [])[-1]
-        subject = str(context.draft.get("subject") or "会议室预约")
-        replacement = AIMessage(
-            id=latest.id,
-            name=getattr(latest, "name", None),
-            content=f"已取消“{subject}”的预约草稿，未提交正式会议室预约。",
-            response_metadata={
-                **(getattr(latest, "response_metadata", None) or {}),
-                "approvalStatus": "REJECTED",
-                "draftStatus": "CANCELLED",
-                "deterministicTerminal": True,
-            },
-        )
-        return {"messages": [replacement]}
-
-    def after_model(self, state, runtime):
-        return self._settle_rejected_message(state)
-
-    async def aafter_model(self, state, runtime):
-        return self._settle_rejected_message(state)
 
     def wrap_tool_call(self, request, handler):
         tool_call = request.tool_call or {}

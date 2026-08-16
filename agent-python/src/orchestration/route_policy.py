@@ -7,13 +7,11 @@
 用户补齐字段后路由工具被移出工具列表等问题。本模块将这些分散判断收敛为一张纯
 决策表，所有调用方只能消费同一份 ``TurnPolicy``。
 
-四种模式
+三种模式
 ========
-* ``DETERMINISTIC_TERMINAL``：代码直接回复，模型不参与。仅用于模型绝不能
-  解释的边界，例如 ``UNSUPPORTED`` 与 ``CONFIRMATION_REQUIRED``。
 * ``MODEL_RESPONSE``：模型可自然语言澄清，但工具列表仍被代码收紧。
 * ``HANDSHAKE``：只有能唯一推导已注册动作时，模型才必须提交协议调用。
-* ``EXECUTE``：模型只能调用已编译执行器，否则代码返回确定性执行澄清。
+* ``EXECUTE``：代码签发已编译执行器；模型只在拿到业务事实后完成收尾。
 
 安全不变量
 ==========
@@ -24,7 +22,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 import os
 from typing import Any
@@ -46,8 +44,6 @@ _WRITE_WORKFLOW_CAPABILITIES = frozenset({"party_file", "meeting", "schedule"})
 
 _PLANNING_PALETTE = frozenset({"report_progress", "route_conversation"})
 _HANDSHAKE_PALETTE = frozenset({"report_progress", "route_conversation"})
-# 终态回合不会调用模型，因此仅保留面向用户的进度播报。
-_TERMINAL_PALETTE = frozenset({"report_progress"})
 # 字段澄清必须保留路由协议：用户补齐字段后模型要能重新路由修正载荷；业务工具和
 # 委派仍然关闭，具体原因见本文件顶部的安全不变量。
 _FIELD_CLARIFICATION_WRITE_PALETTE = frozenset({"report_progress", "route_conversation"})
@@ -55,7 +51,6 @@ _FIELD_CLARIFICATION_READ_PALETTE = frozenset({"task", "report_progress", "route
 _FALLBACK_PALETTE = frozenset({"task", "report_progress"})
 
 class TurnMode(str, Enum):
-    DETERMINISTIC_TERMINAL = "deterministic_terminal"
     MODEL_RESPONSE = "model_response"
     HANDSHAKE = "handshake"
     EXECUTE = "execute"
@@ -66,9 +61,7 @@ class TurnPolicy:
     """描述下一次模型调用允许做什么、且必须做什么的不可变策略。"""
 
     mode: TurnMode
-    planning_tools: frozenset[str] = field(default_factory=frozenset)
-    terminal_content: str | None = None
-    terminal_metadata: dict[str, Any] | None = None
+    planning_tools: frozenset[str] = frozenset()
     delegate_agent: str | None = None
 
 
@@ -169,38 +162,6 @@ def _field_clarification_palette(route: dict[str, Any] | None) -> frozenset[str]
     return _FIELD_CLARIFICATION_READ_PALETTE
 
 
-def _terminal_policy(route: dict[str, Any], state: str) -> TurnPolicy:
-    clarification = route.get("clarification") or {}
-    if not isinstance(clarification, dict):
-        clarification = {}
-    question = str(clarification.get("question") or "").strip()
-    issues = [
-        str(item).strip()
-        for item in (clarification.get("issues") or [])
-        if str(item).strip()
-    ]
-    action_id = route_action_id(route)
-    if state == "UNSUPPORTED":
-        content = "当前请求未匹配到可执行的已注册业务动作。"
-        if issues:
-            content += f"{issues[0]}。"
-        content += "未调用业务服务，请重新发起请求。"
-    else:
-        content = question or "请通过确认卡完成此操作，或补充必要的信息后继续。"
-    return TurnPolicy(
-        mode=TurnMode.DETERMINISTIC_TERMINAL,
-        planning_tools=_TERMINAL_PALETTE,
-        terminal_content=content,
-        terminal_metadata={
-            "deterministicTerminal": True,
-            "routeStatus": str(route.get("planStatus") or "").upper(),
-            "routeActionId": action_id,
-            "routeState": state,
-            "routeFailure": "structured_plan_boundary",
-        },
-    )
-
-
 def decide_turn_policy(route: dict[str, Any] | None) -> TurnPolicy:
     """Decide, from the compiled route alone, how the next turn behaves.
 
@@ -214,7 +175,9 @@ def decide_turn_policy(route: dict[str, Any] | None) -> TurnPolicy:
     state = route_state(route)
 
     if state in {"UNSUPPORTED", "CONFIRMATION_REQUIRED"}:
-        return _terminal_policy(route, state)
+        # 结构化边界只提供事实和空工具面板。说明仍由无工具模型回合生成，
+        # 不能由代码伪造为普通聊天正文。
+        return TurnPolicy(mode=TurnMode.MODEL_RESPONSE, planning_tools=frozenset())
 
     if state == "FIELD_CLARIFICATION":
         # Missing user fields are interaction, not failure. The model authors

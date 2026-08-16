@@ -10,12 +10,17 @@ import cn.iocoder.yudao.module.system.service.user.AdminUserService;
 import cn.iocoder.yudao.framework.security.core.service.SecurityFrameworkService;
 import cn.iocoder.yudao.server.controller.agent.identity.OaAgentIdentityProperties;
 import cn.iocoder.yudao.server.controller.agent.identity.OaAgentIdentityTicketService;
+import cn.iocoder.yudao.server.controller.agent.AgentDocumentArtifactProperties;
 
 /**
  * Business Agent facade 认证配置。
  */
 @Configuration(proxyBeanMethods = false)
-@EnableConfigurationProperties({OaAgentAuthProperties.class, OaAgentIdentityProperties.class})
+@EnableConfigurationProperties({
+        OaAgentAuthProperties.class,
+        OaAgentIdentityProperties.class,
+        AgentDocumentArtifactProperties.class
+})
 public class OaAgentAuthConfiguration implements WebMvcConfigurer {
 
     @Resource
@@ -38,6 +43,9 @@ public class OaAgentAuthConfiguration implements WebMvcConfigurer {
                 .addPathPatterns(
                         "/agent/tools/**",
                         "/agent/drafts/**",
+                        // 通用附件同样以 X-Agent-Key + 当前用户身份票据访问；不能
+                        // 因为不属于某个业务领域就绕开租户、所有者和工具权限校验。
+                        "/agent/artifacts/**",
                         "/agent/runs/**",
                         "/agent/threads/**",
                         "/agent/approvals/**",

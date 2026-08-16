@@ -25,6 +25,7 @@ from .meeting_task_guard import MeetingTaskCallGuardMiddleware
 from .personal_schedule_approval import PersonalScheduleApprovalArgsMiddleware
 from .personal_schedule_approval_resume import PersonalScheduleApprovalResumeMiddleware
 from .tool_audit import ToolAuditMiddleware
+from .tool_visibility import ToolVisibilityMiddleware
 from .workflow_task_guard import DeterministicWorkflowTaskGuardMiddleware
 from .coordination_approval_sync import CoordinationApprovalSyncMiddleware
 from ..services.party_file_approval import PartyFileApprovalAutoConfirmMiddleware
@@ -53,6 +54,9 @@ def build_middleware_chain(*, dynamic_model: Any | None = None, phase_prompt: An
         dynamic_model or DynamicModelMiddleware(),
         phase_prompt or MainAgentPhasePromptMiddleware(),
         PlanToolProjectionMiddleware(),
+        # HarnessProfile 不是每种 DeepAgents 运行方式都会应用到最终 request；
+        # 这里在真实模型请求和工具执行边界再次收缩默认通用工具。
+        ToolVisibilityMiddleware(),
         RunLifecycleMiddleware(),
         MeetingTaskCallGuardMiddleware(),
         DeterministicWorkflowTaskGuardMiddleware(),
@@ -79,6 +83,7 @@ def build_middleware_chain(*, dynamic_model: Any | None = None, phase_prompt: An
         ("PendingPlanMiddleware", "ContextCandidateMiddleware"),
         ("ContextCandidateMiddleware", "TargetResolutionMiddleware"),
         ("TargetResolutionMiddleware", "PlanToolProjectionMiddleware"),
+        ("PlanToolProjectionMiddleware", "ToolVisibilityMiddleware"),
         ("ContextCandidateMiddleware", "MainAgentPhasePromptMiddleware"),
         ("PendingPlanMiddleware", "MainAgentPhasePromptMiddleware"),
         ("DynamicModelMiddleware", "MainAgentPhasePromptMiddleware"),

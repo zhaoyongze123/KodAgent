@@ -1,4 +1,5 @@
 import type { AgentError } from "@/types/agent-block";
+import type { PersistedRunFailure } from "@/components/thread/process-events";
 
 function errorText(error: unknown): string {
   if (error instanceof Error) return error.message;
@@ -14,6 +15,18 @@ function errorText(error: unknown): string {
 export function normalizeAgentError(error: unknown): AgentError {
   const raw = errorText(error);
   const lower = raw.toLowerCase();
+
+  if (
+    lower.includes("model_tool_history_invalid") ||
+    lower.includes("同一 tool_call_id 对应多条 toolmessage")
+  ) {
+    return {
+      code: "CONVERSATION_HISTORY_INVALID",
+      message: "当前对话的历史记录无法继续使用。",
+      detail: "这是旧对话中的工具调用记录异常，不是模型供应商故障。请新建对话后重新发起请求。",
+      retryable: false,
+    };
+  }
 
   if (
     lower.includes("function call is not supported") ||
@@ -65,5 +78,39 @@ export function normalizeAgentError(error: unknown): AgentError {
     message: "Agent 处理请求时发生异常。",
     detail: "请求没有完成，业务数据未提交。请稍后重试；如果持续出现，请联系管理员并提供发生时间。",
     retryable: true,
+  };
+}
+
+/** Convert a backend terminal failure fact into a structured UI error card. */
+export function normalizePersistedRunFailure(
+  failure: PersistedRunFailure,
+): AgentError {
+  const code = failure.code.toUpperCase();
+  if (code === "MODEL_TOOL_HISTORY_INVALID") {
+    return {
+      code: "CONVERSATION_HISTORY_INVALID",
+      message: "当前对话的历史记录无法继续使用。",
+      detail: "这是旧对话中的工具调用记录异常，不是模型供应商故障。请新建对话后重新发起请求。",
+      retryable: false,
+    };
+  }
+  if (
+    code.startsWith("MODEL_") ||
+    code === "SYNTHESIS_TOOL_CALL_BLOCKED"
+  ) {
+    return {
+      code: "MODEL_OUTPUT_INVALID",
+      message: "当前模型未能生成符合展示约束的回复。",
+      detail: failure.message,
+      retryable: true,
+      action: { type: "retry", label: "重试" },
+    };
+  }
+  return {
+    code: "UNKNOWN",
+    message: "本次请求未能完成。",
+    detail: failure.message,
+    retryable: true,
+    action: { type: "retry", label: "重试" },
   };
 }

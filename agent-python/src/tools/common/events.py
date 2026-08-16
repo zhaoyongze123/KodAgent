@@ -41,6 +41,10 @@ _RUN_STARTED_EMITTED: ContextVar[bool] = ContextVar("oa_agent_run_started_emitte
 _RUN_PAUSED: ContextVar[bool] = ContextVar("oa_agent_run_paused", default=False)
 _RUN_PAUSED_RUN_ID: ContextVar[str] = ContextVar("oa_agent_run_paused_run_id", default="")
 
+# 管理员运行台只需要看到用户实际提交的原始问题，不应保留系统提示、模型推理或
+# 工具结果。该上限同时限制审计表体积；超长内容由 Java 标记为已截断。
+_AUDIT_PROMPT_MAX_CHARACTERS = 8 * 1024
+
 # A model generally emits one or a few characters per chunk.  Keeping the
 # first update immediate and then coalescing the rest gives the user genuine
 # streaming feedback without turning a short plan into dozens of PostgreSQL
@@ -206,9 +210,29 @@ def sync_runtime_event_context() -> None:
     # LangGraph assigns a child span id to ``config.run_id`` while retaining
     # the request's root run id in metadata. Business drafts and HITL proofs
     # are bound to that root id, so prefer metadata for cross-node identity.
-    run_id = metadata.get("runId") or metadata.get("run_id") or config.get("run_id")
-    origin_run_id = metadata.get("originRunId") or metadata.get("origin_run_id") or metadata.get("runId") or metadata.get("run_id")
-    resume_run_id = metadata.get("resumeRunId") or metadata.get("resume_run_id")
+    # LangGraph Server 的根 Run ID 位于 ``configurable.run_id``；子节点的
+    # ``config.run_id`` 则可能是 span ID。先读取网关透传的 metadata，再读取
+    # configurable 中的根身份，最后才使用顶层 run_id，避免审计事件落到 local-run。
+    run_id = (
+        metadata.get("runId")
+        or metadata.get("run_id")
+        or configurable.get("runId")
+        or configurable.get("run_id")
+        or config.get("run_id")
+    )
+    origin_run_id = (
+        metadata.get("originRunId")
+        or metadata.get("origin_run_id")
+        or configurable.get("originRunId")
+        or configurable.get("origin_run_id")
+        or run_id
+    )
+    resume_run_id = (
+        metadata.get("resumeRunId")
+        or metadata.get("resume_run_id")
+        or configurable.get("resumeRunId")
+        or configurable.get("resume_run_id")
+    )
     thread_id = configurable.get("thread_id") or metadata.get("threadId") or metadata.get("thread_id")
     tenant_id = metadata.get("tenantId") or metadata.get("tenant_id") or _TENANT_ID.get()
     user_id = metadata.get("userId") or metadata.get("user_id") or _USER_ID.get()
@@ -254,6 +278,42 @@ def current_agent_context() -> dict[str, str]:
         "taskId": _TASK_ID.get(),
         "operationId": _OPERATION_ID.get(),
     }
+
+
+def capture_run_user_prompt(user_message: str) -> None:
+    """首次识别到本轮真实用户消息时，持久化管理员追踪所需的原始提问。
+
+    参数：
+        user_message：当前主图 ``HumanMessage`` 的文本。该文本只会投影到 Java 的
+            ``agent_run.user_prompt``，不会作为事件时间线、模型上下文或工具参数使用。
+
+    ``runId:created`` 是稳定幂等键。主图一次执行可能多次进入 ``before_model``，
+    但 Java 仅接受首次捕获，避免工具回合或后续模型回合覆盖本轮用户原话。
+    """
+    sync_runtime_event_context()
+    run_id = _RUN_ID.get()
+    if not run_id or run_id == "local-run":
+        return
+    prompt = str(user_message or "").strip()
+    if not prompt:
+        return
+    truncated = len(prompt) > _AUDIT_PROMPT_MAX_CHARACTERS
+    event = build_event(
+        "run.created",
+        {
+            "userPrompt": prompt[:_AUDIT_PROMPT_MAX_CHARACTERS],
+            "promptTruncated": truncated,
+            "source": "current-user-message",
+        },
+        "收到用户请求",
+    )
+    event["eventId"] = f"{run_id}:created"
+    try:
+        from .http_client import persist_agent_event
+        persist_agent_event(event)
+    except Exception:
+        # 追踪写入失败不能阻断用户对话；终态事件仍会走既有的可靠审计链路。
+        return
 
 
 @contextmanager
@@ -785,6 +845,73 @@ def publish_model_narration(writer: Any, *, message: str, model_call_id: str,
     )
     from .http_client import persist_agent_event
     return NarrationPublisher(persist_agent_event).publish(writer, event)
+
+
+def _final_answer_entry_id(model_call_id: str) -> str:
+    """为一次主 Agent 收尾调用生成仅直播使用的稳定标识。
+
+    最终回答的逐字流不属于审计事件，也不能进入可恢复的过程时间线；浏览器仅需
+    用该标识把同一次模型调用的多个全量快照合并到临时回答气泡中。因此它不复用
+    ``narration.upsert`` 的 entryId，也不携带模型调用 ID 等内部字段。
+    """
+    identity = json.dumps(
+        {
+            "runId": _RUN_ID.get(),
+            "modelCallId": str(model_call_id),
+            "phase": "final_answer.stream",
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return "final:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def new_final_answer_entry_id(finalization_id: str) -> str:
+    """为一次主 Agent 收尾生成可与 checkpoint 关联的公开标识。"""
+
+    return _final_answer_entry_id(f"finalization:{finalization_id}")
+
+
+def publish_final_answer_stream(writer: Any, *, message: str, model_call_id: str,
+                                completed: bool = False,
+                                entry_id: str | None = None) -> dict[str, Any] | None:
+    """向当前 Run 直播主 Agent 的最终回答快照，不持久化。
+
+    过程摘要只能由 ``report_progress`` 通过 ``narration.upsert`` 发布；最终
+    Markdown 则由这个独立事件交给前端的临时回答气泡。完整 ``AIMessage`` 仍由
+    LangGraph 正常写入 checkpoint，前端收到它后会原子替换临时内容。这样刷新恢复
+    不会把未完成的半段回答误作正式历史，也不会将最终正文重复放入处理过程。
+    """
+    sync_runtime_event_context()
+    text = plain_event_text(message)
+    # 最终答案与过程摘要共享“不得泄露协议”的最小安全边界。这里选择丢弃本次
+    # 临时快照，而非改写模型文本；最终 AIMessage 仍会经过主链路的协议防火墙。
+    if narration_validation_issues(text):
+        return None
+    entry_id = str(entry_id or _final_answer_entry_id(model_call_id)).strip()
+    revision = _next_narration_revision(
+        entry_id,
+        text,
+        completed=completed,
+        throttled=not completed,
+    )
+    if revision is None:
+        return None
+    event = {
+        "type": "agent.final_answer.upsert",
+        "schemaVersion": 1,
+        "runId": _RUN_ID.get(),
+        "threadId": _THREAD_ID.get(),
+        "entryId": entry_id,
+        "revision": revision,
+        "status": "completed" if completed else "streaming",
+        "text": text,
+    }
+    # 这是 LangGraph custom stream，不走 emit()/NarrationPublisher；两者都会
+    # 写入 Java 审计表，违反最终流“仅当前连接临时显示”的职责边界。
+    if writer:
+        writer(event)
+    return event
 
 
 def publish_narration(writer: Any, *, stage: str, message: str,

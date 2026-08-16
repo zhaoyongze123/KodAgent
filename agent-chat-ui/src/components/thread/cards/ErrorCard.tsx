@@ -19,6 +19,8 @@ const ERROR_COPY: Record<
   },
   UPSTREAM_BAD_REQUEST: { title: "模型请求参数不兼容" },
   MODEL_NOT_SUPPORTED: { title: "当前模型不支持 Agent 工具调用" },
+  MODEL_OUTPUT_INVALID: { title: "当前模型未能生成可展示的回复" },
+  CONVERSATION_HISTORY_INVALID: { title: "当前对话记录无法继续使用" },
   CLIPBOARD_UNAVAILABLE: { title: "当前环境不允许复制到剪贴板" },
   VALIDATION_FAILED: { title: "请求信息不完整或不合法" },
   UNKNOWN: { title: "处理请求时发生异常" },

@@ -11,7 +11,7 @@
 ``ContextCandidateMiddleware`` 在模型调用前扫描 checkpoint：
 
 * ``PendingPlan`` 形成待补字段候选；
-* 会议和个人日程查询 ToolMessage 形成最小化的可编辑候选；
+* 会议、个人日程和项目列表查询 ToolMessage 形成最小化的定位候选；
 * ``conversation_context_prompt`` 仅把脱敏摘要交给规划阶段模型；
 * ``PlanToolProjectionMiddleware`` 在路由工具调用边界验证候选 ID，只签发
   Java 定向核验请求；核验成功后中央编译器才重新生成写计划。
@@ -36,7 +36,7 @@ from langchain.agents.middleware import AgentMiddleware, AgentState
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..tools.common.events import current_agent_context
-from .delegated_receipt import parse_execution_receipt
+from .delegated_receipt import model_visible_delegated_receipt, parse_execution_receipt
 from .domain_dispatch import parse_work_order
 from .route_state import message_content, message_name, message_type
 
@@ -384,6 +384,63 @@ def _meeting_candidates(
                     "source_booking_id": int(booking_id),
                     "_authorized_source_fields": ["source_booking_id"],
                 },
+                source_tool_call_id=source_tool_call_id,
+                source_turn=source_turn,
+            )
+        )
+        if len(candidates) >= _MAX_CANDIDATES:
+            break
+    return candidates
+
+
+def _project_candidates(
+    message: Any,
+    *,
+    source_turn: int,
+    messages: list[Any] | None = None,
+    message_index: int | None = None,
+) -> list[ContextCandidate]:
+    """把当前用户可访问的项目列表压缩为后续指代的定位候选。
+
+    项目候选只能解决“就这个项目”中的对象指代，不授予项目数据访问权。后续
+    ``project.investigate`` 等动作仍会由 Java Project Provider 重新校验当前
+    KodCloud 成员关系、任务隐私和文件权限。
+    """
+
+    result = _executor_result_data(
+        message,
+        executor_tool="list_accessible_projects",
+        messages=messages,
+        message_index=message_index,
+    )
+    if result is None:
+        return []
+    data, source_tool_call_id = result
+    candidates: list[ContextCandidate] = []
+    for row in _rows(data):
+        project_id = row.get("projectID") or row.get("projectId") or row.get("project_id")
+        if project_id is None or isinstance(project_id, bool):
+            continue
+        project_id = str(project_id).strip()
+        if not project_id:
+            continue
+        name = str(row.get("name") or "未命名项目").strip()[:120]
+        description = str(row.get("description") or "").strip().replace("\n", " ")[:160]
+        summary = f"可访问项目：{name}" + (f"。{description}" if description else "。")
+        candidates.append(
+            _new_candidate(
+                kind="authorized_query",
+                capability_id="project",
+                action_ids=(
+                    "project.snapshot", "project.tasks", "project.activity",
+                    "project.documents", "project.investigate",
+                    "project.knowledge.search",
+                ),
+                summary=summary,
+                status="QUERY_CANDIDATE",
+                # project_id 只用于定位后续 Java 重新校验的项目，不属于可直接
+                # 写入业务计划的 source_*_id，也不会注入模型提示词。
+                trusted_plan={"project_id": project_id},
                 source_tool_call_id=source_tool_call_id,
                 source_turn=source_turn,
             )
@@ -757,18 +814,33 @@ def _model_visible_tool_data(value: Any) -> Any:
 
 
 def _model_visible_message(message: Any) -> Any:
-    """移除 ToolResponse 中 UI 元数据和业务来源 ID 的模型可见副本。
+    """生成业务工具与跨 Agent 回执的模型可见副本。
 
     ``presentation.sourceResultId`` 是前端更新、去重卡片使用的传输相关键，不是
     checkpoint 候选 ID。把它原样交给模型会让模型误把 ``result:...`` 填进
-    ``context_candidate_id``。此处只复制本次模型调用的 ToolMessage，不修改
-    checkpoint，所以 UI 和审计仍可使用完整 presentation。
+    ``context_candidate_id``。跨 Agent 的 ``task`` 回执还有另一层边界：原始调查
+    结果包含任务树、活动和资料内部编号，只应留在 checkpoint/审计，不应随最终
+    总结再次交给主模型。
+
+    此处只复制本次模型调用的 ToolMessage，不修改 checkpoint，所以 UI、审计和
+    领域内后续工具调用仍可使用完整事实。
     """
 
     if message_type(message) != "tool":
         return message
     content = message_content(message)
     if not isinstance(content, str):
+        return message
+    delegated_view = model_visible_delegated_receipt(content)
+    if delegated_view is not None:
+        visible_content = json.dumps(delegated_view, ensure_ascii=False, separators=(",", ":"))
+        if isinstance(message, dict):
+            copied = dict(message)
+            copied["content"] = visible_content
+            return copied
+        model_copy = getattr(message, "model_copy", None)
+        if callable(model_copy):
+            return model_copy(update={"content": visible_content})
         return message
     response = _as_dict(content)
     # 只处理统一 ToolResponse 信封。普通工具文本不做 JSON 改写，避免改变第三方
@@ -810,7 +882,7 @@ def _candidate_priority(candidate: ContextCandidate) -> int:
     }[candidate.kind]
 
 
-def _trusted_source_identity(candidate: ContextCandidate) -> tuple[str, str, str, int] | None:
+def _trusted_source_identity(candidate: ContextCandidate) -> tuple[str, str, str, str | int] | None:
     """返回候选对应的可信业务对象键，用于合并重复查询结果。
 
     候选的 ``candidate_id`` 是每次投影新签发的临时引用，不能用它判断两个候选
@@ -818,6 +890,13 @@ def _trusted_source_identity(candidate: ContextCandidate) -> tuple[str, str, str
     正整数的 ``source_*_id`` 才可参与去重；模型可见摘要、标题和 UI 的
     ``sourceResultId`` 都不能参与这个判断。
     """
+
+    # 项目候选来自当前用户的 Java ``project.list`` 查询。这里只把 project_id
+    # 当作去重键，绝不把它解释成写操作来源字段；执行项目动作时仍会重新校验。
+    if candidate.capability_id == "project":
+        project_id = str(candidate.trusted_plan.get("project_id") or "").strip()
+        if project_id:
+            return candidate.kind, candidate.capability_id, "project_id", project_id
 
     authorized_fields = candidate.trusted_plan.get("_authorized_source_fields")
     if not isinstance(authorized_fields, (list, tuple, set)):
@@ -920,6 +999,9 @@ _EXPLICIT_NEW_REQUEST = re.compile(
 )
 _CONTEXT_REFERENCE = re.compile(
     r"(?:那个|这[个项]|刚才|上[一]?个|前面|上述|第[一二三四五六七八九十0-9]+个|第\s*[0-9]+\s*项|继续|补充|改成|改到|取消它|撤回|好的|好呀|行|可以|没问题|同意|确认|批准)",
+)
+_PROJECT_CONTEXT_REFERENCE = re.compile(
+    r"(?:这个|这项|该|上述|前面(?:的)?|刚才(?:的)?|上一个|当前|本)(?:项目|工程|课题)",
 )
 
 
@@ -1028,6 +1110,9 @@ def context_candidates_state_update(state: dict[str, Any]) -> dict[str, Any] | N
         additions.extend(_schedule_candidates(
             message, source_turn=current_turn, messages=messages, message_index=message_index,
         ))
+        additions.extend(_project_candidates(
+            message, source_turn=current_turn, messages=messages, message_index=message_index,
+        ))
         confirmed_schedule = _confirmed_personal_schedule_candidate(
             message, source_turn=current_turn, messages=messages, message_index=message_index,
         )
@@ -1108,6 +1193,18 @@ def context_candidate_reference_is_unambiguous(
     if len(ordered) == 1:
         return True
     text = str(user_message or "").strip()
+    # “这个项目”已经把对象类型限定为项目。它与“那个”不同，不会把日程、
+    # 待确认卡或待补计划混入歧义集合；因此只要当前有效项目候选唯一，就可以
+    # 将其作为下一次 Java Provider 重新核验的定位线索。该例外只用于只读项目
+    # 定位，不授予任何写操作来源字段。
+    if candidate.capability_id == "project" and _PROJECT_CONTEXT_REFERENCE.search(text):
+        project_candidates = [
+            item for item in ordered
+            if item.capability_id == "project"
+            and item.kind in {"authorized_query", "authorized_resource"}
+        ]
+        if len(project_candidates) == 1 and project_candidates[0].candidate_id == candidate.candidate_id:
+            return True
     ordinal = re.search(r"第\s*([0-9一二三四五六七八九十]+)\s*(?:个|项|条|场)?", text)
     if ordinal:
         raw = ordinal.group(1)
@@ -1182,7 +1279,10 @@ def context_prompt(value: Any, *, messages: list[Any] | None = None) -> str:
             "修改/取消已授权对象用 REFER_TO_QUERY_CANDIDATE；回应待确认操作用 LOCATE_APPROVAL_CARD；",
             "多个候选而用户没有明确名称或序号时用 AMBIGUOUS，不能猜测对象。",
             "同时填写 0 到 1 的 context_confidence；引用查询对象低于 0.70 时必须澄清，不能绑定写操作来源。",
-            "只有确实在修改或取消某项已授权对象时，才传 context_candidate_id。不得自行填写 source ID、",
+            "用户明确指向唯一项目候选（如“就这个项目”“这个项目”或项目名称）并请求项目概览、进度、任务、",
+            "风险、资料、检索或报告时，也应传 context_candidate_id，并用 REFER_TO_QUERY_CANDIDATE；",
+            "这只解决“指的是哪个项目”，后续仍会重新查询 Java Project Provider，不能把候选当作项目事实。",
+            "只有确实在引用上述查询对象时才传 context_candidate_id。不得自行填写 source ID、",
             "_authorized_source_fields 或任何授权标记；界面结果标识 sourceResultId/result:... 不是候选 ID。",
             "待确认操作只能定位正式确认卡，不能替代审批确认。",
         ]
