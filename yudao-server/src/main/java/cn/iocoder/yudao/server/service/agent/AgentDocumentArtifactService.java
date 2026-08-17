@@ -5,17 +5,28 @@ import cn.iocoder.yudao.server.controller.agent.AgentDocumentArtifactProperties;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.NodeList;
+import org.xml.sax.InputSource;
 
 import javax.annotation.Resource;
+import javax.xml.XMLConstants;
+import javax.xml.parsers.DocumentBuilderFactory;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.sql.ResultSet;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 
 /** 通用附件服务：不理解业务报告类型，只渲染模型提交的文档结构。 */
@@ -23,6 +34,10 @@ import java.util.zip.ZipOutputStream;
 public class AgentDocumentArtifactService {
     private static final String DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
     private static final String XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+    private static final String WORD_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    private static final String SHEET_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+    private static final int MAX_PREVIEW_ARCHIVE_BYTES = 5 * 1024 * 1024;
+    private static final int MAX_PREVIEW_ENTRY_BYTES = 1024 * 1024;
 
     @Resource @Qualifier("agentEventJdbcTemplate") private JdbcTemplate jdbcTemplate;
     @Resource private AgentDocumentArtifactProperties properties;
@@ -72,12 +87,172 @@ public class AgentDocumentArtifactService {
         return rows.get(0);
     }
 
+    /**
+     * 预览是下载后的另一种受控呈现，而不是第二份附件事实源。每次打开预览仍复用
+     * download 的租户、用户和到期校验；只向浏览器返回由服务端解析出的只读 HTML。
+     */
+    public PreviewDocument preview(Long tenantId, Long userId, String artifactId) {
+        ArtifactFile file = download(tenantId, userId, artifactId);
+        return new PreviewDocument(file.title, file.filename, file.format,
+                previewHtml(file.format, file.content, file.title));
+    }
+
+    static String previewHtml(String format, byte[] content, String title) {
+        if ("DOCX".equalsIgnoreCase(format)) {
+            return previewPage(title, "DOCX", docxPreview(content));
+        }
+        if ("XLSX".equalsIgnoreCase(format)) {
+            return previewPage(title, "XLSX", xlsxPreview(content));
+        }
+        throw new IllegalArgumentException("该附件格式暂不支持预览");
+    }
+
     private static Map<String, Object> metadata(String id, String title, String filename,
                                                   String format, String mime, int size) {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("artifactId", id); result.put("title", title); result.put("filename", filename);
         result.put("format", format); result.put("mimeType", mime); result.put("size", size);
         return result;
+    }
+
+    private static String docxPreview(byte[] content) {
+        Document document = parseXml(zipEntries(content).get("word/document.xml"));
+        NodeList paragraphs = document.getElementsByTagNameNS(WORD_NS, "p");
+        StringBuilder body = new StringBuilder();
+        for (int i = 0; i < paragraphs.getLength(); i++) {
+            Element paragraph = (Element) paragraphs.item(i);
+            String text = paragraph.getTextContent();
+            if (text == null || text.trim().isEmpty()) continue;
+            String tag = isHeading(paragraph) ? "h2" : "p";
+            body.append('<').append(tag).append('>').append(html(text.trim()))
+                    .append("</").append(tag).append('>');
+        }
+        return body.length() == 0 ? "<p class=\"empty\">文档没有可展示的正文。</p>" : body.toString();
+    }
+
+    private static boolean isHeading(Element paragraph) {
+        NodeList styles = paragraph.getElementsByTagNameNS(WORD_NS, "pStyle");
+        if (styles.getLength() == 0) return false;
+        String value = ((Element) styles.item(0)).getAttributeNS(WORD_NS, "val");
+        return value != null && value.toLowerCase().startsWith("heading");
+    }
+
+    private static String xlsxPreview(byte[] content) {
+        Map<String, byte[]> entries = zipEntries(content);
+        List<String> names = workbookSheetNames(entries.get("xl/workbook.xml"));
+        List<String> paths = new ArrayList<>();
+        for (String path : entries.keySet()) {
+            if (path.matches("xl/worksheets/sheet\\d+\\.xml")) paths.add(path);
+        }
+        Collections.sort(paths, Comparator.comparingInt(AgentDocumentArtifactService::sheetNumber));
+        if (paths.isEmpty()) return "<p class=\"empty\">工作簿没有可展示的工作表。</p>";
+
+        StringBuilder body = new StringBuilder();
+        for (int index = 0; index < paths.size(); index++) {
+            String name = index < names.size() ? names.get(index) : "工作表 " + (index + 1);
+            body.append("<section class=\"sheet\"><h2>").append(html(name)).append("</h2>")
+                    .append("<div class=\"table-wrap\"><table><tbody>");
+            Document sheet = parseXml(entries.get(paths.get(index)));
+            NodeList rows = sheet.getElementsByTagNameNS(SHEET_NS, "row");
+            for (int rowIndex = 0; rowIndex < rows.getLength(); rowIndex++) {
+                Element row = (Element) rows.item(rowIndex);
+                NodeList cells = row.getElementsByTagNameNS(SHEET_NS, "c");
+                if (cells.getLength() == 0) continue;
+                body.append("<tr>");
+                for (int cellIndex = 0; cellIndex < cells.getLength(); cellIndex++) {
+                    body.append("<td>").append(html(cellText((Element) cells.item(cellIndex)))).append("</td>");
+                }
+                body.append("</tr>");
+            }
+            body.append("</tbody></table></div></section>");
+        }
+        return body.toString();
+    }
+
+    private static List<String> workbookSheetNames(byte[] content) {
+        if (content == null) return Collections.emptyList();
+        NodeList sheets = parseXml(content).getElementsByTagNameNS(SHEET_NS, "sheet");
+        List<String> names = new ArrayList<>();
+        for (int i = 0; i < sheets.getLength(); i++) {
+            String name = ((Element) sheets.item(i)).getAttribute("name");
+            names.add(name == null || name.trim().isEmpty() ? "工作表 " + (i + 1) : name);
+        }
+        return names;
+    }
+
+    private static int sheetNumber(String path) {
+        String number = path.replaceAll("^.*sheet(\\d+)\\.xml$", "$1");
+        try { return Integer.parseInt(number); } catch (NumberFormatException ignored) { return Integer.MAX_VALUE; }
+    }
+
+    private static String cellText(Element cell) {
+        String type = cell.getAttribute("t");
+        String tag = "inlineStr".equals(type) ? "t" : "v";
+        NodeList values = cell.getElementsByTagNameNS(SHEET_NS, tag);
+        return values.getLength() == 0 ? "" : values.item(0).getTextContent();
+    }
+
+    private static Map<String, byte[]> zipEntries(byte[] content) {
+        if (content == null || content.length == 0) throw new IllegalArgumentException("附件内容为空");
+        Map<String, byte[]> entries = new LinkedHashMap<>();
+        int total = 0;
+        try (ZipInputStream input = new ZipInputStream(new ByteArrayInputStream(content))) {
+            ZipEntry entry;
+            byte[] buffer = new byte[4096];
+            while ((entry = input.getNextEntry()) != null) {
+                if (entry.isDirectory()) continue;
+                ByteArrayOutputStream output = new ByteArrayOutputStream();
+                int read;
+                while ((read = input.read(buffer)) >= 0) {
+                    total += read;
+                    if (output.size() + read > MAX_PREVIEW_ENTRY_BYTES || total > MAX_PREVIEW_ARCHIVE_BYTES) {
+                        throw new IllegalArgumentException("附件预览内容过大");
+                    }
+                    output.write(buffer, 0, read);
+                }
+                entries.put(entry.getName(), output.toByteArray());
+            }
+        } catch (IllegalArgumentException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new IllegalArgumentException("附件预览内容无效", ex);
+        }
+        return entries;
+    }
+
+    private static Document parseXml(byte[] content) {
+        if (content == null || content.length == 0) throw new IllegalArgumentException("附件预览内容无效");
+        try {
+            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            factory.setNamespaceAware(true);
+            factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
+            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+            factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+            factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+            factory.setXIncludeAware(false);
+            factory.setExpandEntityReferences(false);
+            return factory.newDocumentBuilder().parse(new InputSource(
+                    new StringReader(new String(content, StandardCharsets.UTF_8))));
+        } catch (Exception ex) {
+            throw new IllegalArgumentException("附件预览内容无效", ex);
+        }
+    }
+
+    private static String previewPage(String title, String format, String content) {
+        return "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"UTF-8\">"
+                + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+                + "<title>" + html(title) + "</title><style>"
+                + "*{box-sizing:border-box}body{margin:0;background:#f8fafc;color:#172033;font:14px/1.7 -apple-system,BlinkMacSystemFont,\"Segoe UI\",\"Microsoft YaHei\",sans-serif}"
+                + ".artifact-preview-document{max-width:920px;margin:0 auto;padding:32px;background:#fff;min-height:100vh}"
+                + ".meta{margin:0 0 28px;color:#667085;font-size:12px}.artifact-preview-document h1{margin:0 0 4px;font-size:22px;line-height:1.4}.artifact-preview-document h2{margin:24px 0 10px;font-size:17px;line-height:1.5}.artifact-preview-document p{margin:0 0 12px;white-space:pre-wrap}.sheet{margin:0 0 30px}.table-wrap{overflow:auto;border:1px solid #e4e7ec}.table-wrap table{width:max-content;min-width:100%;border-collapse:collapse;background:#fff}.table-wrap td{padding:8px 10px;border-right:1px solid #e4e7ec;border-bottom:1px solid #e4e7ec;vertical-align:top;white-space:pre-wrap}.table-wrap tr:first-child td{background:#f2f4f7;font-weight:600}.empty{color:#667085}</style></head><body>"
+                + "<article class=\"artifact-preview-document\"><h1>" + html(title)
+                + "</h1><p class=\"meta\">只读预览 · " + html(format) + "</p>" + content
+                + "</article></body></html>";
+    }
+
+    private static String html(String value) {
+        return String.valueOf(value == null ? "" : value).replace("&", "&amp;")
+                .replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
     }
 
     private static byte[] docx(String content) {
@@ -162,5 +337,15 @@ public class AgentDocumentArtifactService {
         public final String title, filename, format, mimeType;
         public final byte[] content;
         private ArtifactFile(String title, String filename, String format, String mimeType, byte[] content) { this.title = title; this.filename = filename; this.format = format; this.mimeType = mimeType; this.content = content; }
+    }
+
+    public static final class PreviewDocument {
+        public final String title, filename, format, html;
+        private PreviewDocument(String title, String filename, String format, String html) {
+            this.title = title;
+            this.filename = filename;
+            this.format = format;
+            this.html = html;
+        }
     }
 }

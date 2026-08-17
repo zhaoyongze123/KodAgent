@@ -35,7 +35,7 @@ public class AgentDocumentArtifactController {
 
     @GetMapping("/{artifactId}/download")
     @Operation(summary = "下载当前用户有权访问的附件")
-    public void download(@PathVariable String artifactId, HttpServletResponse response) throws Exception {
+    public void download(@PathVariable("artifactId") String artifactId, HttpServletResponse response) throws Exception {
         if (artifactId == null || !artifactId.matches("[0-9a-fA-F-]{16,80}")) {
             response.sendError(HttpServletResponse.SC_BAD_REQUEST, "附件编号无效");
             return;
@@ -55,6 +55,28 @@ public class AgentDocumentArtifactController {
         response.setHeader(HttpHeaders.CONTENT_TYPE, file.mimeType);
         response.setContentLengthLong(file.content.length);
         response.getOutputStream().write(file.content);
+        response.getOutputStream().flush();
+    }
+
+    @GetMapping("/{artifactId}/preview")
+    @Operation(summary = "预览当前用户有权访问的附件")
+    public void preview(@PathVariable("artifactId") String artifactId, HttpServletResponse response) throws Exception {
+        if (artifactId == null || !artifactId.matches("[0-9a-fA-F-]{16,80}")) {
+            response.sendError(HttpServletResponse.SC_BAD_REQUEST, "附件编号无效");
+            return;
+        }
+        AgentDocumentArtifactService.PreviewDocument preview;
+        try {
+            preview = artifactService.preview(getTenantId(), getLoginUserId(), artifactId);
+        } catch (IllegalArgumentException ignored) {
+            response.sendError(HttpServletResponse.SC_NOT_FOUND, "附件不存在、已过期、无权访问或暂不支持预览");
+            return;
+        }
+        response.setHeader(HttpHeaders.CACHE_CONTROL, "private, no-store, max-age=0");
+        response.setHeader(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.inline()
+                .filename(preview.filename + ".html", StandardCharsets.UTF_8).build().toString());
+        response.setContentType("text/html;charset=UTF-8");
+        response.getOutputStream().write(preview.html.getBytes(StandardCharsets.UTF_8));
         response.getOutputStream().flush();
     }
 }
