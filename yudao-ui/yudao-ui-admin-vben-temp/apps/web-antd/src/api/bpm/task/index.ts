@@ -18,7 +18,8 @@ export namespace BpmTaskApi {
     assigneeUser: any; // 处理人
     taskDefinitionKey: string; // 任务定义的标识
     processInstanceId: string; // 流程实例id
-    processInstance: BpmProcessInstanceApi.ProcessInstance; // 流程实例
+    processInstance: BpmTaskApi.ProcessInstance; // 流程实例
+    formType?: number | string;
     parentTaskId: any; // 父任务id
     children: any; // 子任务
     formId: any; // 表单id
@@ -30,6 +31,23 @@ export namespace BpmTaskApi {
     signEnable: any; // 签名设置
     reasonRequire: any; // 原因设置
     nodeType: any; // 节点类型
+  }
+
+  export interface ProcessInstance {
+    category?: string;
+    categoryName?: string;
+    businessKey?: string;
+    createTime?: string;
+    endTime?: string;
+    formVariables?: Record<string, any>;
+    id: string;
+    name: string;
+    processDefinitionId?: string;
+    processDefinitionKey?: string;
+    startTime?: string;
+    startUser?: BpmProcessInstanceApi.User;
+    status?: number;
+    currentTasks?: BpmProcessInstanceApi.Task[];
   }
 }
 

@@ -127,7 +127,10 @@ const canRecreateProcess = computed(
     Boolean(processInstance.value?.businessKey),
 );
 const canWithdrawTask = computed(
-  () => props.section === 'processed' && Boolean(props.request?.taskId),
+  () =>
+    props.section === 'processed' &&
+    Boolean(props.request?.taskId) &&
+    Boolean(approvalDetail.value?.canWithdrawTask),
 );
 const showReadonlyChip = computed(() => props.section === 'copied');
 const showOperationButton = computed(

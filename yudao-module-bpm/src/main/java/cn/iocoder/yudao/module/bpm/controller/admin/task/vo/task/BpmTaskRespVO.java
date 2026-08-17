@@ -2,6 +2,7 @@ package cn.iocoder.yudao.module.bpm.controller.admin.task.vo.task;
 
 import cn.iocoder.yudao.framework.common.core.KeyValue;
 import cn.iocoder.yudao.module.bpm.controller.admin.base.user.UserSimpleBaseVO;
+import cn.iocoder.yudao.module.bpm.controller.admin.task.vo.instance.BpmProcessInstanceRespVO;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.Data;
@@ -101,11 +102,22 @@ public class BpmTaskRespVO {
         @Schema(description = "提交时间", requiredMode = Schema.RequiredMode.REQUIRED)
         private LocalDateTime createTime;
 
+        private LocalDateTime endTime;
+
+        private Integer status;
+
         @Schema(description = "流程定义的编号", requiredMode = Schema.RequiredMode.REQUIRED, example = "2048")
         private String processDefinitionId;
 
+        private String processDefinitionKey;
+
         @Schema(description = "流程摘要", example = "[]")
         private List<KeyValue<String, String>> summary; // 只有流程表单，才有摘要！
+
+        private Map<String, Object> formVariables;
+
+        /** 当前运行中的审批任务，仅用于展示真实当前阶段。 */
+        private List<BpmProcessInstanceRespVO.Task> currentTasks;
 
         /**
          * 发起人的用户信息

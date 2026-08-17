@@ -5,6 +5,7 @@ import cn.hutool.core.convert.Convert;
 import cn.hutool.core.lang.Assert;
 import cn.hutool.core.util.*;
 import cn.hutool.extra.spring.SpringUtil;
+import cn.iocoder.yudao.framework.common.exception.ServiceException;
 import cn.iocoder.yudao.framework.common.pojo.PageResult;
 import cn.iocoder.yudao.framework.common.util.collection.CollectionUtils;
 import cn.iocoder.yudao.framework.common.util.date.DateUtils;
@@ -44,6 +45,8 @@ import org.flowable.engine.ManagementService;
 import org.flowable.engine.RuntimeService;
 import org.flowable.engine.TaskService;
 import org.flowable.engine.history.HistoricActivityInstance;
+import org.flowable.engine.history.HistoricProcessInstance;
+import org.flowable.engine.history.HistoricProcessInstanceQuery;
 import org.flowable.engine.runtime.ActivityInstance;
 import org.flowable.engine.runtime.Execution;
 import org.flowable.engine.runtime.ProcessInstance;
@@ -62,6 +65,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import javax.annotation.Resource;
 import javax.validation.Valid;
+import java.math.BigDecimal;
 import java.util.*;
 import java.util.stream.Stream;
 
@@ -119,13 +123,20 @@ public class BpmTaskServiceImpl implements BpmTaskService {
                 .orderByTaskCreateTime().desc(); // 创建时间倒序
         FlowableUtils.applyTenantFilter(taskQuery);
         if (StrUtil.isNotBlank(pageVO.getName())) {
-            taskQuery.taskNameLike("%" + pageVO.getName() + "%");
+            Set<String> processInstanceIds = findProcessInstanceIdsByName(pageVO.getName());
+            if (CollUtil.isEmpty(processInstanceIds)) {
+                return PageResult.empty();
+            }
+            taskQuery.processInstanceIdIn(processInstanceIds);
         }
         if (StrUtil.isNotEmpty(pageVO.getCategory())) {
             taskQuery.taskCategory(pageVO.getCategory());
         }
         if (StrUtil.isNotEmpty(pageVO.getProcessDefinitionKey())) {
             taskQuery.processDefinitionKey(pageVO.getProcessDefinitionKey());
+        }
+        if (pageVO.getFormType() != null) {
+            taskQuery.processVariableValueEquals("type", normalizeFormTypeFilter(pageVO.getFormType()));
         }
         if (ArrayUtil.isNotEmpty(pageVO.getCreateTime())) {
             taskQuery.taskCreatedAfter(DateUtils.of(pageVO.getCreateTime()[0]));
@@ -225,13 +236,22 @@ public class BpmTaskServiceImpl implements BpmTaskService {
         HistoricTaskInstanceQuery taskQuery = historyService.createHistoricTaskInstanceQuery()
                 .finished() // 已完成
                 .taskAssignee(String.valueOf(userId)) // 分配给自己
+                .taskVariableValueNotEquals(BpmnVariableConstants.TASK_VARIABLE_STATUS,
+                        BpmTaskStatusEnum.CANCEL.getStatus())
                 .includeTaskLocalVariables()
                 .orderByHistoricTaskInstanceEndTime().desc(); // 审批时间倒序
         if (StrUtil.isNotBlank(pageVO.getName())) {
-            taskQuery.taskNameLike("%" + pageVO.getName() + "%");
+            Set<String> processInstanceIds = findProcessInstanceIdsByName(pageVO.getName());
+            if (CollUtil.isEmpty(processInstanceIds)) {
+                return PageResult.empty();
+            }
+            taskQuery.processInstanceIdIn(processInstanceIds);
         }
         if (pageVO.getStatus() != null) {
             taskQuery.taskVariableValueEquals(BpmnVariableConstants.TASK_VARIABLE_STATUS, pageVO.getStatus());
+        }
+        if (pageVO.getFormType() != null) {
+            taskQuery.processVariableValueEquals("type", normalizeFormTypeFilter(pageVO.getFormType()));
         }
 //        if (ArrayUtil.isNotEmpty(pageVO.getCreateTime())) {
 //            taskQuery.taskCreatedAfter(DateUtils.of(pageVO.getCreateTime()[0]));
@@ -263,10 +283,17 @@ public class BpmTaskServiceImpl implements BpmTaskService {
                 .orderByHistoricTaskInstanceEndTime().desc(); // 审批时间倒序
         FlowableUtils.applyTenantFilter(taskQuery);
         if (StrUtil.isNotBlank(pageVO.getName())) {
-            taskQuery.taskNameLike("%" + pageVO.getName() + "%");
+            Set<String> processInstanceIds = findProcessInstanceIdsByName(pageVO.getName());
+            if (CollUtil.isEmpty(processInstanceIds)) {
+                return PageResult.empty();
+            }
+            taskQuery.processInstanceIdIn(processInstanceIds);
         }
         if (StrUtil.isNotEmpty(pageVO.getCategory())) {
             taskQuery.taskCategory(pageVO.getCategory());
+        }
+        if (pageVO.getFormType() != null) {
+            taskQuery.processVariableValueEquals("type", normalizeFormTypeFilter(pageVO.getFormType()));
         }
 //        if (ArrayUtil.isNotEmpty(pageVO.getCreateTime())) {
 //            taskQuery.taskCreatedAfter(DateUtils.of(pageVO.getCreateTime()[0]));
@@ -285,6 +312,33 @@ public class BpmTaskServiceImpl implements BpmTaskService {
                     || task.getCreateTime().after(DateUtils.of(pageVO.getCreateTime()[1])));
         }
         return new PageResult<>(tasks, count);
+    }
+
+    /**
+     * Query parameters arrive as strings, while form-create stores numeric select values as numbers.
+     * Preserve text options and normalize numeric options before passing them to Flowable.
+     */
+    static Object normalizeFormTypeFilter(Object formType) {
+        if (!(formType instanceof String)) {
+            return formType;
+        }
+        String value = (String) formType;
+        if (!NumberUtil.isNumber(value)) {
+            return value;
+        }
+        BigDecimal number = new BigDecimal(value);
+        try {
+            return number.intValueExact();
+        } catch (ArithmeticException ignored) {
+            return number.doubleValue();
+        }
+    }
+
+    Set<String> findProcessInstanceIdsByName(String name) {
+        HistoricProcessInstanceQuery processInstanceQuery = historyService.createHistoricProcessInstanceQuery()
+                .processInstanceNameLike("%" + name + "%");
+        FlowableUtils.applyTenantFilter(processInstanceQuery);
+        return convertSet(processInstanceQuery.list(), HistoricProcessInstance::getId);
     }
 
     @Override
@@ -1250,43 +1304,10 @@ public class BpmTaskServiceImpl implements BpmTaskService {
     @Transactional(rollbackFor = Exception.class)
     @DataPermission(enable = false) // 关闭数据权限，避免查询不到用户数据。相关案例：https://gitee.com/zhijiantianya/yudao-cloud/issues/ID1UYA
     public void withdrawTask(Long userId, String taskId) {
-        // 1.1 查询本人已办任务
-        HistoricTaskInstance taskInstance = historyService.createHistoricTaskInstanceQuery()
-                .taskId(taskId).taskAssignee(userId.toString()).finished().singleResult();
-        if (ObjUtil.isNull(taskInstance)) {
-            throw exception(TASK_WITHDRAW_FAIL_TASK_NOT_EXISTS);
-        }
-        // 1.2 校验流程是否结束
-        ProcessInstance processInstance = processInstanceService.getProcessInstance(taskInstance.getProcessInstanceId());
-        if (ObjUtil.isNull(processInstance)) {
-            throw exception(TASK_WITHDRAW_FAIL_PROCESS_NOT_RUNNING);
-        }
-        // 1.3 判断此流程是否允许撤回
-        BpmProcessDefinitionInfoDO processDefinitionInfo = bpmProcessDefinitionService.getProcessDefinitionInfo(
-                processInstance.getProcessDefinitionId());
-        if (ObjUtil.isNull(processDefinitionInfo) || !Boolean.TRUE.equals(processDefinitionInfo.getAllowWithdrawTask())) {
-            throw exception(TASK_WITHDRAW_FAIL_NOT_ALLOW);
-        }
-        // 1.4 判断下一个节点是否被审批过，如果是则无法撤回
-        BpmnModel bpmnModel = modelService.getBpmnModelByDefinitionId(taskInstance.getProcessDefinitionId());
-        UserTask userTask = (UserTask) BpmnModelUtils.getFlowElementById(bpmnModel, taskInstance.getTaskDefinitionKey());
-        List<String> nextUserTaskKeys = convertList(BpmnModelUtils.getNextUserTasks(userTask), UserTask::getId);
-        if (CollUtil.isEmpty(nextUserTaskKeys)) {
-            throw exception(TASK_WITHDRAW_FAIL_NEXT_TASK_NOT_ALLOW);
-        }
-        // TODO @芋艿：是否选择升级flowable版本解决taskCreatedAfter、taskCreatedBefore问题，升级7.1.0可以；包括 todo 和 done 那边的查询哇？？？ 是的！
-        long nextUserTaskFinishedCount = historyService.createHistoricTaskInstanceQuery()
-                .processInstanceId(processInstance.getProcessInstanceId()).taskDefinitionKeys(nextUserTaskKeys)
-                .taskCreatedAfter(taskInstance.getEndTime()).finished().count();
-        if (nextUserTaskFinishedCount > 0) {
-            throw exception(TASK_WITHDRAW_FAIL_NEXT_TASK_NOT_ALLOW);
-        }
-        // 1.5 获取需要撤回的运行任务
-        List<Task> runningTasks = taskService.createTaskQuery().processInstanceId(processInstance.getProcessInstanceId())
-                .taskDefinitionKeys(nextUserTaskKeys).active().list();
-        if (CollUtil.isEmpty(runningTasks)) {
-            throw exception(TASK_WITHDRAW_FAIL_NEXT_TASK_NOT_ALLOW);
-        }
+        WithdrawContext context = getWithdrawContext(userId, taskId);
+        HistoricTaskInstance taskInstance = context.taskInstance;
+        ProcessInstance processInstance = context.processInstance;
+        List<Task> runningTasks = context.runningTasks;
 
         // 2.1 取消当前任务
         List<String> withdrawExecutionIds = new ArrayList<>();
@@ -1302,6 +1323,76 @@ public class BpmTaskServiceImpl implements BpmTaskService {
                 .processInstanceId(processInstance.getProcessInstanceId())
                 .moveExecutionsToSingleActivityId(withdrawExecutionIds, taskInstance.getTaskDefinitionKey())
                 .changeState();
+    }
+
+    @Override
+    @DataPermission(enable = false)
+    public boolean canWithdrawTask(Long userId, String taskId) {
+        try {
+            getWithdrawContext(userId, taskId);
+            return true;
+        } catch (ServiceException ex) {
+            return false;
+        }
+    }
+
+    private WithdrawContext getWithdrawContext(Long userId, String taskId) {
+        HistoricTaskInstance taskInstance = historyService.createHistoricTaskInstanceQuery()
+                .taskId(taskId).taskAssignee(userId.toString()).finished()
+                .taskVariableValueNotEquals(BpmnVariableConstants.TASK_VARIABLE_STATUS,
+                        BpmTaskStatusEnum.CANCEL.getStatus())
+                .singleResult();
+        if (ObjUtil.isNull(taskInstance)) {
+            throw exception(TASK_WITHDRAW_FAIL_TASK_NOT_EXISTS);
+        }
+        ProcessInstance processInstance = processInstanceService.getProcessInstance(taskInstance.getProcessInstanceId());
+        if (ObjUtil.isNull(processInstance)) {
+            throw exception(TASK_WITHDRAW_FAIL_PROCESS_NOT_RUNNING);
+        }
+        BpmProcessDefinitionInfoDO processDefinitionInfo = bpmProcessDefinitionService.getProcessDefinitionInfo(
+                processInstance.getProcessDefinitionId());
+        if (ObjUtil.isNull(processDefinitionInfo) || !Boolean.TRUE.equals(processDefinitionInfo.getAllowWithdrawTask())) {
+            throw exception(TASK_WITHDRAW_FAIL_NOT_ALLOW);
+        }
+        BpmnModel bpmnModel = modelService.getBpmnModelByDefinitionId(taskInstance.getProcessDefinitionId());
+        FlowElement flowElement = BpmnModelUtils.getFlowElementById(bpmnModel, taskInstance.getTaskDefinitionKey());
+        if (!(flowElement instanceof UserTask)) {
+            throw exception(TASK_WITHDRAW_FAIL_NEXT_TASK_NOT_ALLOW);
+        }
+        UserTask userTask = (UserTask) flowElement;
+        List<String> nextUserTaskKeys = convertList(BpmnModelUtils.getNextUserTasks(userTask), UserTask::getId);
+        if (CollUtil.isEmpty(nextUserTaskKeys)) {
+            throw exception(TASK_WITHDRAW_FAIL_NEXT_TASK_NOT_ALLOW);
+        }
+        long laterFinishedCount = historyService.createHistoricTaskInstanceQuery()
+                .processInstanceId(processInstance.getProcessInstanceId())
+                .taskCreatedAfter(taskInstance.getEndTime()).finished()
+                .taskVariableValueNotEquals(BpmnVariableConstants.TASK_VARIABLE_STATUS,
+                        BpmTaskStatusEnum.CANCEL.getStatus())
+                .count();
+        if (laterFinishedCount > 0) {
+            throw exception(TASK_WITHDRAW_FAIL_NEXT_TASK_NOT_ALLOW);
+        }
+        List<Task> runningTasks = taskService.createTaskQuery().processInstanceId(processInstance.getProcessInstanceId())
+                .taskDefinitionKeys(nextUserTaskKeys).active().list();
+        if (CollUtil.isEmpty(runningTasks)) {
+            throw exception(TASK_WITHDRAW_FAIL_NEXT_TASK_NOT_ALLOW);
+        }
+        return new WithdrawContext(taskInstance, processInstance, runningTasks);
+    }
+
+    private static final class WithdrawContext {
+
+        private final HistoricTaskInstance taskInstance;
+        private final ProcessInstance processInstance;
+        private final List<Task> runningTasks;
+
+        private WithdrawContext(HistoricTaskInstance taskInstance, ProcessInstance processInstance,
+                                List<Task> runningTasks) {
+            this.taskInstance = taskInstance;
+            this.processInstance = processInstance;
+            this.runningTasks = runningTasks;
+        }
     }
 
     /**

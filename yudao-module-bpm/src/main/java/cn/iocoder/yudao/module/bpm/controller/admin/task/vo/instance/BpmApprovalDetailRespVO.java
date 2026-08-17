@@ -28,6 +28,9 @@ public class BpmApprovalDetailRespVO {
     @Schema(description = "待办任务")
     private BpmTaskRespVO todoTask;
 
+    @Schema(description = "当前用户是否可以撤回指定的已办任务")
+    private Boolean canWithdrawTask;
+
     /**
      * 所属流程定义信息
      */

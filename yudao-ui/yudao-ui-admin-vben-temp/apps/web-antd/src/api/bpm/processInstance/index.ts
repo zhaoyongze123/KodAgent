@@ -17,7 +17,7 @@ export namespace BpmProcessInstanceApi {
     category: string;
     categoryName?: string;
     createTime: string;
-    endTime: string;
+    endTime?: string;
     fields: string[];
     formVariables: Record<string, any>;
     id: number;
@@ -26,7 +26,7 @@ export namespace BpmProcessInstanceApi {
     processDefinitionId: string;
     remark: string;
     result: number;
-    startTime?: Date;
+    startTime?: Date | string;
     startUser?: User;
     status: number;
     summary?: {
@@ -58,6 +58,7 @@ export namespace BpmProcessInstanceApi {
     formFieldsPermission: any;
     processDefinition: BpmModelApi.ProcessDefinition;
     processInstance: BpmProcessInstanceApi.ProcessInstance;
+    canWithdrawTask?: boolean;
     status: number;
     todoTask: BpmTaskApi.Task;
   }

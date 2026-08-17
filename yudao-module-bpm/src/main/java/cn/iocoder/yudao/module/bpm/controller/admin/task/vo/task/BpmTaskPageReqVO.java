@@ -23,6 +23,9 @@ public class BpmTaskPageReqVO extends PageParam {
     @Schema(description = "流程定义的标识", example = "2048")
     private String processDefinitionKey; // 精准匹配
 
+    @Schema(description = "流程表单类型字段值", example = "1")
+    private Object formType;
+
     @Schema(description = "审批状态", example = "1")
     @InEnum(BpmTaskStatusEnum.class)
     private Integer status; // 仅【已办】使用

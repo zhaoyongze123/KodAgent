@@ -56,6 +56,11 @@ import {
 } from '#/utils/kod-entry';
 import { normalizeOaAssetUrl } from '#/utils';
 import { isAdminUser } from '#/utils/oa-user';
+import {
+  getCurrentStageLabel,
+  getProcessEndTime,
+  getSelectFieldOptions,
+} from './process-runtime';
 import ProcessDetail, {
   type OaLiteDetailRequest,
   type OaLiteDetailSection,
@@ -103,6 +108,7 @@ interface ListFilterState {
   name: string;
   processDefinitionId?: string;
   processDefinitionKey?: string;
+  formType?: number | string;
   status?: number;
 }
 
@@ -340,6 +346,7 @@ function createDefaultFilter(): ListFilterState {
     name: '',
     processDefinitionId: undefined,
     processDefinitionKey: undefined,
+    formType: undefined,
     status: undefined,
   };
 }
@@ -737,11 +744,27 @@ const currentProcessFilterValue = computed<string | undefined>({
     }
     if (activeTab.value === 'copied') {
       listFilters.copied.processDefinitionId = value;
+      listFilters.copied.formType = undefined;
       return;
     }
     listFilters[activeTab.value].processDefinitionKey = value;
+    listFilters[activeTab.value].formType = undefined;
   },
 });
+const currentProcessDefinition = computed(() => {
+  const value = currentProcessFilterValue.value;
+  if (!value || activeTab.value === 'copied') {
+    return undefined;
+  }
+  return availableTemplateDefinitions.value.find(
+    (item) => (item.definition.key || item.definition.id) === value,
+  )?.definition;
+});
+const currentFormTypeOptions = computed<SelectOption[]>(() =>
+  getSelectFieldOptions(currentProcessDefinition.value?.formFields).map(
+    (option) => ({ label: option.label, value: option.value }),
+  ),
+);
 
 const currentFilter = computed(() =>
   activeTab.value === 'create' ? null : listFilters[activeTab.value],
@@ -897,21 +920,6 @@ function syncSelectedItem(tab: ListTab) {
   selectedItem.value = matchedItem || null;
 }
 
-function getProcessStatusText(status?: number) {
-  switch (status) {
-    case BpmProcessInstanceStatus.APPROVE:
-      return '已通过';
-    case BpmProcessInstanceStatus.CANCEL:
-      return '已取消';
-    case BpmProcessInstanceStatus.REJECT:
-      return '已驳回';
-    case BpmProcessInstanceStatus.RUNNING:
-      return '进行中';
-    default:
-      return '处理中';
-  }
-}
-
 function dedupeDoneTasks(tasks: BpmTaskApi.Task[]) {
   const taskMap = new Map<string, BpmTaskApi.Task>();
   tasks.forEach((task) => {
@@ -1037,11 +1045,26 @@ function getListType(item: DetailPayload) {
   if (!item) {
     return '-';
   }
-  if (isTaskItem(item)) {
-    return item.processInstance?.categoryName || item.processInstance?.category || '-';
-  }
   if (isCopiedItem(item)) {
     return item.processInstanceName || '-';
+  }
+  const processDefinitionKey = isTaskItem(item)
+    ? item.processInstance?.processDefinitionKey
+    : item.processDefinition?.key;
+  const formVariables = isTaskItem(item)
+    ? item.processInstance?.formVariables
+    : item.formVariables;
+  const definition = availableTemplateDefinitions.value.find(
+    (candidate) => candidate.definition.key === processDefinitionKey,
+  )?.definition;
+  const typeOption = getSelectFieldOptions(definition?.formFields).find(
+    (option) => String(option.value) === String(formVariables?.type),
+  );
+  if (typeOption) {
+    return typeOption.label;
+  }
+  if (isTaskItem(item)) {
+    return item.processInstance?.categoryName || item.processInstance?.category || '-';
   }
   return item.categoryName || item.category || '-';
 }
@@ -1077,12 +1100,15 @@ function getListStage(item: DetailPayload) {
     return '-';
   }
   if (isTaskItem(item)) {
-    return item.name || '-';
+    return getCurrentStageLabel({
+      status: item.processInstance?.status,
+      tasks: item.processInstance?.currentTasks,
+    });
   }
   if (isCopiedItem(item)) {
     return item.activityName || '-';
   }
-  return item.tasks?.[0]?.name || getProcessStatusText(item.status);
+  return getCurrentStageLabel(item);
 }
 
 function getListStartTime(item: DetailPayload) {
@@ -1103,12 +1129,14 @@ function getListEndTime(item: DetailPayload) {
     return '-';
   }
   if (isTaskItem(item)) {
-    return formatDateTime(item.processInstance?.endTime || item.endTime);
+    return formatDateTime(
+      getProcessEndTime(item.processInstance?.status, item.processInstance?.endTime),
+    );
   }
   if (isCopiedItem(item)) {
     return '-';
   }
-  return formatDateTime(item.endTime);
+  return formatDateTime(getProcessEndTime(item.status, item.endTime));
 }
 
 function getKeywordPlaceholder() {
@@ -1117,7 +1145,7 @@ function getKeywordPlaceholder() {
       return '请输入流程名称';
     case 'pending':
     case 'processed':
-      return '请输入任务名称';
+      return '请输入流程名称';
     case 'copied':
     case 'initiated':
       return '请输入流程名称';
@@ -1173,6 +1201,7 @@ async function loadTabData(tab: ListTab) {
           name: filter.name.trim() || undefined,
           category: filter.category,
           processDefinitionKey: filter.processDefinitionKey,
+          formFieldsParams: filter.formType === undefined ? undefined : JSON.stringify({ type: filter.formType }),
           status: filter.status,
           createTime,
         });
@@ -1187,6 +1216,7 @@ async function loadTabData(tab: ListTab) {
           name: filter.name.trim() || undefined,
           category: filter.category,
           processDefinitionKey: filter.processDefinitionKey,
+          formFieldsParams: filter.formType === undefined ? undefined : JSON.stringify({ type: filter.formType }),
           status: filter.status,
           createTime,
         });
@@ -1201,6 +1231,7 @@ async function loadTabData(tab: ListTab) {
           name: filter.name.trim() || undefined,
           category: filter.category,
           processDefinitionKey: filter.processDefinitionKey,
+          formType: filter.formType,
           createTime,
         });
         todoItems.value = resp.list || [];
@@ -1214,6 +1245,7 @@ async function loadTabData(tab: ListTab) {
           name: filter.name.trim() || undefined,
           category: filter.category,
           processDefinitionKey: filter.processDefinitionKey,
+          formType: filter.formType,
           status: filter.status,
           createTime,
         });
@@ -1816,6 +1848,17 @@ onUnmounted(() => {
                           placeholder="流程分类"
                           allow-clear
                           :options="categoryOptions"
+                          popup-class-name="oa-lite-status-popup"
+                          :get-popup-container="(triggerNode) => triggerNode.parentNode"
+                        />
+
+                        <Select
+                          v-if="currentFormTypeOptions.length > 0"
+                          v-model:value="currentFilter!.formType"
+                          class="oa-lite-filter-control"
+                          placeholder="流程类型"
+                          allow-clear
+                          :options="currentFormTypeOptions"
                           popup-class-name="oa-lite-status-popup"
                           :get-popup-container="(triggerNode) => triggerNode.parentNode"
                         />

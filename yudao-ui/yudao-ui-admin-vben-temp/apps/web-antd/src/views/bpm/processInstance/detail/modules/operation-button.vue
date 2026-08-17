@@ -79,6 +79,8 @@ const [SignatureModal, signatureModalApi] = useVbenModal({
 const router = useRouter();
 const userStore = useUserStore();
 const userId = userStore.userInfo?.id;
+// 高级流转动作尚未完成逐项权限与回滚场景验证，先只开放通过、拒绝和发起人取消。
+const showAdvancedTaskOperations = false;
 const formLoading = ref(false); // 表单加载中
 const popOverVisible: any = ref({
   approve: false,
@@ -928,6 +930,7 @@ defineExpose({ loadTodoTask });
         :overlay-style="{ width: '400px' }"
         trigger="click"
         v-if="
+          showAdvancedTaskOperations &&
           runningTask &&
           isHandleTaskStatus() &&
           isShowButton(BpmTaskOperationButtonTypeEnum.COPY)
@@ -1000,6 +1003,7 @@ defineExpose({ loadTodoTask });
         :overlay-style="{ width: '400px' }"
         trigger="click"
         v-if="
+          showAdvancedTaskOperations &&
           runningTask &&
           isHandleTaskStatus() &&
           isShowButton(BpmTaskOperationButtonTypeEnum.TRANSFER)
@@ -1073,6 +1077,7 @@ defineExpose({ loadTodoTask });
         :overlay-style="{ width: '400px' }"
         trigger="click"
         v-if="
+          showAdvancedTaskOperations &&
           runningTask &&
           isHandleTaskStatus() &&
           isShowButton(BpmTaskOperationButtonTypeEnum.DELEGATE)
@@ -1146,6 +1151,7 @@ defineExpose({ loadTodoTask });
         :overlay-style="{ width: '400px' }"
         trigger="click"
         v-if="
+          showAdvancedTaskOperations &&
           runningTask &&
           isHandleTaskStatus() &&
           isShowButton(BpmTaskOperationButtonTypeEnum.ADD_SIGN)
@@ -1230,7 +1236,7 @@ defineExpose({ loadTodoTask });
         placement="top"
         :overlay-style="{ width: '400px' }"
         trigger="click"
-        v-if="runningTask?.children.length > 0"
+        v-if="showAdvancedTaskOperations && runningTask?.children.length > 0"
       >
         <Button type="dashed" @click="openPopover('deleteSign')">
           <IconifyIcon :size="14" icon="icon-park-outline:minus" /> 减签
@@ -1297,6 +1303,7 @@ defineExpose({ loadTodoTask });
         :overlay-style="{ width: '400px' }"
         trigger="click"
         v-if="
+          showAdvancedTaskOperations &&
           runningTask &&
           isHandleTaskStatus() &&
           isShowButton(BpmTaskOperationButtonTypeEnum.RETURN)

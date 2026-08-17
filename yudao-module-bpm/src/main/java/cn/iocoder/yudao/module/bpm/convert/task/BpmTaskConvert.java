@@ -8,6 +8,7 @@ import cn.iocoder.yudao.framework.common.util.date.DateUtils;
 import cn.iocoder.yudao.framework.common.util.number.NumberUtils;
 import cn.iocoder.yudao.framework.common.util.object.BeanUtils;
 import cn.iocoder.yudao.module.bpm.controller.admin.base.user.UserSimpleBaseVO;
+import cn.iocoder.yudao.module.bpm.controller.admin.task.vo.instance.BpmProcessInstanceRespVO;
 import cn.iocoder.yudao.module.bpm.controller.admin.task.vo.task.BpmTaskRespVO;
 import cn.iocoder.yudao.module.bpm.dal.dataobject.definition.BpmFormDO;
 import cn.iocoder.yudao.module.bpm.dal.dataobject.definition.BpmProcessDefinitionInfoDO;
@@ -53,7 +54,15 @@ public interface BpmTaskConvert {
             taskVO.setProcessInstance(BeanUtils.toBean(processInstance, BpmTaskRespVO.ProcessInstance.class));
             AdminUserRespDTO startUser = userMap.get(NumberUtils.parseLong(processInstance.getStartUserId()));
             taskVO.getProcessInstance().setStartUser(BeanUtils.toBean(startUser, UserSimpleBaseVO.class));
-            taskVO.getProcessInstance().setCreateTime(DateUtils.of(processInstance.getStartTime()));
+            BpmProcessInstanceRespVO.Task currentTask = BeanUtils.toBean(taskVO, BpmProcessInstanceRespVO.Task.class);
+            AdminUserRespDTO currentAssignee = userMap.get(taskVO.getAssignee());
+            if (currentAssignee != null) {
+                currentTask.setAssigneeUser(BeanUtils.toBean(currentAssignee, UserSimpleBaseVO.class));
+            }
+            taskVO.getProcessInstance().setCreateTime(DateUtils.of(processInstance.getStartTime()))
+                    .setStatus(FlowableUtils.getProcessInstanceStatus(processInstance))
+                    .setFormVariables(processInstance.getProcessVariables())
+                    .setCurrentTasks(java.util.Collections.singletonList(currentTask));
             // 摘要
             taskVO.getProcessInstance().setSummary(FlowableUtils.getSummary(processDefinitionInfoMap.get(processInstance.getProcessDefinitionId()),
                     processInstance.getProcessVariables()));
@@ -62,6 +71,7 @@ public interface BpmTaskConvert {
 
     default PageResult<BpmTaskRespVO> buildTaskPage(PageResult<HistoricTaskInstance> pageResult,
                                                     Map<String, HistoricProcessInstance> processInstanceMap,
+                                                    Map<String, List<Task>> currentTaskMap,
                                                     Map<Long, AdminUserRespDTO> userMap,
                                                     Map<Long, DeptRespDTO> deptMap,
                                                     Map<String, BpmProcessDefinitionInfoDO> processDefinitionInfoMap) {
@@ -79,6 +89,20 @@ public interface BpmTaskConvert {
             if (processInstance != null) {
                 AdminUserRespDTO startUser = userMap.get(NumberUtils.parseLong(processInstance.getStartUserId()));
                 taskVO.setProcessInstance(BeanUtils.toBean(processInstance, BpmTaskRespVO.ProcessInstance.class));
+                List<Task> currentTasks = currentTaskMap.get(taskVO.getProcessInstanceId());
+                taskVO.getProcessInstance().setStatus(FlowableUtils.getProcessInstanceStatus(processInstance))
+                        .setFormVariables(processInstance.getProcessVariables())
+                        .setCurrentTasks(CollUtil.isEmpty(currentTasks)
+                                ? java.util.Collections.emptyList()
+                                : convertList(currentTasks, currentTask ->
+                                BeanUtils.toBean(currentTask, BpmProcessInstanceRespVO.Task.class, currentTaskVO -> {
+                                    AdminUserRespDTO currentAssignee = userMap.get(NumberUtils.parseLong(currentTask.getAssignee()));
+                                    if (currentAssignee != null) {
+                                        currentTaskVO.setAssigneeUser(BeanUtils.toBean(currentAssignee, UserSimpleBaseVO.class));
+                                        findAndThen(deptMap, currentAssignee.getDeptId(),
+                                                dept -> currentTaskVO.getAssigneeUser().setDeptName(dept.getName()));
+                                    }
+                                })));
                 taskVO.getProcessInstance().setStartUser(BeanUtils.toBean(startUser, UserSimpleBaseVO.class));
                 // 摘要
                 taskVO.getProcessInstance().setSummary(FlowableUtils.getSummary(processDefinitionInfoMap.get(processInstance.getProcessDefinitionId()),

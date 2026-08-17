@@ -217,7 +217,7 @@ public class BpmProcessInstanceServiceImpl implements BpmProcessInstanceService 
 
         // 2.2 流程已经结束，直接 return，无需预测
         if (BpmProcessInstanceStatusEnum.isProcessEndStatus(processInstanceStatus)) {
-            return buildApprovalDetail(reqVO, bpmnModel, processDefinition, processDefinitionInfo,
+            return buildApprovalDetail(loginUserId, reqVO, bpmnModel, processDefinition, processDefinitionInfo,
                     historicProcessInstance,
                     processInstanceStatus, endActivityNodes, runActivityNodes, null, null);
         }
@@ -242,7 +242,7 @@ public class BpmProcessInstanceServiceImpl implements BpmProcessInstanceService 
                 processVariables, activities, needSimulateTaskDefKeysByReturn);
 
         // 4. 拼接最终数据
-        return buildApprovalDetail(reqVO, bpmnModel, processDefinition, processDefinitionInfo, historicProcessInstance,
+        return buildApprovalDetail(loginUserId, reqVO, bpmnModel, processDefinition, processDefinitionInfo, historicProcessInstance,
                 processInstanceStatus, endActivityNodes, runActivityNodes, simulateActivityNodes, todoTask);
     }
 
@@ -368,7 +368,7 @@ public class BpmProcessInstanceServiceImpl implements BpmProcessInstanceService 
      * <p>
      * 主要是，拼接审批人的用户信息、部门信息
      */
-    private BpmApprovalDetailRespVO buildApprovalDetail(BpmApprovalDetailReqVO reqVO,
+    private BpmApprovalDetailRespVO buildApprovalDetail(Long loginUserId, BpmApprovalDetailReqVO reqVO,
                                                         BpmnModel bpmnModel,
                                                         ProcessDefinition processDefinition,
                                                         BpmProcessDefinitionInfoDO processDefinitionInfo,
@@ -390,9 +390,12 @@ public class BpmProcessInstanceServiceImpl implements BpmProcessInstanceService 
         Map<String, String> formFieldsPermission = getFormFieldsPermission(bpmnModel, reqVO.getActivityId(), taskId);
 
         // 3. 拼接数据
-        return BpmProcessInstanceConvert.INSTANCE.buildApprovalDetail(bpmnModel, processDefinition,
+        BpmApprovalDetailRespVO detail = BpmProcessInstanceConvert.INSTANCE.buildApprovalDetail(bpmnModel, processDefinition,
                 processDefinitionInfo, processInstance,
                 processInstanceStatus, approveNodes, todoTask, formFieldsPermission, userMap, deptMap);
+        detail.setCanWithdrawTask(reqVO.getTaskId() != null
+                && taskService.canWithdrawTask(loginUserId, reqVO.getTaskId()));
+        return detail;
     }
 
     /**

@@ -492,6 +492,7 @@ defineExpose({ setCustomApproveUsers, batchSetCustomApproveUsers });
                 <template #icon>
                   <IconifyIcon
                     icon="lucide:plus"
+                    :size="20"
                     class="oa-process-timeline-add-user-icon"
                   />
                 </template>
@@ -711,13 +712,24 @@ defineExpose({ setCustomApproveUsers, batchSetCustomApproveUsers });
 
 .oa-process-timeline-add-user :deep(.ant-btn-icon) {
   display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
   margin: 0;
   line-height: 1;
 }
 
+.oa-process-timeline-add-user :deep(.ant-btn-icon svg) {
+  display: block;
+  width: 20px;
+  height: 20px;
+  color: #fff;
+  stroke: currentColor;
+}
+
 .oa-process-timeline-add-user-icon {
   color: #fff;
-  font-size: 18px;
   stroke-width: 2.5;
 }
 

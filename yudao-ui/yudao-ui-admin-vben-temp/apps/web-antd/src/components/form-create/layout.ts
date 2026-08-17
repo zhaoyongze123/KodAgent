@@ -36,6 +36,42 @@ function isWideField(rule: any) {
   );
 }
 
+function isTimeRangePair(startRule: any, endRule: any) {
+  const startField = String(startRule?.field || '');
+  const endField = String(endRule?.field || '');
+  const startTitle = String(startRule?.title || '');
+  const endTitle = String(endRule?.title || '');
+  return (
+    (/^(start|begin)(time|date)?$/i.test(startField) &&
+      /^(end|finish)(time|date)?$/i.test(endField)) ||
+    (startTitle.includes('开始') && endTitle.includes('结束'))
+  );
+}
+
+function getRuleColumnSpan(rule: any) {
+  const col = rule?.col;
+  if (!col) {
+    return 12;
+  }
+  const span = Number(col.span ?? col.md ?? col.lg ?? col.xl ?? 12);
+  return span > 0 && span <= 24 ? span : 12;
+}
+
+function getOccupiedColumns(rules: any[], endExclusive: number) {
+  let occupied = 0;
+  for (let index = 0; index < endExclusive; index += 1) {
+    const span = getRuleColumnSpan(rules[index]);
+    if (occupied + span > 24) {
+      occupied = 0;
+    }
+    occupied += span;
+    if (occupied === 24) {
+      occupied = 0;
+    }
+  }
+  return occupied;
+}
+
 /**
  * 流程表单的布局只由表单配置决定：
  * - 单列 / 两列：使用 form-create 的全局 col 配置；
@@ -70,7 +106,7 @@ export function setFlowFormLayout(
     ...nextOption,
     col: mode === 'two-column' ? TWO_COLUMN_COL : ONE_COLUMN_COL,
     row: {
-      ...(nextOption.row || {}),
+      ...nextOption.row,
       gutter: 16,
     },
   };
@@ -87,7 +123,8 @@ export function normalizeFlowFormRulesForDisplay(
   if (mode !== 'two-column') {
     return rules;
   }
-  return rules.map((rule) => {
+
+  const normalizedRules = rules.map((rule) => {
     if (rule?.col || !isWideField(rule)) {
       return rule;
     }
@@ -96,4 +133,41 @@ export function normalizeFlowFormRulesForDisplay(
       col: ONE_COLUMN_COL,
     };
   });
+
+  for (let index = 0; index < normalizedRules.length - 1; index += 1) {
+    const startRule = normalizedRules[index];
+    const endRule = normalizedRules[index + 1];
+    if (!isTimeRangePair(startRule, endRule)) {
+      continue;
+    }
+
+    // The stored form usually defaults every short field to half width. When a
+    // preceding single field occupies a half row, start/end would otherwise split.
+    const previousRule = normalizedRules[index - 1];
+    if (
+      getOccupiedColumns(normalizedRules, index) === 12 &&
+      previousRule &&
+      !previousRule.col &&
+      !isWideField(previousRule)
+    ) {
+      normalizedRules[index - 1] = {
+        ...previousRule,
+        col: ONE_COLUMN_COL,
+      };
+    }
+    if (!startRule.col) {
+      normalizedRules[index] = {
+        ...startRule,
+        col: TWO_COLUMN_COL,
+      };
+    }
+    if (!endRule.col) {
+      normalizedRules[index + 1] = {
+        ...endRule,
+        col: TWO_COLUMN_COL,
+      };
+    }
+  }
+
+  return normalizedRules;
 }

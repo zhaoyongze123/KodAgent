@@ -266,6 +266,15 @@ public interface BpmTaskService {
      */
     void withdrawTask(Long userId, String taskId);
 
+    /**
+     * 判断用户的已办任务是否仍满足撤回条件。
+     *
+     * @param userId 用户编号
+     * @param taskId 已办任务编号
+     * @return 是否可以撤回
+     */
+    boolean canWithdrawTask(Long userId, String taskId);
+
     // ========== Event 事件相关方法 ==========
 
     /**

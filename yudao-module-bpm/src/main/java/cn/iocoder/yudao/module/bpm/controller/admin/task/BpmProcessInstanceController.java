@@ -110,9 +110,12 @@ public class BpmProcessInstanceController {
                 convertSet(pageResult.getList(), HistoricProcessInstance::getProcessDefinitionId));
         Map<String, BpmCategoryDO> categoryMap = categoryService.getCategoryMap(
                 convertSet(processDefinitionMap.values(), ProcessDefinition::getCategory));
-        // 发起人信息
-        Map<Long, AdminUserRespDTO> userMap = adminUserApi.getUserMap(
-                convertSet(pageResult.getList(), processInstance -> NumberUtils.parseLong(processInstance.getStartUserId())));
+        // 发起人和运行中审批人信息
+        Set<Long> userIds = convertSet(pageResult.getList(),
+                processInstance -> NumberUtils.parseLong(processInstance.getStartUserId()));
+        userIds.addAll(convertSetByFlatMap(taskMap.values(), tasks -> tasks.stream()
+                .map(Task::getAssignee).filter(StrUtil::isNotBlank).map(Long::parseLong)));
+        Map<Long, AdminUserRespDTO> userMap = adminUserApi.getUserMap(userIds);
         Map<Long, DeptRespDTO> deptMap = deptApi.getDeptMap(
                 convertSet(userMap.values(), AdminUserRespDTO::getDeptId));
         Map<String, BpmProcessDefinitionInfoDO> processDefinitionInfoMap = processDefinitionService.getProcessDefinitionInfoMap(

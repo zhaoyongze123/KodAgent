@@ -29,7 +29,11 @@ import {
 } from '#/api/bpm/processInstance';
 import { getSimpleUserList } from '#/api/system/user';
 import DictTag from '#/components/dict-tag/dict-tag.vue';
-import { setConfAndFields2 } from '#/components/form-create';
+import {
+  getFlowFormLayoutMode,
+  normalizeFlowFormRulesForDisplay,
+  setConfAndFields2,
+} from '#/components/form-create';
 import { registerComponent } from '#/utils';
 
 import ProcessInstanceBpmnViewer from './modules/bpm-viewer.vue';
@@ -129,6 +133,11 @@ async function getApprovalDetail() {
           processDefinition.value.formConf,
           processDefinition.value.formFields,
           processInstance.value.formVariables,
+        );
+        const layoutMode = getFlowFormLayoutMode(detailForm.value.option);
+        detailForm.value.rule = normalizeFlowFormRulesForDisplay(
+          detailForm.value.rule,
+          layoutMode,
         );
       }
       await nextTick();

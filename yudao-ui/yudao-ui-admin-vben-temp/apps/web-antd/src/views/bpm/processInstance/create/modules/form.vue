@@ -358,6 +358,7 @@ defineExpose({ initProcessInfo });
         <Col :xs="24" :sm="24" :md="6" :lg="6" :xl="6">
           <ProcessInstanceTimeline
             :activity-nodes="activityNodes"
+            :show-status-icon="false"
             @select-user-confirm="selectUserConfirm"
           />
         </Col>

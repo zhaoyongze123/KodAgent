@@ -268,6 +268,8 @@ validate_release() {
   docker inspect "$DB_CONTAINER" --format '{{.State.Status}}' | grep -qx running || die "数据库容器未运行：$DB_CONTAINER"
   if (( HAS_FRONTEND )); then
     docker inspect "$NGINX_CONTAINER" >/dev/null 2>&1 || die "找不到 OA Nginx 容器：$NGINX_CONTAINER"
+    docker inspect "$NGINX_CONTAINER" --format '{{.State.Status}}' | grep -qx running \
+      || die "OA Nginx 容器未运行：$NGINX_CONTAINER；请先检查 docker logs 并恢复容器后再更新。"
   fi
 }
 
