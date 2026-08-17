@@ -29,6 +29,7 @@ public final class AgentEventSchemaMigrator {
     static final String PARTY_KNOWLEDGE_V1 = "agent_party_knowledge_v1";
     static final String PROJECT_PROVIDER_V1 = "agent_project_provider_v1";
     static final String PROJECT_HYBRID_RAG_V1 = "agent_project_hybrid_rag_v1";
+    static final String KNOWLEDGE_SOURCE_MANAGEMENT_V1 = "agent_knowledge_source_management_v1";
     static final String DOCUMENT_ARTIFACT_V1 = "agent_generated_artifact_v1";
     private static final String DURABLE_CURSOR_V1 = "agent_run_event_durable_cursor_v1";
 
@@ -109,6 +110,11 @@ public final class AgentEventSchemaMigrator {
         requireColumn("agent_project_report", "expires_at");
         requireColumn("agent_knowledge_source", "source_type");
         requireColumn("agent_knowledge_source", "extraction_status");
+        requireColumn("agent_knowledge_source", "library_id");
+        requireColumn("agent_knowledge_library", "source_kind");
+        requireColumn("agent_knowledge_library", "access_mode");
+        requireColumn("agent_knowledge_library_acl", "subject_type");
+        requireColumn("agent_knowledge_upload", "content_data");
         requireColumn("agent_project_document_sync", "status");
         requireColumn("agent_project_analysis_audit", "statistics_rule_version");
         requireColumn("agent_project_analysis_audit", "retrieval_metadata");
@@ -133,6 +139,7 @@ public final class AgentEventSchemaMigrator {
                 PARTY_FILE_CONTRACT_V1, PARTY_FILE_OPERATION_BINDING_V1,
                 APPROVAL_OPERATION_BINDING_V1,
                 MODEL_CONFIG_V1, PARTY_KNOWLEDGE_V1, PROJECT_PROVIDER_V1, PROJECT_HYBRID_RAG_V1,
+                KNOWLEDGE_SOURCE_MANAGEMENT_V1,
                 DOCUMENT_ARTIFACT_V1));
     }
 }

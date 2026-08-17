@@ -9,7 +9,7 @@ class AgentEventSchemaMigratorTest {
 
     @Test
     void validatorRequiresEveryCanonicalMigrationVersion() {
-        assertEquals(13, AgentEventSchemaMigrator.requiredMigrationVersions().size());
+        assertEquals(14, AgentEventSchemaMigrator.requiredMigrationVersions().size());
         assertTrue(AgentEventSchemaMigrator.requiredMigrationVersions().contains(
                 AgentEventSchemaMigrator.APPROVAL_CONTRACT_V1));
         assertTrue(AgentEventSchemaMigrator.requiredMigrationVersions().contains(
@@ -32,6 +32,8 @@ class AgentEventSchemaMigratorTest {
                 AgentEventSchemaMigrator.PROJECT_PROVIDER_V1));
         assertTrue(AgentEventSchemaMigrator.requiredMigrationVersions().contains(
                 AgentEventSchemaMigrator.PROJECT_HYBRID_RAG_V1));
+        assertTrue(AgentEventSchemaMigrator.requiredMigrationVersions().contains(
+                AgentEventSchemaMigrator.KNOWLEDGE_SOURCE_MANAGEMENT_V1));
         assertTrue(AgentEventSchemaMigrator.requiredMigrationVersions().contains(
                 AgentEventSchemaMigrator.DOCUMENT_ARTIFACT_V1));
     }

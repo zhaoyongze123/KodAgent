@@ -81,6 +81,86 @@ CREATE UNIQUE INDEX IF NOT EXISTS uk_agent_knowledge_project_source
     ON agent_knowledge_source (tenant_id, source_type, project_id, kod_file_id)
     WHERE source_type = 'PROJECT_FILES';
 
+-- 统一知识源管理。目录源保存稳定 sourceID；本地上传源保存受控二进制。
+-- 两者都不保存 KodCloud 路径、公开下载链接、浏览器令牌或 accessToken。
+CREATE TABLE IF NOT EXISTS agent_knowledge_library (
+    library_id BIGSERIAL PRIMARY KEY,
+    tenant_id BIGINT NOT NULL,
+    name VARCHAR(200) NOT NULL,
+    source_kind VARCHAR(32) NOT NULL,
+    kod_folder_id BIGINT,
+    owner_user_id BIGINT NOT NULL,
+    access_mode VARCHAR(32) NOT NULL,
+    status VARCHAR(16) NOT NULL DEFAULT 'ACTIVE',
+    last_sync_at TIMESTAMPTZ,
+    last_sync_status VARCHAR(32),
+    last_error_code VARCHAR(128),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT ck_agent_knowledge_library_kind CHECK (source_kind IN ('KOD_FOLDER', 'LOCAL_UPLOAD')),
+    CONSTRAINT ck_agent_knowledge_library_access CHECK (
+        (source_kind = 'KOD_FOLDER' AND access_mode = 'FOLDER' AND kod_folder_id IS NOT NULL)
+        OR (source_kind = 'LOCAL_UPLOAD' AND access_mode IN ('ALL', 'CUSTOM') AND kod_folder_id IS NULL)
+    ),
+    CONSTRAINT ck_agent_knowledge_library_status CHECK (status IN ('ACTIVE', 'DISABLED'))
+);
+CREATE INDEX IF NOT EXISTS idx_agent_knowledge_library_tenant
+    ON agent_knowledge_library (tenant_id, status, source_kind, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS agent_knowledge_library_acl (
+    library_id BIGINT NOT NULL REFERENCES agent_knowledge_library(library_id) ON DELETE CASCADE,
+    subject_type VARCHAR(16) NOT NULL,
+    subject_id BIGINT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (library_id, subject_type, subject_id),
+    CONSTRAINT ck_agent_knowledge_library_acl_subject CHECK (subject_type IN ('USER', 'DEPARTMENT')),
+    CONSTRAINT ck_agent_knowledge_library_acl_id CHECK (subject_id > 0)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_knowledge_library_acl_subject
+    ON agent_knowledge_library_acl (subject_type, subject_id, library_id);
+
+CREATE TABLE IF NOT EXISTS agent_knowledge_upload (
+    library_id BIGINT PRIMARY KEY REFERENCES agent_knowledge_library(library_id) ON DELETE CASCADE,
+    filename VARCHAR(500) NOT NULL,
+    mime_type VARCHAR(200) NOT NULL,
+    content_data BYTEA NOT NULL,
+    content_hash VARCHAR(128) NOT NULL,
+    content_version VARCHAR(128) NOT NULL,
+    size_bytes BIGINT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT ck_agent_knowledge_upload_size CHECK (size_bytes > 0)
+);
+
+ALTER TABLE agent_knowledge_source ADD COLUMN IF NOT EXISTS library_id BIGINT;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'agent_knowledge_source'::regclass
+          AND conname = 'fk_agent_knowledge_source_library'
+    ) THEN
+        ALTER TABLE agent_knowledge_source ADD CONSTRAINT fk_agent_knowledge_source_library
+            FOREIGN KEY (library_id) REFERENCES agent_knowledge_library(library_id) ON DELETE CASCADE;
+    END IF;
+END $$;
+ALTER TABLE agent_knowledge_source DROP CONSTRAINT IF EXISTS ck_agent_knowledge_source_type;
+ALTER TABLE agent_knowledge_source ADD CONSTRAINT ck_agent_knowledge_source_type
+    CHECK (source_type IN ('POLICY_LIBRARY', 'PROJECT_FILES', 'KOD_FOLDER', 'LOCAL_UPLOAD'));
+ALTER TABLE agent_knowledge_source DROP CONSTRAINT IF EXISTS ck_agent_knowledge_project_file;
+ALTER TABLE agent_knowledge_source ADD CONSTRAINT ck_agent_knowledge_project_file CHECK (
+    (source_type = 'PROJECT_FILES' AND project_id IS NOT NULL AND kod_file_id IS NOT NULL AND library_id IS NULL)
+    OR (source_type = 'POLICY_LIBRARY' AND project_id IS NULL AND library_id IS NULL)
+    OR (source_type = 'KOD_FOLDER' AND project_id IS NULL AND kod_file_id IS NOT NULL AND library_id IS NOT NULL)
+    OR (source_type = 'LOCAL_UPLOAD' AND project_id IS NULL AND kod_file_id IS NULL AND library_id IS NOT NULL)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_agent_knowledge_library_folder_file
+    ON agent_knowledge_source (tenant_id, library_id, kod_file_id)
+    WHERE source_type = 'KOD_FOLDER';
+CREATE UNIQUE INDEX IF NOT EXISTS uk_agent_knowledge_library_upload
+    ON agent_knowledge_source (tenant_id, library_id)
+    WHERE source_type = 'LOCAL_UPLOAD';
+
 CREATE TABLE IF NOT EXISTS agent_knowledge_document (
     document_id BIGSERIAL PRIMARY KEY,
     source_id BIGINT NOT NULL REFERENCES agent_knowledge_source(source_id) ON DELETE CASCADE,
@@ -205,10 +285,16 @@ INSERT INTO agent_schema_migration (version)
 VALUES ('agent_project_hybrid_rag_v1')
 ON CONFLICT (version) DO NOTHING;
 
+INSERT INTO agent_schema_migration (version)
+VALUES ('agent_knowledge_source_management_v1')
+ON CONFLICT (version) DO NOTHING;
+
 COMMENT ON TABLE agent_kod_user_binding IS 'OA 到 KodCloud 的显式用户映射；缺少映射必须返回 KOD_USER_BINDING_REQUIRED';
 COMMENT ON TABLE agent_policy_library_binding IS '管理员维护的共享制度目录与只读服务账号绑定，不保存 KodCloud 凭据';
 COMMENT ON TABLE agent_project_report IS '当前用户可下载的短期项目报告快照，下载时重新检查 owner';
 COMMENT ON TABLE agent_knowledge_source IS '通用项目/制度知识来源，不保存文件路径、下载 URL 或登录凭据';
+COMMENT ON TABLE agent_knowledge_library IS '管理员维护的目录或本地上传知识源；目录仅保存稳定 sourceID，本地上传受 ACL 约束';
+COMMENT ON TABLE agent_knowledge_upload IS '管理员上传知识源的受控二进制；不提供公开下载地址';
 COMMENT ON TABLE agent_project_analysis_audit IS '项目 Agent 审计，仅保存版本、口径和错误码，不保存文件正文';
 
 DO $$
