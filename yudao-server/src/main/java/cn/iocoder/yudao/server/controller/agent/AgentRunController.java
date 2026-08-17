@@ -53,7 +53,7 @@ public class AgentRunController {
         return agentAnalyticsService.listRuns(getTenantId(), days, status, domain, pageNo, pageSize);
     }
 
-    /** 管理员读取单次运行的 allowlist 追踪时间线，不返回原始提示词或工具结果。 */
+    /** 管理员读取单次运行的 allowlist 追踪时间线，可查看已脱敏的用户提问，但不返回工具结果。 */
     @GetMapping("/analytics/runs/{runId}")
     @Operation(summary = "读取管理员 Agent 运行安全追踪")
     public Map<String, Object> analyticsRunTrace(@PathVariable String runId) {

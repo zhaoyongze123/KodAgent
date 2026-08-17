@@ -7,11 +7,10 @@
  * agent_run 是一次运行的终态，agent_run_event 是阶段事件。管理员打开单条追踪时可查看
  * 该 Run 首次捕获的用户原始提问；页面不展示系统提示、模型隐藏推理或完整工具返回体。
  *
- * 页面结构：概览指标 -> 可交互执行拓扑 -> 趋势与漏斗 -> 优化信号/工具健康 -> 运行表 -> 安全追踪抽屉。
+ * 页面结构：概览指标 -> 趋势与漏斗 -> 优化信号/工具健康 -> 运行表 -> 单 Run 追踪抽屉。
  *
- * 执行拓扑只消费后端按 agent_run / agent_run_event 聚合出的统计事实，节点不是执行入口，
- * 也不显示 Prompt、完整工具返回值或模型推理。管理员可以缩放、平移和拖动节点查看各分支，
- * 鼠标悬停节点可检查该统计节点的事件口径和错误率。
+ * 单 Run 拓扑只消费后端按 run_id 投影出的真实事件实例，节点不是执行入口，也不显示
+ * Prompt、完整工具返回值或模型推理。管理员可以缩放、平移和拖动节点查看实际分支。
  */
 import Link from "next/link";
 import {
@@ -125,6 +124,23 @@ type CountRow = {
 type ExecutionNode = {
   id: string;
   label: string;
+  eventType?: string;
+  sequence?: Numeric;
+  time?: string;
+  observed?: boolean;
+  domain?: string;
+  actionId?: string;
+  toolName?: string;
+  subagentName?: string;
+  success?: boolean;
+  status?: string;
+  durationMs?: Numeric;
+  errorCode?: string;
+  errorMessage?: string;
+  text?: string;
+  batchId?: string;
+  stepId?: string;
+  operationId?: string;
   group?: string;
   description?: string;
   eventTypes?: string[];
@@ -149,6 +165,8 @@ type ExecutionEdge = {
 };
 type ExecutionGraph = {
   version?: Numeric;
+  mode?: "aggregate" | "run" | string;
+  runId?: string;
   nodes?: ExecutionNode[];
   edges?: ExecutionEdge[];
 };
@@ -180,8 +198,6 @@ type Analytics = {
   domains?: CountRow[];
   funnel?: CountRow[];
   tools?: CountRow[];
-  executionGraph?: ExecutionNode[] | ExecutionGraph;
-  execution_graph?: ExecutionNode[] | ExecutionGraph;
   qualitySignals?: CountRow[];
   quality_signals?: CountRow[];
   coordination?: CountRow[];
@@ -222,6 +238,7 @@ type RunTrace = {
   traceId: string;
   run: RunRow;
   events: TraceEvent[];
+  executionGraph?: ExecutionGraph;
   prompt?: string | null;
   promptTruncated?: boolean;
 };
@@ -379,6 +396,7 @@ export default function OperationsPage() {
   const [runsLoading, setRunsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [trace, setTrace] = useState<RunTrace | null>(null);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [traceLoading, setTraceLoading] = useState(false);
   const [traceError, setTraceError] = useState<string | null>(null);
   const [promptExpanded, setPromptExpanded] = useState(false);
@@ -454,7 +472,6 @@ export default function OperationsPage() {
     }));
   }, [data?.funnel]);
   const qualitySignals = data?.qualitySignals ?? data?.quality_signals ?? [];
-  const executionGraph = data?.executionGraph ?? data?.execution_graph ?? [];
   const coordinationBatches =
     data?.coordinationBatches ?? data?.coordination_batches ?? [];
   const domainOptions = useMemo(
@@ -469,6 +486,7 @@ export default function OperationsPage() {
   const totalPages = Math.max(1, Math.ceil(totalRuns / 20));
 
   async function openTrace(runId: string) {
+    setSelectedRunId(runId);
     setTrace(null);
     setTraceError(null);
     setPromptExpanded(false);
@@ -759,22 +777,6 @@ export default function OperationsPage() {
                   </BarChart>
                 </ResponsiveContainer>
               </div>
-            )}
-          </Panel>
-        </section>
-
-        <section className="mt-3">
-          <Panel
-            title="动态执行链路"
-            description="次数来自阶段事件，错误率只在对应失败事件已持久化时计算"
-          >
-            {loading ? (
-              <div className="h-28 animate-pulse bg-slate-100" />
-            ) : (
-              <ExecutionFlow
-                graph={executionGraph}
-                days={days}
-              />
             )}
           </Panel>
         </section>
@@ -1083,7 +1085,7 @@ export default function OperationsPage() {
                           <tr
                             key={run.runId}
                             onClick={() => void openTrace(run.runId)}
-                            className="cursor-pointer border-t border-slate-100 hover:bg-sky-50/60"
+                            className={`cursor-pointer border-t border-slate-100 hover:bg-sky-50/60 ${selectedRunId === run.runId ? "bg-sky-50" : ""}`}
                           >
                             <td className="px-3 py-2 whitespace-nowrap text-slate-600">
                               {formatTime(run.startedAt)}
@@ -1163,6 +1165,7 @@ export default function OperationsPage() {
         onOpenChange={(open) => {
           if (!open) {
             setTrace(null);
+            setSelectedRunId(null);
             setTraceError(null);
             setPromptExpanded(false);
           }
@@ -1170,7 +1173,7 @@ export default function OperationsPage() {
       >
         <SheetContent
           side="right"
-          className="w-full gap-0 overflow-y-auto p-0 sm:max-w-xl"
+          className="w-full gap-0 overflow-y-auto p-0 sm:max-w-3xl"
         >
           <SheetHeader className="border-b border-slate-200 pr-12">
             <SheetTitle>安全运行追踪</SheetTitle>
@@ -1223,7 +1226,9 @@ export default function OperationsPage() {
                 className="mt-3 border border-slate-200 bg-white p-3"
               >
                 <div className="flex items-center justify-between gap-3">
-                  <h2 className="text-xs font-medium text-slate-700">用户提问</h2>
+                  <h2 className="text-xs font-medium text-slate-700">
+                    用户提问
+                  </h2>
                   {trace.prompt ? (
                     <Button
                       size="sm"
@@ -1239,7 +1244,7 @@ export default function OperationsPage() {
                 {trace.prompt ? (
                   <>
                     <p
-                      className={`mt-2 whitespace-pre-wrap break-words text-pretty text-sm leading-6 text-slate-700 ${
+                      className={`mt-2 text-sm leading-6 text-pretty break-words whitespace-pre-wrap text-slate-700 ${
                         promptExpanded ? "" : "line-clamp-5"
                       }`}
                     >
@@ -1250,7 +1255,9 @@ export default function OperationsPage() {
                         size="sm"
                         variant="link"
                         className="mt-1 h-auto px-0 text-xs text-sky-700"
-                        onClick={() => setPromptExpanded((expanded) => !expanded)}
+                        onClick={() =>
+                          setPromptExpanded((expanded) => !expanded)
+                        }
                       >
                         {promptExpanded ? "收起提问" : "展开完整提问"}
                       </Button>
@@ -1262,10 +1269,36 @@ export default function OperationsPage() {
                     ) : null}
                   </>
                 ) : (
-                  <p className="mt-2 text-pretty text-sm text-slate-500">
+                  <p className="mt-2 text-sm text-pretty text-slate-500">
                     该历史运行未采集用户提问。
                   </p>
                 )}
+              </section>
+              <section
+                aria-label="单次执行链路"
+                className="mt-3 border border-slate-200 bg-white p-3"
+              >
+                <div className="mb-2">
+                  <h2 className="text-xs font-medium text-slate-700">
+                    单次执行链路
+                  </h2>
+                  <p className="mt-0.5 text-[11px] text-slate-500">
+                    仅展示该 Run
+                    实际产生的事件、分支和输出，不显示未执行的架构节点。
+                  </p>
+                </div>
+                <ExecutionFlow
+                  graph={
+                    trace.executionGraph ?? {
+                      mode: "run",
+                      runId: trace.traceId,
+                      nodes: [],
+                      edges: [],
+                    }
+                  }
+                  mode="run"
+                  days={days}
+                />
               </section>
               <ol className="mt-5 space-y-0">
                 {trace.events.map((event, index) => (
@@ -1376,15 +1409,20 @@ function Panel({
   );
 }
 
-/** 后端新旧图谱契约在浏览器中统一成的轻量数据结构。 */
+/** 后端单 Run 图谱契约在浏览器中统一成的轻量数据结构。 */
 type NormalizedExecutionGraph = {
   nodes: ExecutionNode[];
   edges: ExecutionEdge[];
 };
 
-/** React Flow 的两类节点：统计节点与只作视觉分组的职责泳道。 */
+/** React Flow 的两类节点：事件节点与只作视觉分组的职责泳道。 */
 type DiagramNodeData =
-  | { kind: "execution"; node: ExecutionNode; days: number }
+  | {
+      kind: "execution";
+      node: ExecutionNode;
+      days: number;
+      mode: "aggregate" | "run";
+    }
   | { kind: "lane"; label: string; description: string };
 type DiagramNode = ReactFlowNode<DiagramNodeData>;
 type DiagramLayout = { nodes: DiagramNode[]; edges: Edge[] };
@@ -1399,10 +1437,9 @@ const LEGACY_FLOW_ORDER = [
 ];
 
 /**
- * 将旧版的节点数组转换为最小可用拓扑。
+ * 将单 Run 图谱契约转换为 React Flow 使用的结构。
  *
- * Java 正在升级为 { nodes, edges }；发布窗口内仍可能存在旧服务，前端保留这段适配，
- * 确保管理员不会因为前后端滚动发布而看见空白画布。
+ * 保留旧数组兼容只用于历史缓存回放；新接口始终返回 version=3 的 nodes + edges。
  */
 function normalizeExecutionGraph(
   input: ExecutionNode[] | ExecutionGraph,
@@ -1436,7 +1473,7 @@ function normalizeExecutionGraph(
   return { nodes: input, edges };
 }
 
-/** 旧版节点没有职责分组时，根据可观测阶段补足稳定的泳道名称。 */
+/** 节点没有职责分组时，根据事件类型补足稳定的泳道名称。 */
 function executionGroup(node: ExecutionNode): string {
   if (node.group?.trim()) return node.group.trim();
   const id = node.id.toLowerCase();
@@ -1447,7 +1484,7 @@ function executionGroup(node: ExecutionNode): string {
   return "主 Agent 编排";
 }
 
-/** 让常见职责泳道稳定排序，其余后端新分组仍能正常显示在后方。 */
+/** 让运行职责泳道稳定排序，其余事件分组显示在后方。 */
 function groupRank(group: string): number {
   const order = [
     "主 Agent 编排",
@@ -1490,10 +1527,11 @@ function edgeVisual(kind?: string) {
   return { stroke: "#94a3b8", dash: "", label: "#64748b" };
 }
 
-/** 将事件统计节点布局成横向执行步骤、纵向职责泳道，所有位置均可由用户再拖动调整。 */
+/** 将真实事件节点布局成横向执行步骤、纵向职责泳道，位置可由用户再拖动调整。 */
 function buildExecutionDiagram(
   graph: NormalizedExecutionGraph,
   days: number,
+  mode: "aggregate" | "run",
 ): DiagramLayout {
   const nodeIds = new Set(graph.nodes.map((node) => node.id));
   const usableEdges = graph.edges.filter(
@@ -1574,7 +1612,7 @@ function buildExecutionDiagram(
             x: 30 + level * 250,
             y: laneTop + 38 + index * 96,
           },
-          data: { kind: "execution", node, days },
+          data: { kind: "execution", node, days, mode },
           zIndex: 1,
         });
       });
@@ -1616,14 +1654,16 @@ function buildExecutionDiagram(
 function ExecutionFlow({
   graph,
   days,
+  mode = "aggregate",
 }: {
   graph: ExecutionNode[] | ExecutionGraph;
   days: number;
+  mode?: "aggregate" | "run";
 }) {
   const normalized = useMemo(() => normalizeExecutionGraph(graph), [graph]);
   const layout = useMemo(
-    () => buildExecutionDiagram(normalized, days),
-    [days, normalized],
+    () => buildExecutionDiagram(normalized, days, mode),
+    [days, mode, normalized],
   );
   const [flowNodes, setFlowNodes, onNodesChange] = useNodesState<DiagramNode>(
     layout.nodes,
@@ -1691,10 +1731,11 @@ function ExecutionLane({ data }: NodeProps<DiagramNode>) {
   );
 }
 
-/** 单个事实节点：画布上只展示摘要，完整统计口径通过悬停提示呈现。 */
+/** 单个真实事件节点：画布上只展示摘要，事件口径通过悬停提示呈现。 */
 function ExecutionDiagramNode({ data }: NodeProps<DiagramNode>) {
   if (data.kind !== "execution") return null;
-  const { node, days } = data;
+  const { node, days, mode } = data;
+  const singleRun = mode === "run";
   const executions = numberOf(node.executions);
   const rawRunCount = node.runCount ?? node.run_count;
   const runCount = numberOf(rawRunCount);
@@ -1710,15 +1751,38 @@ function ExecutionDiagramNode({ data }: NodeProps<DiagramNode>) {
       ? "text-rose-700"
       : "text-emerald-700";
   const metricLabel = node.metricLabel ?? node.metric_label ?? "错误率";
-  const eventTypes = node.eventTypes ?? node.event_types ?? [];
-  const rangeText = days === 1 ? "近 24 小时" : `近 ${days} 天`;
+  const eventTypes =
+    node.eventTypes ??
+    node.event_types ??
+    (node.eventType ? [node.eventType] : []);
+  const rangeText = singleRun
+    ? "当前 Run"
+    : days === 1
+      ? "近 24 小时"
+      : `近 ${days} 天`;
+  const eventStatus =
+    node.success === false || failures > 0
+      ? "失败"
+      : node.success === true
+        ? "完成"
+        : (node.status ?? "已记录");
+  const eventStatusTone =
+    eventStatus === "失败"
+      ? "text-rose-700"
+      : eventStatus === "完成" || eventStatus === "SUCCEEDED"
+        ? "text-emerald-700"
+        : "text-slate-700";
 
   return (
     <DetailTooltip>
       <DetailTooltipTrigger asChild>
         <div
           tabIndex={0}
-          aria-label={`${node.label}，执行 ${executions} 次，${metricLabel} ${rateText}`}
+          aria-label={
+            singleRun
+              ? `${node.label}，事件序号 ${numberOf(node.sequence)}，状态 ${eventStatus}`
+              : `${node.label}，执行 ${executions} 次，${metricLabel} ${rateText}`
+          }
           className="min-w-[204px] border border-slate-300 bg-white px-2.5 py-2 shadow-sm outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
         >
           <Handle
@@ -1731,15 +1795,19 @@ function ExecutionDiagramNode({ data }: NodeProps<DiagramNode>) {
               {node.label}
             </p>
             <span className="shrink-0 text-xs font-semibold text-slate-700 tabular-nums">
-              {executions.toLocaleString("zh-CN")}
+              {singleRun
+                ? `#${numberOf(node.sequence)}`
+                : executions.toLocaleString("zh-CN")}
             </span>
           </div>
           <div className="mt-1.5 flex items-baseline justify-between gap-2 border-t border-slate-100 pt-1.5">
             <span className="truncate text-[10px] text-slate-500">
-              {metricLabel}
+              {singleRun ? "事件状态" : metricLabel}
             </span>
-            <span className={`text-xs font-semibold tabular-nums ${rateTone}`}>
-              {rateText}
+            <span
+              className={`text-xs font-semibold tabular-nums ${singleRun ? eventStatusTone : rateTone}`}
+            >
+              {singleRun ? eventStatus : rateText}
             </span>
           </div>
           <Handle
@@ -1760,28 +1828,119 @@ function ExecutionDiagramNode({ data }: NodeProps<DiagramNode>) {
             {node.description}
           </p>
         ) : null}
-        <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px] leading-4">
-          <dt className="text-slate-400">职责层</dt>
-          <dd>{executionGroup(node)}</dd>
-          <dt className="text-slate-400">统计窗口</dt>
-          <dd>{rangeText}</dd>
-          <dt className="text-slate-400">执行次数</dt>
-          <dd className="tabular-nums">{executions.toLocaleString("zh-CN")}</dd>
-          <dt className="text-slate-400">关联 Run</dt>
-          <dd className="tabular-nums">
-            {rawRunCount === null || rawRunCount === undefined
-              ? "未记录"
-              : runCount.toLocaleString("zh-CN")}
-          </dd>
-          <dt className="text-slate-400">失败次数</dt>
-          <dd className="tabular-nums">{failures.toLocaleString("zh-CN")}</dd>
-          <dt className="text-slate-400">{metricLabel}</dt>
-          <dd className="tabular-nums">{rateText}</dd>
-          <dt className="text-slate-400">事件口径</dt>
-          <dd className="break-words text-slate-200">
-            {eventTypes.length ? eventTypes.join("、") : "后端暂未记录"}
-          </dd>
-        </dl>
+        {singleRun ? (
+          <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px] leading-4">
+            <dt className="text-slate-400">职责层</dt>
+            <dd>{executionGroup(node)}</dd>
+            <dt className="text-slate-400">事件序号</dt>
+            <dd className="tabular-nums">{numberOf(node.sequence)}</dd>
+            <dt className="text-slate-400">记录时间</dt>
+            <dd>{formatTime(node.time)}</dd>
+            <dt className="text-slate-400">执行状态</dt>
+            <dd className={eventStatusTone}>{eventStatus}</dd>
+            {node.domain ? (
+              <>
+                <dt className="text-slate-400">领域</dt>
+                <dd>{node.domain}</dd>
+              </>
+            ) : null}
+            {node.actionId ? (
+              <>
+                <dt className="text-slate-400">动作</dt>
+                <dd className="font-mono break-words text-slate-200">
+                  {node.actionId}
+                </dd>
+              </>
+            ) : null}
+            {node.toolName ? (
+              <>
+                <dt className="text-slate-400">工具</dt>
+                <dd className="font-mono break-words text-slate-200">
+                  {node.toolName}
+                </dd>
+              </>
+            ) : null}
+            {node.subagentName ? (
+              <>
+                <dt className="text-slate-400">子 Agent</dt>
+                <dd>{node.subagentName}</dd>
+              </>
+            ) : null}
+            {node.durationMs !== undefined ? (
+              <>
+                <dt className="text-slate-400">耗时</dt>
+                <dd>{formatDuration(node.durationMs)}</dd>
+              </>
+            ) : null}
+            {node.batchId ? (
+              <>
+                <dt className="text-slate-400">协作批次</dt>
+                <dd className="font-mono break-all text-slate-200">
+                  {node.batchId}
+                </dd>
+              </>
+            ) : null}
+            {node.stepId ? (
+              <>
+                <dt className="text-slate-400">批次步骤</dt>
+                <dd className="font-mono break-all text-slate-200">
+                  {node.stepId}
+                </dd>
+              </>
+            ) : null}
+            {node.operationId ? (
+              <>
+                <dt className="text-slate-400">业务操作</dt>
+                <dd className="font-mono break-all text-slate-200">
+                  {node.operationId}
+                </dd>
+              </>
+            ) : null}
+            {node.errorCode ? (
+              <>
+                <dt className="text-slate-400">错误码</dt>
+                <dd className="break-words text-rose-300">{node.errorCode}</dd>
+              </>
+            ) : null}
+            {node.errorMessage ? (
+              <>
+                <dt className="text-slate-400">错误摘要</dt>
+                <dd className="break-words text-rose-300">
+                  {node.errorMessage}
+                </dd>
+              </>
+            ) : null}
+            <dt className="text-slate-400">事件类型</dt>
+            <dd className="break-words text-slate-200">
+              {eventTypes.length ? eventTypes.join("、") : "后端暂未记录"}
+            </dd>
+          </dl>
+        ) : (
+          <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px] leading-4">
+            <dt className="text-slate-400">职责层</dt>
+            <dd>{executionGroup(node)}</dd>
+            <dt className="text-slate-400">统计窗口</dt>
+            <dd>{rangeText}</dd>
+            <dt className="text-slate-400">执行次数</dt>
+            <dd className="tabular-nums">
+              {executions.toLocaleString("zh-CN")}
+            </dd>
+            <dt className="text-slate-400">关联 Run</dt>
+            <dd className="tabular-nums">
+              {rawRunCount === null || rawRunCount === undefined
+                ? "未记录"
+                : runCount.toLocaleString("zh-CN")}
+            </dd>
+            <dt className="text-slate-400">失败次数</dt>
+            <dd className="tabular-nums">{failures.toLocaleString("zh-CN")}</dd>
+            <dt className="text-slate-400">{metricLabel}</dt>
+            <dd className="tabular-nums">{rateText}</dd>
+            <dt className="text-slate-400">事件口径</dt>
+            <dd className="break-words text-slate-200">
+              {eventTypes.length ? eventTypes.join("、") : "后端暂未记录"}
+            </dd>
+          </dl>
+        )}
       </DetailTooltipContent>
     </DetailTooltip>
   );
