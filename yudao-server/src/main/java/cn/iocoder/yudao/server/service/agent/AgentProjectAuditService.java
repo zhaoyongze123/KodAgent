@@ -46,6 +46,17 @@ public class AgentProjectAuditService {
     public void record(Long tenantId, Long userId, long projectId, String action,
                        Long snapshotEpochSeconds, List<Map<String, Object>> sourceVersions,
                        String reportId, String failureCode) {
+        record(tenantId, userId, projectId, action, snapshotEpochSeconds, sourceVersions,
+                reportId, failureCode, Collections.emptyMap());
+    }
+
+    /**
+     * 记录检索/分析的非敏感运行元数据，例如召回模式、候选数和权限过滤数。
+     * 查询词、正文、向量和外部服务响应正文均不得写入。
+     */
+    public void record(Long tenantId, Long userId, long projectId, String action,
+                       Long snapshotEpochSeconds, List<Map<String, Object>> sourceVersions,
+                       String reportId, String failureCode, Map<String, Object> retrievalMetadata) {
         try {
             // PostgreSQL JDBC 对 java.time.Instant 的 setObject 支持因版本而异；审计
             // 不能因一个合法的快照时间失效，因此显式转换为驱动稳定支持的 Timestamp。
@@ -53,9 +64,11 @@ public class AgentProjectAuditService {
                     ? null : Timestamp.from(Instant.ofEpochSecond(snapshotEpochSeconds));
             jdbcTemplate.update("INSERT INTO agent_project_analysis_audit "
                             + "(tenant_id, user_id, project_id, action, snapshot_at, statistics_rule_version, "
-                            + "source_versions, report_id, failure_code) VALUES (?, ?, ?, ?, ?, ?, CAST(? AS jsonb), ?, ?)",
+                            + "source_versions, retrieval_metadata, report_id, failure_code) "
+                            + "VALUES (?, ?, ?, ?, ?, ?, CAST(? AS jsonb), CAST(? AS jsonb), ?, ?)",
                     tenantId, userId, projectId, action, snapshotAt, RULE_VERSION,
                     JsonUtils.toJsonString(sourceVersions == null ? Collections.emptyList() : sourceVersions),
+                    JsonUtils.toJsonString(retrievalMetadata == null ? Collections.emptyMap() : retrievalMetadata),
                     reportId, failureCode);
         } catch (RuntimeException ex) {
             // 审计是旁路能力；不能因为审计表暂时不可用而改变项目查询结果。日志只记录

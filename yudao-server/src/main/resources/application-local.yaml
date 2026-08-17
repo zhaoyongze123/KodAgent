@@ -13,6 +13,20 @@ yudao:
       bridge-secret: ${KOD_PROJECT_BRIDGE_SECRET:}
       ticket-ttl-seconds: ${KOD_PROJECT_BRIDGE_TICKET_TTL_SECONDS:60}
       report-ttl-seconds: ${KOD_PROJECT_REPORT_TTL_SECONDS:86400}
+      rag:
+        # 默认关闭：先完成真实资料评测，再通过 Secrets Overlay 注入独立 embedding 服务。
+        enabled: ${OA_AGENT_PROJECT_RAG_ENABLED:false}
+        # 仅用于服务端灰度/离线评测，默认 RRF 混合检索；请求参数和模型工具不能覆盖。
+        retrieval-mode: ${OA_AGENT_PROJECT_RAG_RETRIEVAL_MODE:hybrid}
+        embedding-base-url: ${OA_AGENT_PROJECT_EMBEDDING_BASE_URL:}
+        embedding-api-key: ${OA_AGENT_PROJECT_EMBEDDING_API_KEY:}
+        embedding-model: ${OA_AGENT_PROJECT_EMBEDDING_MODEL:Qwen/Qwen3-VL-Embedding-8B}
+        embedding-dimensions: ${OA_AGENT_PROJECT_EMBEDDING_DIMENSIONS:4096}
+        embedding-timeout-ms: ${OA_AGENT_PROJECT_EMBEDDING_TIMEOUT_MS:5000}
+        embedding-batch-size: ${OA_AGENT_PROJECT_EMBEDDING_BATCH_SIZE:16}
+        # Worker 崩溃后的领取租约；需大于单次 embedding 请求超时。
+        embedding-processing-timeout-ms: ${OA_AGENT_PROJECT_EMBEDDING_PROCESSING_TIMEOUT_MS:300000}
+        embedding-worker-interval-ms: ${OA_AGENT_PROJECT_EMBEDDING_WORKER_INTERVAL_MS:60000}
     batch-test:
       # Explicitly opt-in local-only fault injection for real OA batch tests.
       # Production profiles ignore this hook even if the environment leaks.

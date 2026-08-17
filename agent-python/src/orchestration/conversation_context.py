@@ -796,6 +796,10 @@ _MODEL_HIDDEN_SOURCE_KEYS = frozenset({
     "eventId", "event_id",
     "partyFileId", "party_file_id", "sourcePartyFileId", "source_party_file_id",
     "fileId", "file_id", "documentId", "document_id",
+    # RAG 证据的内部定位与排序字段只用于审计、前端引用和离线评测；模型只应
+    # 看到 citationId、文件名、章节、版本、受限摘录和召回方式。
+    "chunkId", "chunk_id", "projectId", "project_id", "ordinal",
+    "fusionScore", "fusion_score", "matchedTerms", "matched_terms",
 })
 
 

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { BarChart3, CheckCircle2, Download, FileText, FolderKanban, ListChecks, RefreshCw, Users } from "lucide-react";
+import { projectKnowledgeEvidence } from "@/lib/project-knowledge-evidence";
 import type { ProjectCardKind, ProjectPayload } from "@/types/agent-block";
 
 function text(value: unknown, fallback = "-") {
@@ -10,11 +11,6 @@ function text(value: unknown, fallback = "-") {
 
 function number(value: unknown) {
   return typeof value === "number" ? value : Number(value ?? 0) || 0;
-}
-
-function percent(value: unknown) {
-  const raw = number(value);
-  return `${Math.round((raw <= 1 ? raw * 100 : raw) * 10) / 10}%`;
 }
 
 function shell(title: string, icon: React.ReactNode, children: React.ReactNode) {
@@ -56,6 +52,15 @@ function projectDocumentTitle(documentType: unknown) {
   }
 }
 
+function retrievalMethodLabel(method: string) {
+  switch (method) {
+    case "hybrid": return "混合检索";
+    case "semantic": return "语义检索";
+    case "keyword_fallback": return "全文检索（向量降级）";
+    default: return "全文检索";
+  }
+}
+
 /** 项目领域的结构化结果卡片；只展示 Java 返回的事实，不在前端重算业务数字。 */
 export function ProjectCard({ kind, payload }: { kind: ProjectCardKind; payload: ProjectPayload }) {
   const [syncing, setSyncing] = useState(false);
@@ -70,7 +75,10 @@ export function ProjectCard({ kind, payload }: { kind: ProjectCardKind; payload:
   }
   if (kind === "project_knowledge") {
     const hits = Array.isArray(payload.hits) ? payload.hits as Array<Record<string, unknown>> : [];
-    return shell("项目资料与制度依据", <FileText className="size-4 text-slate-500" />, <div><div className="mb-2 text-xs text-slate-500">检索：{text(payload.query)} · {text(payload.retrievalMode, "全文检索")}</div>{hits.length ? <div className="space-y-2">{hits.map((hit, index) => <article key={String(hit.chunkId ?? index)} className="rounded-md border border-slate-100 px-2.5 py-2"><div className="flex items-center justify-between gap-2 text-xs font-medium text-slate-800"><span>{text(hit.name, "未命名资料")}</span><span className="text-[11px] font-normal text-slate-400">{text(hit.sourceType)}</span></div><p className="mt-1 line-clamp-3 text-xs leading-5 text-slate-600">{text(hit.content)}</p><div className="mt-1 text-[11px] text-slate-400">文件编号 {text(hit.fileId)} · 第 {number(hit.ordinal) + 1} 段</div></article>)}</div> : <div className="py-3 text-xs text-slate-500">没有找到当前权限范围内的资料证据</div>}</div>);
+    return shell("项目资料与制度依据", <FileText className="size-4 text-slate-500" />, <div><div className="mb-2 text-xs text-slate-500">检索：{text(payload.query)} · {retrievalMethodLabel(text(payload.retrievalMode, "keyword"))}</div>{hits.length ? <div className="space-y-2">{hits.map((hit, index) => {
+      const evidence = projectKnowledgeEvidence(hit);
+      return <article key={`${evidence.citationId}-${index}`} className="rounded-md border border-slate-100 px-2.5 py-2"><div className="flex items-center justify-between gap-2 text-xs font-medium text-slate-800"><span className="truncate" title={evidence.name}>{evidence.name}</span><span className="shrink-0 text-[11px] font-normal text-slate-400">{evidence.sourceType}</span></div><p className="mt-1 line-clamp-3 text-xs leading-5 text-slate-600">{evidence.excerpt}</p><div className="mt-1 flex flex-wrap gap-x-1.5 text-[11px] text-slate-400"><span>{evidence.citationId}</span><span>·</span><span>{evidence.section}</span><span>·</span><span>{evidence.contentVersion}</span><span>·</span><span>{retrievalMethodLabel(evidence.retrievalMethod)}</span></div></article>;
+    })}</div> : <div className="py-3 text-xs text-slate-500">没有找到当前权限范围内的资料证据</div>}</div>);
   }
   if (kind === "project_report") {
     const exportsList = Array.isArray(payload.exports) ? payload.exports as Array<Record<string, unknown>> : [];

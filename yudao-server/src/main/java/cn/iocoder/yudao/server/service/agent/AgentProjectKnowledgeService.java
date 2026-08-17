@@ -1,5 +1,7 @@
 package cn.iocoder.yudao.server.service.agent;
 
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.text.PDFTextStripper;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -24,6 +26,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
@@ -38,8 +41,8 @@ import static cn.iocoder.yudao.framework.security.core.util.SecurityFrameworkUti
  * 的文件元数据，读取正文前再次走文件权限校验；返回命中前也会复核文件是否仍在目录中。
  * PostgreSQL 只保存派生文本、哈希和版本，删除或失权的文件会立即标记为失效。</p>
  *
- * <p>第一期不引入向量库。TXT/Markdown 直接提取，DOCX/XLSX 使用 OOXML 文本节点提取；
- * PDF、扫描件和图片在没有可靠文本提取器时明确标记 NEEDS_OCR，绝不伪造“已读”。</p>
+ * <p>TXT/Markdown、DOCX/XLSX 和可提取文字的 PDF 会建立全文索引；可选的向量副本只
+ * 用于扩展召回。扫描件、图片和无法提取的 PDF 明确标记 NEEDS_OCR，绝不伪造“已读”。</p>
  */
 @Service
 public class AgentProjectKnowledgeService {
@@ -47,6 +50,8 @@ public class AgentProjectKnowledgeService {
     private static final String READY = "READY";
     private static final int CHUNK_SIZE = 1800;
     private static final int MAX_FALLBACK_TERMS = 48;
+    private static final int RETRIEVAL_CANDIDATE_LIMIT = 30;
+    private static final int RRF_K = 60;
     private static final Pattern CJK_RUN = Pattern.compile("[\\p{IsHan}]{2,}");
     private static final Pattern LATIN_TERM = Pattern.compile("[A-Za-z0-9][A-Za-z0-9._-]{1,}");
     /**
@@ -65,6 +70,8 @@ public class AgentProjectKnowledgeService {
     private KodProjectBridgeService bridgeService;
     @Resource
     private AgentProjectAuditService auditService;
+    @Resource
+    private AgentProjectEmbeddingService embeddingService;
 
     /**
      * 检索项目资料和管理员维护的制度库。
@@ -79,6 +86,7 @@ public class AgentProjectKnowledgeService {
         if (!StringUtils.hasText(query) || query.trim().length() > 200) {
             throw new IllegalArgumentException("项目知识检索关键词不能为空且最多 200 个字符");
         }
+        long startedAtNanos = System.nanoTime();
         // 索引写入只能由定时/手动同步触发。检索路径只复核实时权限与文件版本，
         // 否则每个用户问题都会重新读取并重建整个项目资料目录，既制造审计噪声，
         // 也会让并行 Agent 查询把一次同步放大成多次。
@@ -137,7 +145,9 @@ public class AgentProjectKnowledgeService {
         sources = currentSources(sources, visibleVersions);
         if (sources.isEmpty()) {
             auditService.record(tenantId, userId, projectId, "SEARCH", epoch(visibleDocuments.get("asOf")),
-                    Collections.emptyList(), null, null);
+                    Collections.<Map<String, Object>>emptyList(), null, null,
+                    retrievalAuditMetadata("keyword", 0, 0, 0, 0, false, "NOT_REQUESTED",
+                            elapsedMillis(startedAtNanos)));
             return result(query, "keyword", Collections.emptyList(), visibleDocuments.get("asOf"));
         }
 
@@ -158,7 +168,7 @@ public class AgentProjectKnowledgeService {
             predicate.append(" OR c.content ILIKE ? ESCAPE '\\' OR s.display_name ILIKE ? ESCAPE '\\'");
         }
         String sql = "SELECT c.chunk_id, d.source_id, s.source_type, s.project_id, s.kod_file_id, "
-                + "s.display_name, s.document_type, c.section, c.ordinal, c.content, "
+                + "s.display_name, s.document_type, s.content_version, c.section, c.ordinal, c.content, "
                 + "ts_rank_cd(c.search_vector, websearch_to_tsquery('simple', ?)) score "
                 + "FROM agent_knowledge_chunk c JOIN agent_knowledge_document d ON d.document_id = c.document_id "
                 + "JOIN agent_knowledge_source s ON s.source_id = d.source_id "
@@ -179,29 +189,51 @@ public class AgentProjectKnowledgeService {
         List<Map<String, Object>> candidates = jdbcTemplate.query(sql, (rs, rowNum) -> {
             Map<String, Object> item = new LinkedHashMap<>();
             item.put("chunkId", rs.getLong("chunk_id"));
+            item.put("sourceId", rs.getLong("source_id"));
             item.put("sourceType", rs.getString("source_type"));
             item.put("projectId", rs.getObject("project_id"));
             item.put("fileId", rs.getObject("kod_file_id"));
             item.put("name", rs.getString("display_name"));
             item.put("documentType", rs.getString("document_type"));
+            item.put("contentVersion", rs.getString("content_version"));
             item.put("section", rs.getString("section"));
             item.put("ordinal", rs.getInt("ordinal"));
             item.put("content", rs.getString("content"));
             item.put("score", rs.getBigDecimal("score"));
             return item;
         }, queryArgs.toArray());
-        List<Map<String, Object>> hits = rankCandidates(candidates, fallbackTerms, limit);
+        List<Map<String, Object>> lexical = rankCandidates(candidates, fallbackTerms, RETRIEVAL_CANDIDATE_LIMIT);
+        AgentProjectEmbeddingService.RetrievalMode configuredMode = embeddingService.retrievalMode();
+        AgentProjectEmbeddingService.SemanticSearch semantic = configuredMode
+                == AgentProjectEmbeddingService.RetrievalMode.KEYWORD
+                ? AgentProjectEmbeddingService.SemanticSearch.unavailable("KEYWORD_MODE")
+                : embeddingService.semanticCandidates(sourceIds, query.trim(), RETRIEVAL_CANDIDATE_LIMIT);
+        List<Map<String, Object>> hits;
+        if (!semantic.available) {
+            hits = lexical.subList(0, Math.min(limit, lexical.size()));
+        } else if (configuredMode == AgentProjectEmbeddingService.RetrievalMode.SEMANTIC) {
+            hits = new ArrayList<>(semantic.candidates.subList(0, Math.min(limit, semantic.candidates.size())));
+        } else {
+            hits = mergeHybridCandidates(lexical, semantic.candidates, limit);
+        }
         // 即使命中了索引，也不把历史 source_id 当权限事实。逐个文件重新比对当前
         // project bridge 的文件列表，失权的命中在本次响应中直接丢弃。
         List<Map<String, Object>> checked = new ArrayList<>();
         for (Map<String, Object> hit : hits) {
             if ("PROJECT_FILES".equals(hit.get("sourceType"))
                     && !visibleFileIds.contains(number(hit.get("fileId")))) continue;
-            checked.add(hit);
+            checked.add(evidence(hit, checked.size() + 1));
         }
+        String mode = retrievalMode(configuredMode, semantic, embeddingService.isRagRequested());
+        Map<String, Object> retrievalAudit = retrievalAuditMetadata(mode, lexical.size(), semantic.candidates.size(),
+                checked.size(), Math.max(0, hits.size() - checked.size()), semantic.available, semantic.failureCode,
+                elapsedMillis(startedAtNanos));
+        String failureCode = semantic.available || !embeddingService.isRagRequested()
+                || configuredMode == AgentProjectEmbeddingService.RetrievalMode.KEYWORD
+                ? null : semantic.failureCode;
         auditService.record(tenantId, userId, projectId, "SEARCH", epoch(visibleDocuments.get("asOf")),
-                sourceVersions(sources), null, null);
-        return result(query, "postgresql_full_text_with_chinese_keyword_fallback", checked, visibleDocuments.get("asOf"));
+                sourceVersions(sources), null, failureCode, retrievalAudit);
+        return result(query, mode, checked, visibleDocuments.get("asOf"));
     }
 
     /** 返回资料同步状态，供项目快照和管理员手动同步入口使用。 */
@@ -232,7 +264,12 @@ public class AgentProjectKnowledgeService {
      */
     public Map<String, Object> syncPolicyLibrary(Long tenantId, Long requestedByUserId) {
         if (!bridgeService.hasPolicyLibrary(tenantId)) {
-            return Map.of("status", "NOT_CONFIGURED", "scanned", 0, "indexed", 0, "invalidated", 0);
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("status", "NOT_CONFIGURED");
+            result.put("scanned", 0);
+            result.put("indexed", 0);
+            result.put("invalidated", 0);
+            return result;
         }
         Map<String, Object> visible = bridgeService.policyDocuments(tenantId);
         Set<Long> current = new LinkedHashSet<>();
@@ -245,14 +282,15 @@ public class AgentProjectKnowledgeService {
             long sourceId = upsertPolicySource(tenantId, fileId, item);
             String name = String.valueOf(item.getOrDefault("name", ""));
             String ext = extension(name);
-            if (!("txt".equals(ext) || "md".equals(ext) || "docx".equals(ext) || "xlsx".equals(ext))) {
+            if (!("txt".equals(ext) || "md".equals(ext) || "docx".equals(ext)
+                    || "xlsx".equals(ext) || "pdf".equals(ext))) {
                 updateSource(sourceId, "pdf".equals(ext) ? "NEEDS_OCR" : "UNSUPPORTED", null);
                 continue;
             }
             try {
                 String content = extractContent(bridgeService.policyDocument(tenantId, fileId), ext);
                 if (!StringUtils.hasText(content)) {
-                    updateSource(sourceId, "UNSUPPORTED", null);
+                    updateSource(sourceId, emptyExtractionStatus(ext), null);
                     continue;
                 }
                 reindex(sourceId, name, sha256(content.getBytes(StandardCharsets.UTF_8)), content);
@@ -270,8 +308,7 @@ public class AgentProjectKnowledgeService {
             Long fileId = jdbcTemplate.queryForObject(
                     "SELECT kod_file_id FROM agent_knowledge_source WHERE source_id=?", Long.class, sourceId);
             if (fileId != null && !current.contains(fileId)) {
-                jdbcTemplate.update("UPDATE agent_knowledge_source SET extraction_status='INVALIDATED', "
-                        + "invalidated_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE source_id=?", sourceId);
+                invalidateSource(sourceId);
                 invalidated++;
             }
         }
@@ -310,7 +347,12 @@ public class AgentProjectKnowledgeService {
             List<Map<String, Object>> bindings = jdbcTemplate.query(
                     "SELECT tenant_id, oa_user_id FROM agent_kod_user_binding WHERE status='ACTIVE' "
                             + "ORDER BY tenant_id ASC, oa_user_id ASC",
-                    (rs, rowNum) -> Map.of("tenantId", rs.getLong("tenant_id"), "userId", rs.getLong("oa_user_id")));
+                    (rs, rowNum) -> {
+                        Map<String, Object> binding = new LinkedHashMap<>();
+                        binding.put("tenantId", rs.getLong("tenant_id"));
+                        binding.put("userId", rs.getLong("oa_user_id"));
+                        return binding;
+                    });
             Map<ProjectSyncKey, ProjectSyncTarget> targets = new LinkedHashMap<>();
             for (Map<String, Object> binding : bindings) {
                 Long tenantId = (Long) binding.get("tenantId");
@@ -409,7 +451,8 @@ public class AgentProjectKnowledgeService {
             long sourceId = upsertSource(tenantId, projectId, fileId, item);
             String name = String.valueOf(item.getOrDefault("name", ""));
             String ext = extension(name);
-            if (!("txt".equals(ext) || "md".equals(ext) || "docx".equals(ext) || "xlsx".equals(ext))) {
+            if (!("txt".equals(ext) || "md".equals(ext) || "docx".equals(ext)
+                    || "xlsx".equals(ext) || "pdf".equals(ext))) {
                 updateSource(sourceId, "pdf".equals(ext) ? "NEEDS_OCR" : "UNSUPPORTED", null);
                 continue;
             }
@@ -423,7 +466,7 @@ public class AgentProjectKnowledgeService {
                 continue;
             }
             if (!StringUtils.hasText(content)) {
-                updateSource(sourceId, "UNSUPPORTED", null);
+                updateSource(sourceId, emptyExtractionStatus(ext), null);
                 continue;
             }
             String hash = sha256(content.getBytes(StandardCharsets.UTF_8));
@@ -435,7 +478,7 @@ public class AgentProjectKnowledgeService {
         for (Long sourceId : indexedSources) {
             Long fileId = jdbcTemplate.queryForObject("SELECT kod_file_id FROM agent_knowledge_source WHERE source_id=?", Long.class, sourceId);
             if (canInvalidate && fileId != null && !current.contains(fileId)) {
-                jdbcTemplate.update("UPDATE agent_knowledge_source SET extraction_status='INVALIDATED', invalidated_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE source_id=?", sourceId);
+                invalidateSource(sourceId);
                 invalidated++;
             }
         }
@@ -445,6 +488,16 @@ public class AgentProjectKnowledgeService {
         result.put("scanned", scanned); result.put("indexed", indexed); result.put("invalidated", invalidated);
         result.put("asOf", OffsetDateTime.now());
         return result;
+    }
+
+    /**
+     * 失权或删除的资料不只是从来源表标记失效：其正文、chunk 和 embedding 都是
+     * 可重建的派生副本，必须立即删除，避免异步 worker 在下一轮继续处理旧内容。
+     */
+    void invalidateSource(long sourceId) {
+        jdbcTemplate.update("UPDATE agent_knowledge_source SET extraction_status='INVALIDATED', "
+                + "invalidated_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE source_id=?", sourceId);
+        jdbcTemplate.update("DELETE FROM agent_knowledge_document WHERE source_id=?", sourceId);
     }
 
     private long upsertSource(Long tenantId, long projectId, long fileId, Map<String, Object> file) {
@@ -488,10 +541,12 @@ public class AgentProjectKnowledgeService {
         jdbcTemplate.update("DELETE FROM agent_knowledge_document WHERE source_id=?", sourceId);
         Number documentId = jdbcTemplate.queryForObject("INSERT INTO agent_knowledge_document (source_id, title, content_hash, extraction_status) VALUES (?, ?, ?, 'READY') RETURNING document_id", Number.class, sourceId, name, hash);
         if (documentId == null) throw new IllegalStateException("知识文档写入失败");
-        List<String> chunks = split(content);
+        List<TextChunk> chunks = split(content);
         for (int i = 0; i < chunks.size(); i++) {
-            String chunk = chunks.get(i);
-            jdbcTemplate.update("INSERT INTO agent_knowledge_chunk (document_id, ordinal, section, content, content_hash) VALUES (?, ?, ?, ?, ?)", documentId, i, "正文", chunk, sha256(chunk.getBytes(StandardCharsets.UTF_8)));
+            TextChunk chunk = chunks.get(i);
+            jdbcTemplate.update("INSERT INTO agent_knowledge_chunk (document_id, ordinal, section, content, content_hash) VALUES (?, ?, ?, ?, ?)",
+                    documentId, i, chunk.section, chunk.content,
+                    sha256(chunk.content.getBytes(StandardCharsets.UTF_8)));
         }
         updateSource(sourceId, READY, hash);
     }
@@ -506,7 +561,30 @@ public class AgentProjectKnowledgeService {
         byte[] bytes;
         try { bytes = Base64.getDecoder().decode(encoded); } catch (IllegalArgumentException ex) { return ""; }
         if ("txt".equals(ext) || "md".equals(ext)) return new String(bytes, StandardCharsets.UTF_8);
+        if ("pdf".equals(ext)) return pdfText(bytes);
         return xmlText(bytes);
+    }
+
+    private static String emptyExtractionStatus(String ext) {
+        return "pdf".equals(ext) ? "NEEDS_OCR" : "UNSUPPORTED";
+    }
+
+    /** 数字 PDF 按页提取，保留页码标记以便后续引用能返回稳定定位。 */
+    private String pdfText(byte[] bytes) {
+        try (PDDocument document = PDDocument.load(bytes)) {
+            StringBuilder text = new StringBuilder();
+            PDFTextStripper stripper = new PDFTextStripper();
+            for (int page = 1; page <= document.getNumberOfPages(); page++) {
+                stripper.setStartPage(page);
+                stripper.setEndPage(page);
+                String pageText = stripper.getText(document).replaceAll("\\s+", " ").trim();
+                if (StringUtils.hasText(pageText)) text.append('\f').append("第 ").append(page)
+                        .append(" 页\n").append(pageText).append('\n');
+            }
+            return text.toString().trim();
+        } catch (IOException ex) {
+            return "";
+        }
     }
 
     /** DOCX/XLSX 都是 ZIP + XML；这里取文本节点，避免把工作簿 XML 结构当正文返回。 */
@@ -527,10 +605,32 @@ public class AgentProjectKnowledgeService {
         return text.toString().trim();
     }
 
-    private List<String> split(String content) {
-        List<String> result = new ArrayList<>();
-        for (int offset = 0; offset < content.length(); offset += CHUNK_SIZE) result.add(content.substring(offset, Math.min(content.length(), offset + CHUNK_SIZE)));
+    private List<TextChunk> split(String content) {
+        List<TextChunk> result = new ArrayList<>();
+        for (int offset = 0; offset < content.length(); offset += CHUNK_SIZE) {
+            int end = Math.min(content.length(), offset + CHUNK_SIZE);
+            String chunk = content.substring(offset, end).replace("\f", "").trim();
+            if (StringUtils.hasText(chunk)) result.add(new TextChunk(sectionAt(content, offset), chunk));
+        }
         return result;
+    }
+
+    private String sectionAt(String content, int offset) {
+        int marker = content.lastIndexOf('\f', offset);
+        if (marker < 0) return "正文";
+        int end = content.indexOf('\n', marker);
+        String label = content.substring(marker + 1, end < 0 ? content.length() : end).trim();
+        return StringUtils.hasText(label) ? label : "正文";
+    }
+
+    private static final class TextChunk {
+        final String section;
+        final String content;
+
+        private TextChunk(String section, String content) {
+            this.section = section;
+            this.content = content;
+        }
     }
 
     /**
@@ -606,22 +706,25 @@ public class AgentProjectKnowledgeService {
         }
     }
 
-    /** 按“标题命中 > 最长正文短语 > 命中覆盖”排序，而不是依赖中文全文检索的零分结果。 */
+    /** 按“标题命中 > 章节命中 > 最长正文短语 > 命中覆盖”排序，而不是依赖中文全文检索的零分结果。 */
     static List<Map<String, Object>> rankCandidates(List<Map<String, Object>> candidates,
                                                      List<String> terms, int limit) {
         List<Map<String, Object>> ranked = new ArrayList<>();
         for (Map<String, Object> candidate : candidates) {
             String name = String.valueOf(candidate.getOrDefault("name", "")).toLowerCase(Locale.ROOT);
+            String section = String.valueOf(candidate.getOrDefault("section", "")).toLowerCase(Locale.ROOT);
             String content = String.valueOf(candidate.getOrDefault("content", "")).toLowerCase(Locale.ROOT);
-            int titleLongest = 0, contentLongest = 0, coverage = 0;
+            int titleLongest = 0, sectionLongest = 0, contentLongest = 0, coverage = 0;
             List<String> matched = new ArrayList<>();
             for (String term : terms) {
                 String normalized = term.toLowerCase(Locale.ROOT);
                 boolean titleMatch = name.contains(normalized);
+                boolean sectionMatch = section.contains(normalized);
                 boolean contentMatch = content.contains(normalized);
-                if (!titleMatch && !contentMatch) continue;
+                if (!titleMatch && !sectionMatch && !contentMatch) continue;
                 if (matched.size() < 6) matched.add(term);
                 if (titleMatch) titleLongest = Math.max(titleLongest, term.length());
+                if (sectionMatch) sectionLongest = Math.max(sectionLongest, term.length());
                 if (contentMatch) {
                     contentLongest = Math.max(contentLongest, term.length());
                     coverage += term.length();
@@ -630,7 +733,7 @@ public class AgentProjectKnowledgeService {
             double fullText = candidate.get("score") instanceof Number
                     ? ((Number) candidate.get("score")).doubleValue() : 0D;
             // n-gram 存在大量重叠，coverage 只作为小幅区分，最长短语才是主排序信号。
-            double score = fullText + titleLongest * 10D + contentLongest * 2D
+            double score = fullText + titleLongest * 10D + sectionLongest * 5D + contentLongest * 2D
                     + Math.min(60, coverage) / 100D;
             candidate.put("score", score);
             candidate.put("matchedTerms", matched);
@@ -644,6 +747,112 @@ public class AgentProjectKnowledgeService {
             return Long.compare(number(left.get("chunkId")), number(right.get("chunkId")));
         });
         return new ArrayList<>(ranked.subList(0, Math.min(Math.max(1, limit), ranked.size())));
+    }
+
+    /**
+     * 以 RRF 合并全文与语义候选。全文分保留标题/术语优势，避免项目编号、文件名和
+     * 专有名词被相似语义片段盖过；语义分只影响候选覆盖范围，不改变权限范围。
+     */
+    static List<Map<String, Object>> mergeHybridCandidates(List<Map<String, Object>> lexical,
+                                                             List<Map<String, Object>> semantic,
+                                                             int limit) {
+        Map<Long, HybridCandidate> candidates = new LinkedHashMap<>();
+        mergeRanked(candidates, lexical, true);
+        mergeRanked(candidates, semantic, false);
+        List<Map<String, Object>> ranked = new ArrayList<>();
+        for (HybridCandidate candidate : candidates.values()) ranked.add(candidate.toMap());
+        ranked.sort((left, right) -> {
+            int byFusion = Double.compare(scoreNumber(right.get("fusionScore")), scoreNumber(left.get("fusionScore")));
+            if (byFusion != 0) return byFusion;
+            int byLexical = Double.compare(scoreNumber(right.get("keywordScore")), scoreNumber(left.get("keywordScore")));
+            if (byLexical != 0) return byLexical;
+            int bySemantic = Double.compare(scoreNumber(right.get("semanticScore")), scoreNumber(left.get("semanticScore")));
+            if (bySemantic != 0) return bySemantic;
+            int byOrdinal = Long.compare(number(left.get("ordinal")), number(right.get("ordinal")));
+            if (byOrdinal != 0) return byOrdinal;
+            return Long.compare(number(left.get("chunkId")), number(right.get("chunkId")));
+        });
+        return new ArrayList<>(ranked.subList(0, Math.min(Math.max(1, limit), ranked.size())));
+    }
+
+    private static void mergeRanked(Map<Long, HybridCandidate> target, List<Map<String, Object>> values,
+                                    boolean keyword) {
+        if (values == null) return;
+        for (int index = 0; index < values.size(); index++) {
+            Map<String, Object> source = values.get(index);
+            long chunkId = number(source.get("chunkId"));
+            if (chunkId <= 0) continue;
+            HybridCandidate candidate = target.computeIfAbsent(chunkId, ignored -> new HybridCandidate(source));
+            int rank = index + 1;
+            if (keyword) candidate.keyword(source, rank);
+            else candidate.semantic(source, rank);
+        }
+    }
+
+    /** 将内部候选投影成可展示、可核验而不泄露全文的资料证据。 */
+    static Map<String, Object> evidence(Map<String, Object> candidate, int ordinal) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("citationId", "资料 " + ordinal);
+        result.put("chunkId", candidate.get("chunkId"));
+        result.put("sourceType", candidate.get("sourceType"));
+        result.put("projectId", candidate.get("projectId"));
+        result.put("fileId", candidate.get("fileId"));
+        result.put("name", candidate.get("name"));
+        result.put("documentType", candidate.get("documentType"));
+        result.put("contentVersion", candidate.get("contentVersion"));
+        result.put("section", candidate.getOrDefault("section", "正文"));
+        result.put("ordinal", candidate.get("ordinal"));
+        result.put("excerpt", excerpt(String.valueOf(candidate.getOrDefault("content", ""))));
+        result.put("retrievalMethod", candidate.getOrDefault("retrievalMethod", "keyword"));
+        result.put("fusionScore", scoreNumber(candidate.get("fusionScore")));
+        if (candidate.get("matchedTerms") instanceof List) result.put("matchedTerms", candidate.get("matchedTerms"));
+        return result;
+    }
+
+    private static String excerpt(String content) {
+        String normalized = content.replaceAll("\\s+", " ").trim();
+        return normalized.length() <= 280 ? normalized : normalized.substring(0, 279) + "…";
+    }
+
+    private static final class HybridCandidate {
+        private final Map<String, Object> values;
+        private int keywordRank;
+        private int semanticRank;
+        private double fusionScore;
+
+        private HybridCandidate(Map<String, Object> source) {
+            this.values = new LinkedHashMap<>(source);
+        }
+
+        private void keyword(Map<String, Object> source, int rank) {
+            keywordRank = rank;
+            fusionScore += reciprocalRank(rank);
+            values.put("keywordRank", rank);
+            values.put("keywordScore", scoreNumber(source.get("score")));
+            copyIfPresent(source, "matchedTerms");
+        }
+
+        private void semantic(Map<String, Object> source, int rank) {
+            semanticRank = rank;
+            fusionScore += reciprocalRank(rank);
+            values.put("semanticRank", rank);
+            values.put("semanticScore", scoreNumber(source.get("semanticScore")));
+        }
+
+        private Map<String, Object> toMap() {
+            values.put("fusionScore", fusionScore);
+            values.put("retrievalMethod", keywordRank > 0 && semanticRank > 0 ? "hybrid"
+                    : (keywordRank > 0 ? "keyword" : "semantic"));
+            return values;
+        }
+
+        private void copyIfPresent(Map<String, Object> source, String key) {
+            if (source.containsKey(key)) values.put(key, source.get(key));
+        }
+
+        private static double reciprocalRank(int rank) {
+            return 1D / (RRF_K + rank);
+        }
     }
 
     private static String likePattern(String term) {
@@ -674,6 +883,34 @@ public class AgentProjectKnowledgeService {
     private Map<String, Object> result(String query, String mode, List<Map<String, Object>> hits, Object asOf) {
         Map<String, Object> result = new LinkedHashMap<>(); result.put("query", query); result.put("retrievalMode", mode); result.put("hits", hits); result.put("total", hits.size()); result.put("asOf", asOf == null ? OffsetDateTime.now() : asOf); return result;
     }
+    private static String retrievalMode(AgentProjectEmbeddingService.RetrievalMode configuredMode,
+                                        AgentProjectEmbeddingService.SemanticSearch semantic,
+                                        boolean ragRequested) {
+        if (configuredMode == AgentProjectEmbeddingService.RetrievalMode.KEYWORD || !ragRequested) return "keyword";
+        if (!semantic.available) return "keyword_fallback";
+        return configuredMode == AgentProjectEmbeddingService.RetrievalMode.SEMANTIC ? "semantic" : "hybrid";
+    }
+    static Map<String, Object> retrievalAuditMetadata(String mode, int keywordCandidates, int semanticCandidates,
+                                                       int returnedEvidence, int permissionFiltered,
+                                                       boolean vectorAvailable, String vectorFailureCode,
+                                                       long elapsedMs) {
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("retrievalMode", mode);
+        metadata.put("keywordCandidateCount", Math.max(0, keywordCandidates));
+        metadata.put("semanticCandidateCount", Math.max(0, semanticCandidates));
+        metadata.put("returnedEvidenceCount", Math.max(0, returnedEvidence));
+        metadata.put("permissionFilteredCount", Math.max(0, permissionFiltered));
+        boolean notRequested = "KEYWORD_MODE".equals(vectorFailureCode) || "NOT_REQUESTED".equals(vectorFailureCode);
+        metadata.put("vectorState", vectorAvailable ? "READY" : (notRequested ? "NOT_REQUESTED" : "UNAVAILABLE"));
+        if (!vectorAvailable && !notRequested && StringUtils.hasText(vectorFailureCode)) {
+            metadata.put("vectorFailureCode", vectorFailureCode);
+        }
+        metadata.put("elapsedMs", Math.max(0L, elapsedMs));
+        return metadata;
+    }
+    private static long elapsedMillis(long startedAtNanos) {
+        return TimeUnit.NANOSECONDS.toMillis(Math.max(0L, System.nanoTime() - startedAtNanos));
+    }
 
     private String safeError(RuntimeException ex) { return ex.getClass().getSimpleName().replaceAll("[^A-Za-z0-9_]", "_"); }
     private static Long epoch(Object value) {
@@ -696,6 +933,15 @@ public class AgentProjectKnowledgeService {
     }
     private static long number(Object value) { try { return Long.parseLong(String.valueOf(value)); } catch (RuntimeException ex) { return 0; } }
     private static String extension(String name) { int dot = name.lastIndexOf('.'); return dot < 0 ? "" : name.substring(dot + 1).toLowerCase(); }
-    private static String sha256(byte[] value) { try { return java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value)); } catch (Exception ex) { throw new IllegalStateException(ex); } }
+    private static String sha256(byte[] value) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(value);
+            StringBuilder hex = new StringBuilder(digest.length * 2);
+            for (byte item : digest) hex.append(String.format(Locale.ROOT, "%02x", item & 0xFF));
+            return hex.toString();
+        } catch (Exception ex) {
+            throw new IllegalStateException(ex);
+        }
+    }
     @SuppressWarnings("unchecked") private static List<Map<String, Object>> maps(Object value) { if (!(value instanceof List)) return Collections.emptyList(); List<Map<String, Object>> out = new ArrayList<>(); for (Object item : (List<?>) value) if (item instanceof Map) out.add((Map<String, Object>) item); return out; }
 }

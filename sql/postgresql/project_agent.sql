@@ -108,6 +108,54 @@ CREATE TABLE IF NOT EXISTS agent_knowledge_chunk (
 CREATE INDEX IF NOT EXISTS idx_agent_knowledge_chunk_search
     ON agent_knowledge_chunk USING GIN (search_vector);
 
+-- RAG 向量是全文索引的补充，不是另一份知识事实源。pgvector 不可用时，
+-- 整个表和索引不会创建，Java 会继续使用全文检索并保持功能可用。
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector')
+            AND EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'vector') THEN
+        BEGIN
+            CREATE EXTENSION IF NOT EXISTS vector;
+        EXCEPTION WHEN insufficient_privilege THEN
+            RAISE NOTICE 'pgvector is available but this migration role cannot enable it; project knowledge remains keyword-only';
+        END;
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') THEN
+        BEGIN
+        CREATE TABLE IF NOT EXISTS agent_knowledge_chunk_embedding (
+            chunk_id BIGINT PRIMARY KEY REFERENCES agent_knowledge_chunk(chunk_id) ON DELETE CASCADE,
+            content_hash VARCHAR(128) NOT NULL,
+            embedding_model VARCHAR(300) NOT NULL,
+            embedding_projected vector(1536),
+            status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            next_retry_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_error_code VARCHAR(128),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT ck_agent_knowledge_embedding_status CHECK (status IN ('PENDING', 'PROCESSING', 'READY', 'FAILED')),
+            CONSTRAINT ck_agent_knowledge_embedding_attempt CHECK (attempt_count >= 0)
+        );
+        EXCEPTION WHEN insufficient_privilege THEN
+            RAISE NOTICE 'pgvector is installed but this migration role cannot create the optional embedding table; project knowledge remains keyword-only';
+        END;
+
+        IF to_regclass('agent_knowledge_chunk_embedding') IS NOT NULL THEN
+            BEGIN
+        CREATE INDEX IF NOT EXISTS idx_agent_knowledge_embedding_pending
+            ON agent_knowledge_chunk_embedding (status, next_retry_at, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_agent_knowledge_embedding_hnsw
+            ON agent_knowledge_chunk_embedding USING hnsw (embedding_projected vector_cosine_ops)
+            WHERE status = 'READY' AND embedding_projected IS NOT NULL;
+            EXCEPTION WHEN insufficient_privilege OR undefined_object OR feature_not_supported THEN
+                RAISE NOTICE 'project embedding table is available but optional indexes could not be created; semantic retrieval stays disabled until migration succeeds';
+            END;
+        END IF;
+    ELSE
+        RAISE NOTICE 'pgvector is not installed; project knowledge remains keyword-only';
+    END IF;
+END $$;
+
 -- 同步记录仅保留版本、状态与安全错误码。正文、文件路径和令牌一律不进审计。
 CREATE TABLE IF NOT EXISTS agent_project_document_sync (
     sync_id BIGSERIAL PRIMARY KEY,
@@ -138,11 +186,14 @@ CREATE TABLE IF NOT EXISTS agent_project_analysis_audit (
     snapshot_at TIMESTAMPTZ,
     statistics_rule_version VARCHAR(64) NOT NULL,
     source_versions JSONB NOT NULL DEFAULT '[]'::jsonb,
+    retrieval_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     report_id VARCHAR(64),
     failure_code VARCHAR(128),
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT ck_agent_project_analysis_audit_action CHECK (action IN ('ANALYZE', 'REPORT', 'SEARCH', 'SYNC'))
 );
+ALTER TABLE agent_project_analysis_audit
+    ADD COLUMN IF NOT EXISTS retrieval_metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
 CREATE INDEX IF NOT EXISTS idx_agent_project_analysis_audit_scope
     ON agent_project_analysis_audit (tenant_id, user_id, project_id, created_at DESC);
 
@@ -150,8 +201,19 @@ INSERT INTO agent_schema_migration (version)
 VALUES ('agent_project_provider_v1')
 ON CONFLICT (version) DO NOTHING;
 
+INSERT INTO agent_schema_migration (version)
+VALUES ('agent_project_hybrid_rag_v1')
+ON CONFLICT (version) DO NOTHING;
+
 COMMENT ON TABLE agent_kod_user_binding IS 'OA 到 KodCloud 的显式用户映射；缺少映射必须返回 KOD_USER_BINDING_REQUIRED';
 COMMENT ON TABLE agent_policy_library_binding IS '管理员维护的共享制度目录与只读服务账号绑定，不保存 KodCloud 凭据';
 COMMENT ON TABLE agent_project_report IS '当前用户可下载的短期项目报告快照，下载时重新检查 owner';
 COMMENT ON TABLE agent_knowledge_source IS '通用项目/制度知识来源，不保存文件路径、下载 URL 或登录凭据';
 COMMENT ON TABLE agent_project_analysis_audit IS '项目 Agent 审计，仅保存版本、口径和错误码，不保存文件正文';
+
+DO $$
+BEGIN
+    IF to_regclass('agent_knowledge_chunk_embedding') IS NOT NULL THEN
+        EXECUTE 'COMMENT ON TABLE agent_knowledge_chunk_embedding IS ''项目资料的可失效语义检索副本；正文、路径、令牌均不保存于此表''';
+    END IF;
+END $$;

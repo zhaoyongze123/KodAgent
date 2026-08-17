@@ -601,10 +601,15 @@ def _project_analysis_model_facts(receipt: DelegatedProjectInvestigationReceipt)
     ]
     citation_facts = [
         {
+            "citationId": _short_text(item.get("citationId") or item.get("citation_id"), maximum=40),
             "sourceType": _short_text(item.get("sourceType"), maximum=40),
             "name": _short_text(item.get("name"), maximum=160),
             "section": _short_text(item.get("section"), maximum=120),
-            "content": _short_text(item.get("content"), maximum=480),
+            "contentVersion": _short_text(item.get("contentVersion") or item.get("content_version"), maximum=128),
+            "retrievalMethod": _short_text(item.get("retrievalMethod") or item.get("retrieval_method"), maximum=24),
+            # Java 侧只输出受限摘录；content 仅作为旧回执兼容，不再把正文全量
+            # 透传给主 Agent。
+            "excerpt": _short_text(item.get("excerpt") or item.get("content"), maximum=280),
         }
         for item in receipt.citations[:5]
         if isinstance(item, dict)
