@@ -143,6 +143,45 @@ class AgentProjectKnowledgeServiceTest {
     }
 
     @Test
+    void folderSourceRequiresCurrentUserVisibilityAndSameVersion() {
+        Map<String, Object> source = new LinkedHashMap<>();
+        source.put("sourceType", "KOD_FOLDER");
+        source.put("fileId", 41L);
+        source.put("contentVersion", "current");
+        Map<Long, String> visible = new LinkedHashMap<>();
+        visible.put(41L, "current");
+
+        assertTrue(AgentProjectKnowledgeService.visibleFolderSource(source, visible));
+        assertFalse(AgentProjectKnowledgeService.visibleFolderSource(source, Collections.<Long, String>emptyMap()));
+        visible.put(41L, "replaced");
+        assertFalse(AgentProjectKnowledgeService.visibleFolderSource(source, visible));
+    }
+
+    @Test
+    void folderSourceCannotReuseVisibilityFromAnotherLibrary() {
+        Map<String, Object> sourceInFirstLibrary = new LinkedHashMap<>();
+        sourceInFirstLibrary.put("sourceType", "KOD_FOLDER");
+        sourceInFirstLibrary.put("libraryId", 10L);
+        sourceInFirstLibrary.put("fileId", 41L);
+        sourceInFirstLibrary.put("contentVersion", "v2");
+        Map<String, Object> sourceInSecondLibrary = new LinkedHashMap<>();
+        sourceInSecondLibrary.put("sourceType", "KOD_FOLDER");
+        sourceInSecondLibrary.put("libraryId", 11L);
+        sourceInSecondLibrary.put("fileId", 41L);
+        sourceInSecondLibrary.put("contentVersion", "v2");
+
+        Map<Long, Map<Long, String>> visibleByLibrary = new LinkedHashMap<>();
+        Map<Long, String> visibleInFirstLibrary = new LinkedHashMap<>();
+        visibleInFirstLibrary.put(41L, "v2");
+        visibleByLibrary.put(10L, visibleInFirstLibrary);
+
+        List<Map<String, Object>> current = AgentProjectKnowledgeService.currentFolderSources(
+                Arrays.asList(sourceInFirstLibrary, sourceInSecondLibrary), visibleByLibrary);
+
+        assertEquals(Collections.singletonList(sourceInFirstLibrary), current);
+    }
+
+    @Test
     void hybridRankingPromotesSemanticEvidenceWithoutDiscardingExactTitleMatch() {
         Map<String, Object> exactTitle = new LinkedHashMap<>();
         exactTitle.put("chunkId", 1L);

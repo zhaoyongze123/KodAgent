@@ -22,16 +22,28 @@ class ProjectAgentBridge{
 	/** 分发只读动作。项目动作与制度库动作都必须先通过短期票据校验。 */
 	public function dispatch($action){
 		$this->claims = $this->verifyTicket();
-		switch($action){
-			case 'projects': $this->json($this->listProjects()); break;
-			case 'snapshot': $this->json($this->snapshot($this->number('projectID'))); break;
-			case 'tasks': $this->json($this->tasks($this->number('projectID'))); break;
-			case 'activity': $this->json($this->activity($this->number('projectID'))); break;
-			case 'documents': $this->json($this->documents($this->number('projectID'))); break;
-			case 'document': $this->documentContent($this->number('projectID'),$this->number('fileID')); break;
-			case 'policy_documents': $this->json($this->policyDocuments($this->number('folderID'))); break;
-			case 'policy_document': $this->policyDocumentContent($this->number('folderID'),$this->number('fileID')); break;
-			default: show_json('Agent 项目桥接动作不支持',false);
+		// 票据不是浏览器 Session，KodCloud 的 explorer.auth 仍会读取 KodUser::id()。
+		// 在本次 PHP 请求内临时切换到映射用户，使目录浏览、文件读取和列表过滤遵循
+		// 与 KodCloud 页面相同的权限规则；请求结束后恢复，不能污染其他入口。
+		$previousUserID = KodUser::id();
+		KodUser::set($this->userID());
+		try{
+			switch($action){
+				case 'projects': $this->json($this->listProjects()); break;
+				case 'snapshot': $this->json($this->snapshot($this->number('projectID'))); break;
+				case 'tasks': $this->json($this->tasks($this->number('projectID'))); break;
+				case 'activity': $this->json($this->activity($this->number('projectID'))); break;
+				case 'documents': $this->json($this->documents($this->number('projectID'))); break;
+				case 'document': $this->documentContent($this->number('projectID'),$this->number('fileID')); break;
+				case 'policy_documents': $this->json($this->policyDocuments($this->number('folderID'))); break;
+				case 'policy_document': $this->policyDocumentContent($this->number('folderID'),$this->number('fileID')); break;
+				case 'knowledge_folder': $this->json($this->knowledgeFolder($this->number('folderID'))); break;
+				case 'knowledge_documents': $this->json($this->knowledgeDocuments($this->number('folderID'))); break;
+				case 'knowledge_document': $this->knowledgeDocumentContent($this->number('folderID'),$this->number('fileID')); break;
+				default: show_json('Agent 项目桥接动作不支持',false);
+			}
+		}finally{
+			KodUser::set($previousUserID);
 		}
 	}
 
@@ -162,6 +174,127 @@ class ProjectAgentBridge{
 			'contentBase64'=>base64_encode($content),'contentBytes'=>strlen($content),
 			'contentHash'=>hash('sha256',$content),
 		),true);
+	}
+
+	/**
+	 * 为管理员目录选择器返回当前用户可浏览的目录层级。
+	 *
+	 * folderID 为空时只从该用户自己的 KodCloud 根目录开始；用户可输入其他已知
+	 * 目录编号跳转，随后同样会经过 explorer.auth 校验。响应只包含稳定 sourceID
+	 * 和展示名，绝不返回 KodCloud path。
+	 */
+	private function knowledgeFolder($folderID){
+		$root = $this->knowledgeFolderRoot($folderID);
+		$data = $this->listFolderForCurrentUser(_get($root,'path',''));
+		$folders = array();
+		foreach((array)_get($data,'folderList',array()) as $item){
+			if(!is_array($item) || !_get($item,'sourceID') || !_get($item,'name')){continue;}
+			if(!$this->fileCanRead(_get($item,'path',''))){continue;}
+			$folders[] = array('folderID'=>intval(_get($item,'sourceID')),'name'=>_get($item,'name',''));
+		}
+		return array(
+			'folder'=>array('folderID'=>intval(_get($root,'sourceID')),'name'=>_get($root,'name','')),
+			'folders'=>$folders,
+			'asOf'=>time(),
+		);
+	}
+
+	/** 返回当前用户在已授权目录内可见的文档元数据，用于检索前权限和版本复核。 */
+	private function knowledgeDocuments($folderID){
+		$root = $this->knowledgeFolderRoot($folderID);
+		return array(
+			'folderID'=>intval(_get($root,'sourceID')),
+			'items'=>$this->documentProjection($this->crawlAuthorizedDocumentRows(_get($root,'path',''))),
+			'asOf'=>time(),
+		);
+	}
+
+	/**
+	 * 在当前用户可读的选定目录内读取一个文件。fileID 必须出现在递归授权列表中，
+	 * 不接受路径，因此 Java 不能借此读取目录外任意文件。
+	 */
+	private function knowledgeDocumentContent($folderID,$fileID){
+		$root = $this->knowledgeFolderRoot($folderID);
+		$file = false;
+		foreach($this->crawlAuthorizedDocumentRows(_get($root,'path','')) as $item){
+			if(is_array($item) && (string)_get($item,'sourceID',_get($item,'fileID')) === (string)$fileID){$file=$item;break;}
+		}
+		if(!$file || !_get($file,'path') || _get($file,'type') !== 'file' || !$this->fileCanRead(_get($file,'path',''))){
+			show_json('目录文件不存在或当前用户无权读取',false);return;
+		}
+		$this->readDocumentContent($file,array('folderID'=>$folderID));
+	}
+
+	/** 解析并校验一个可道云目录 sourceID，禁止空路径和无读取权限的目录。 */
+	private function knowledgeFolderRoot($folderID){
+		if(!$folderID){
+			$user = false;
+			try{$user = Model('User')->getInfoFull($this->userID());}catch(Exception $e){$user=false;}
+			$folderID = intval(_get($user,'sourceInfo.sourceID',0));
+		}
+		if(!$folderID){show_json('未找到当前用户可浏览的 KodCloud 目录',false);}
+		$source = false;
+		try{$source=Model('Source')->pathInfo($folderID);}catch(Exception $e){$source=false;}
+		$path = _get($source,'path','');
+		$info = $path ? IO::info($path) : false;
+		if(!$source || !$path || !is_array($info) || _get($info,'type') !== 'folder' || !$this->fileCanRead($path)){
+			show_json('目录不存在或当前用户无权读取',false);
+		}
+		$source['path']=$path;
+		$source['name']=_get($info,'name',_get($source,'name',''));
+		$source['sourceID']=intval(_get($source,'sourceID',$folderID));
+		return $source;
+	}
+
+	/** 通过 KodCloud explorer 的列表投影获得当前身份已授权的直接子项。 */
+	private function listFolderForCurrentUser($path){
+		if(!$path || !$this->fileCanRead($path)){show_json('目录不存在或当前用户无权读取',false);}
+		try{$data=Action('explorer.list')->path($path);}catch(Exception $e){$data=false;}
+		if(!is_array($data)){show_json('目录暂时无法读取',false);}
+		return $data;
+	}
+
+	/**
+	 * 递归遍历时每层均通过 explorer 列表和 fileCanRead 复核，避免 IO::listPath
+	 * 的原始结果绕过部门、协作分享或目录级权限。文件数上限保持与旧制度库一致。
+	 */
+	private function crawlAuthorizedDocumentRows($root){
+		$pending=array($root);$files=array();$visited=array();$limit=10000;
+		while($pending && count($files)<$limit){
+			$path=array_shift($pending);
+			if(!$path || isset($visited[$path]) || !$this->fileCanRead($path)){continue;}
+			$visited[$path]=true;
+			try{$data=$this->listFolderForCurrentUser($path);}catch(Exception $e){$data=false;}
+			if(!is_array($data)){continue;}
+			foreach((array)_get($data,'fileList',array()) as $file){
+				if(is_array($file) && _get($file,'type')==='file' && $this->fileCanRead(_get($file,'path',''))){$files[]=$file;}
+			}
+			foreach((array)_get($data,'folderList',array()) as $folder){
+				$folderPath=_get($folder,'path','');
+				if(is_array($folder) && $folderPath && $this->fileCanRead($folderPath)){$pending[]=$folderPath;}
+			}
+		}
+		return $files;
+	}
+
+	private function fileCanRead($path){
+		if(!$path){return false;}
+		try{return Action('explorer.auth')->fileCanRead($path) ? true:false;}catch(Exception $e){return false;}
+	}
+
+	/** 目录、项目资料和制度库使用相同的二进制读取边界。 */
+	private function readDocumentContent($file,$extra=array()){
+		$size=intval(_get($file,'size',0));
+		if($size>$this->documentReadMaxBytes()){show_json('文件超过桥接读取大小限制',false);return;}
+		try{$content=IO::getContent($file['path']);}catch(Exception $e){$content=false;}
+		if($content===false){show_json('文件暂不支持正文读取',false);return;}
+		$data=array_merge((array)$extra,array(
+			'fileID'=>_get($file,'sourceID',_get($file,'fileID')),
+			'name'=>_get($file,'name',''),'mime'=>$this->documentMime($file),
+			'contentEncoding'=>'base64','contentBase64'=>base64_encode($content),
+			'contentBytes'=>strlen($content),'contentHash'=>hash('sha256',$content),
+		));
+		show_json($data,true);
 	}
 
 	private function taskData($projectID,$info,$userID){

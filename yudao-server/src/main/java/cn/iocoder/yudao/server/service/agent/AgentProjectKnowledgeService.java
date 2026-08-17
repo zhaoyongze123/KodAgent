@@ -72,6 +72,8 @@ public class AgentProjectKnowledgeService {
     private AgentProjectAuditService auditService;
     @Resource
     private AgentProjectEmbeddingService embeddingService;
+    @Resource
+    private AgentKnowledgeLibraryService libraryService;
 
     /**
      * 检索项目资料和管理员维护的制度库。
@@ -104,8 +106,34 @@ public class AgentProjectKnowledgeService {
         }
 
         boolean policyEnabled = includePolicyLibrary && bridgeService.hasPolicyLibrary(tenantId);
+        // 目录资料的索引由管理员维护，但检索必须按当前提问用户的 KodCloud 身份
+        // 重新列举可见文件；库配置里的 owner_user_id 绝不能替代用户授权事实。
+        Map<Long, Map<Long, String>> folderVisibleVersions = new LinkedHashMap<>();
+        if (includePolicyLibrary) {
+            for (Map<String, Object> library : libraryService.activeKodFolders()) {
+                if (!tenantId.equals(numberObject(library.get("tenantId")))) continue;
+                long libraryId = number(library.get("libraryId"));
+                long folderId = number(library.get("folderId"));
+                if (libraryId <= 0 || folderId <= 0) continue;
+                try {
+                    Map<String, Object> visible = bridgeService.knowledgeDocuments(tenantId, userId, folderId);
+                    Map<Long, String> versions = new LinkedHashMap<>();
+                    for (Map<String, Object> item : maps(visible.get("items"))) {
+                        long fileId = number(item.get("fileID"));
+                        if (fileId > 0) versions.put(fileId, String.valueOf(item.getOrDefault("version",
+                                item.getOrDefault("contentHash", ""))));
+                    }
+                    folderVisibleVersions.put(libraryId, versions);
+                } catch (RuntimeException ignored) {
+                    // 当前用户无映射、失权或目录暂不可用时不把该目录索引视为可读；
+                    // 不吞掉项目资料本身的检索结果，也不退化为管理员身份。
+                }
+            }
+        }
+        List<Long> visibleLocalLibraryIds = includePolicyLibrary
+                ? libraryService.visibleLocalLibraryIds(tenantId, userId) : Collections.<Long>emptyList();
         StringBuilder sourceSql = new StringBuilder(
-                "SELECT source_id, source_type, project_id, kod_file_id, display_name, document_type, content_version "
+                "SELECT source_id, source_type, project_id, kod_file_id, library_id, display_name, document_type, content_version "
                         + "FROM agent_knowledge_source WHERE tenant_id = ? AND extraction_status = ? "
                         + "AND invalidated_at IS NULL "
                         + "AND ((source_type = 'PROJECT_FILES' AND project_id = ? AND kod_file_id IN (");
@@ -126,6 +154,17 @@ public class AgentProjectKnowledgeService {
         if (policyEnabled) {
             sourceSql.append(" OR source_type = 'POLICY_LIBRARY'");
         }
+        for (Map.Entry<Long, Map<Long, String>> entry : folderVisibleVersions.entrySet()) {
+            if (entry.getValue().isEmpty()) continue;
+            sourceSql.append(" OR (source_type='KOD_FOLDER' AND library_id=? AND kod_file_id IN (");
+            sourceSql.append(String.join(",", Collections.nCopies(entry.getValue().size(), "?"))).append("))");
+            args.add(entry.getKey()); args.addAll(entry.getValue().keySet());
+        }
+        if (!visibleLocalLibraryIds.isEmpty()) {
+            sourceSql.append(" OR (source_type='LOCAL_UPLOAD' AND library_id IN (");
+            sourceSql.append(String.join(",", Collections.nCopies(visibleLocalLibraryIds.size(), "?"))).append("))");
+            args.addAll(visibleLocalLibraryIds);
+        }
         // 最后一个右括号关闭整个“项目资料或制度库”的来源范围。
         sourceSql.append(") ORDER BY source_id");
         List<Map<String, Object>> sources = jdbcTemplate.query(sourceSql.toString(), (rs, rowNum) -> {
@@ -134,6 +173,7 @@ public class AgentProjectKnowledgeService {
             item.put("sourceType", rs.getString("source_type"));
             item.put("projectId", rs.getObject("project_id"));
             item.put("fileId", rs.getObject("kod_file_id"));
+            item.put("libraryId", rs.getObject("library_id"));
             item.put("name", rs.getString("display_name"));
             item.put("documentType", rs.getString("document_type"));
             item.put("contentVersion", rs.getString("content_version"));
@@ -143,6 +183,7 @@ public class AgentProjectKnowledgeService {
         // 当作最新资料返回。版本不一致的文件暂时不参与搜索；权限仍以本次 bridge
         // 返回的实时可见列表为准。
         sources = currentSources(sources, visibleVersions);
+        sources = currentFolderSources(sources, folderVisibleVersions);
         if (sources.isEmpty()) {
             auditService.record(tenantId, userId, projectId, "SEARCH", epoch(visibleDocuments.get("asOf")),
                     Collections.<Map<String, Object>>emptyList(), null, null,
@@ -167,7 +208,7 @@ public class AgentProjectKnowledgeService {
         for (int i = 0; i < fallbackTerms.size(); i++) {
             predicate.append(" OR c.content ILIKE ? ESCAPE '\\' OR s.display_name ILIKE ? ESCAPE '\\'");
         }
-        String sql = "SELECT c.chunk_id, d.source_id, s.source_type, s.project_id, s.kod_file_id, "
+        String sql = "SELECT c.chunk_id, d.source_id, s.source_type, s.project_id, s.kod_file_id, s.library_id, "
                 + "s.display_name, s.document_type, s.content_version, c.section, c.ordinal, c.content, "
                 + "ts_rank_cd(c.search_vector, websearch_to_tsquery('simple', ?)) score "
                 + "FROM agent_knowledge_chunk c JOIN agent_knowledge_document d ON d.document_id = c.document_id "
@@ -193,6 +234,7 @@ public class AgentProjectKnowledgeService {
             item.put("sourceType", rs.getString("source_type"));
             item.put("projectId", rs.getObject("project_id"));
             item.put("fileId", rs.getObject("kod_file_id"));
+            item.put("libraryId", rs.getObject("library_id"));
             item.put("name", rs.getString("display_name"));
             item.put("documentType", rs.getString("document_type"));
             item.put("contentVersion", rs.getString("content_version"));
@@ -222,6 +264,8 @@ public class AgentProjectKnowledgeService {
         for (Map<String, Object> hit : hits) {
             if ("PROJECT_FILES".equals(hit.get("sourceType"))
                     && !visibleFileIds.contains(number(hit.get("fileId")))) continue;
+            if ("KOD_FOLDER".equals(hit.get("sourceType")) && !visibleFolderSource(hit,
+                    folderVisibleVersions.get(number(hit.get("libraryId"))))) continue;
             checked.add(evidence(hit, checked.size() + 1));
         }
         String mode = retrievalMode(configuredMode, semantic, embeddingService.isRagRequested());
@@ -322,6 +366,117 @@ public class AgentProjectKnowledgeService {
     }
 
     /**
+     * 同步管理员维护的统一知识源。目录源以配置管理员身份建立索引；但其索引仅是
+     * 派生副本，查询时仍会以当前提问用户身份重新枚举可见文件。
+     */
+    public Map<String, Object> syncManagedLibrary(Long tenantId, Long requestedByUserId, long libraryId) {
+        Map<String, Object> library = libraryService.activeLibrary(tenantId, libraryId);
+        try {
+            Map<String, Object> result;
+            String kind = String.valueOf(library.get("sourceKind"));
+            if ("KOD_FOLDER".equals(kind)) {
+                result = syncKodFolderLibrary(tenantId, library);
+            } else if ("LOCAL_UPLOAD".equals(kind)) {
+                result = syncLocalUploadLibrary(tenantId, library);
+            } else {
+                throw new IllegalArgumentException("知识源类型不支持");
+            }
+            libraryService.updateSyncStatus(tenantId, libraryId, "SUCCEEDED", null);
+            return result;
+        } catch (RuntimeException ex) {
+            libraryService.updateSyncStatus(tenantId, libraryId, "FAILED", safeError(ex));
+            throw ex;
+        }
+    }
+
+    /** 停用来源时同步清除全文、chunk 与 embedding，不能让旧索引继续被检索。 */
+    public void invalidateManagedLibrary(Long tenantId, long libraryId) {
+        List<Long> sourceIds = jdbcTemplate.query("SELECT source_id FROM agent_knowledge_source "
+                        + "WHERE tenant_id=? AND library_id=? AND invalidated_at IS NULL",
+                (rs, rowNum) -> rs.getLong(1), tenantId, libraryId);
+        for (Long sourceId : sourceIds) invalidateSource(sourceId);
+    }
+
+    private Map<String, Object> syncKodFolderLibrary(Long tenantId, Map<String, Object> library) {
+        long libraryId = number(library.get("libraryId"));
+        long ownerUserId = number(library.get("ownerUserId"));
+        long folderId = number(library.get("folderId"));
+        if (libraryId <= 0 || ownerUserId <= 0 || folderId <= 0) throw new IllegalStateException("知识目录配置无效");
+        Map<String, Object> visible = bridgeService.knowledgeDocuments(tenantId, ownerUserId, folderId);
+        Set<Long> current = new LinkedHashSet<>();
+        int scanned = 0, indexed = 0;
+        for (Map<String, Object> item : maps(visible.get("items"))) {
+            long fileId = number(item.get("fileID"));
+            if (fileId <= 0) continue;
+            current.add(fileId); scanned++;
+            long sourceId = upsertFolderSource(tenantId, libraryId, fileId, item);
+            String name = String.valueOf(item.getOrDefault("name", ""));
+            String ext = extension(name);
+            if (!supportedExtension(ext)) {
+                updateSource(sourceId, "pdf".equals(ext) ? "NEEDS_OCR" : "UNSUPPORTED", null);
+                continue;
+            }
+            try {
+                String content = extractContent(bridgeService.knowledgeDocument(tenantId, ownerUserId, folderId, fileId), ext);
+                if (!StringUtils.hasText(content)) {
+                    updateSource(sourceId, emptyExtractionStatus(ext), null);
+                    continue;
+                }
+                reindex(sourceId, name, sha256(content.getBytes(StandardCharsets.UTF_8)), content);
+                indexed++;
+            } catch (RuntimeException ex) {
+                updateSource(sourceId, "FAILED", null);
+            }
+        }
+        int invalidated = invalidateMissingFolderSources(tenantId, libraryId, current);
+        return managedSyncResult(libraryId, "KOD_FOLDER", scanned, indexed, invalidated);
+    }
+
+    private Map<String, Object> syncLocalUploadLibrary(Long tenantId, Map<String, Object> library) {
+        long libraryId = number(library.get("libraryId"));
+        Map<String, Object> upload = libraryService.upload(tenantId, libraryId);
+        String name = String.valueOf(upload.getOrDefault("filename", ""));
+        String ext = extension(name);
+        long sourceId = upsertLocalUploadSource(tenantId, libraryId, upload);
+        if (!supportedExtension(ext)) {
+            updateSource(sourceId, "pdf".equals(ext) ? "NEEDS_OCR" : "UNSUPPORTED", null);
+            return managedSyncResult(libraryId, "LOCAL_UPLOAD", 1, 0, 0);
+        }
+        String content = extractContent((byte[]) upload.get("content"), ext);
+        if (!StringUtils.hasText(content)) {
+            updateSource(sourceId, emptyExtractionStatus(ext), null);
+            return managedSyncResult(libraryId, "LOCAL_UPLOAD", 1, 0, 0);
+        }
+        reindex(sourceId, name, sha256(content.getBytes(StandardCharsets.UTF_8)), content);
+        return managedSyncResult(libraryId, "LOCAL_UPLOAD", 1, 1, 0);
+    }
+
+    private int invalidateMissingFolderSources(Long tenantId, long libraryId, Set<Long> current) {
+        List<Map<String, Object>> sources = jdbcTemplate.query("SELECT source_id, kod_file_id FROM agent_knowledge_source "
+                        + "WHERE tenant_id=? AND source_type='KOD_FOLDER' AND library_id=? AND invalidated_at IS NULL",
+                (rs, rowNum) -> {
+                    Map<String, Object> source = new LinkedHashMap<>();
+                    source.put("sourceId", rs.getLong("source_id")); source.put("fileId", rs.getLong("kod_file_id"));
+                    return source;
+                }, tenantId, libraryId);
+        int invalidated = 0;
+        for (Map<String, Object> source : sources) {
+            if (!current.contains(number(source.get("fileId")))) {
+                invalidateSource(number(source.get("sourceId"))); invalidated++;
+            }
+        }
+        return invalidated;
+    }
+
+    private static Map<String, Object> managedSyncResult(long libraryId, String sourceKind,
+                                                          int scanned, int indexed, int invalidated) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("libraryId", libraryId); result.put("sourceKind", sourceKind); result.put("status", "SUCCEEDED");
+        result.put("scanned", scanned); result.put("indexed", indexed); result.put("invalidated", invalidated);
+        result.put("asOf", OffsetDateTime.now()); return result;
+    }
+
+    /**
      * 本地定时增量同步。
      *
      * <p>用户绑定只用于发现其可访问的项目，不能成为“同一项目同步次数”的
@@ -342,6 +497,16 @@ public class AgentProjectKnowledgeService {
                     syncPolicyLibrary(tenantId, null);
                 } catch (RuntimeException ignored) {
                     // 单个租户制度库失败不阻断其他项目；下次定时任务继续重试。
+                }
+            }
+            // 每个目录源仅同步一次，配置管理员是建立索引时的读取身份；查询路径不会
+            // 复用该身份，因此不会把管理员的目录权限扩散给普通成员。
+            for (Map<String, Object> library : libraryService.activeKodFolders()) {
+                try {
+                    syncManagedLibrary(numberObject(library.get("tenantId")), numberObject(library.get("ownerUserId")),
+                            number(library.get("libraryId")));
+                } catch (RuntimeException ignored) {
+                    // 一个目录源失败不阻断其他目录和项目；状态由 library 记录安全错误码。
                 }
             }
             List<Map<String, Object>> bindings = jdbcTemplate.query(
@@ -535,6 +700,46 @@ public class AgentProjectKnowledgeService {
         return ids.get(0);
     }
 
+    private long upsertFolderSource(Long tenantId, long libraryId, long fileId, Map<String, Object> file) {
+        List<Long> ids = jdbcTemplate.query("SELECT source_id FROM agent_knowledge_source WHERE tenant_id=? "
+                        + "AND source_type='KOD_FOLDER' AND library_id=? AND kod_file_id=?",
+                (rs, rowNum) -> rs.getLong(1), tenantId, libraryId, fileId);
+        String name = String.valueOf(file.getOrDefault("name", "未命名资料"));
+        String type = extension(name);
+        String version = String.valueOf(file.getOrDefault("version", file.getOrDefault("contentHash", "")));
+        if (ids.isEmpty()) {
+            Number created = jdbcTemplate.queryForObject("INSERT INTO agent_knowledge_source "
+                            + "(tenant_id, source_type, library_id, kod_file_id, display_name, document_type, content_version) "
+                            + "VALUES (?, 'KOD_FOLDER', ?, ?, ?, ?, ?) RETURNING source_id",
+                    Number.class, tenantId, libraryId, fileId, name, type, version);
+            return created == null ? 0 : created.longValue();
+        }
+        jdbcTemplate.update("UPDATE agent_knowledge_source SET display_name=?, document_type=?, content_version=?, "
+                        + "updated_at=CURRENT_TIMESTAMP, invalidated_at=NULL WHERE source_id=?",
+                name, type, version, ids.get(0));
+        return ids.get(0);
+    }
+
+    private long upsertLocalUploadSource(Long tenantId, long libraryId, Map<String, Object> upload) {
+        List<Long> ids = jdbcTemplate.query("SELECT source_id FROM agent_knowledge_source WHERE tenant_id=? "
+                        + "AND source_type='LOCAL_UPLOAD' AND library_id=?",
+                (rs, rowNum) -> rs.getLong(1), tenantId, libraryId);
+        String name = String.valueOf(upload.getOrDefault("filename", "未命名资料"));
+        String type = extension(name);
+        String version = String.valueOf(upload.getOrDefault("contentVersion", upload.getOrDefault("contentHash", "")));
+        if (ids.isEmpty()) {
+            Number created = jdbcTemplate.queryForObject("INSERT INTO agent_knowledge_source "
+                            + "(tenant_id, source_type, library_id, display_name, document_type, content_version) "
+                            + "VALUES (?, 'LOCAL_UPLOAD', ?, ?, ?, ?) RETURNING source_id",
+                    Number.class, tenantId, libraryId, name, type, version);
+            return created == null ? 0 : created.longValue();
+        }
+        jdbcTemplate.update("UPDATE agent_knowledge_source SET display_name=?, document_type=?, content_version=?, "
+                        + "updated_at=CURRENT_TIMESTAMP, invalidated_at=NULL WHERE source_id=?",
+                name, type, version, ids.get(0));
+        return ids.get(0);
+    }
+
     private void reindex(long sourceId, String name, String hash, String content) {
         String old = jdbcTemplate.query("SELECT content_hash FROM agent_knowledge_document WHERE source_id=? ORDER BY document_id DESC LIMIT 1", (rs, rowNum) -> rs.getString(1), sourceId).stream().findFirst().orElse(null);
         if (hash.equals(old)) { updateSource(sourceId, READY, hash); return; }
@@ -560,6 +765,11 @@ public class AgentProjectKnowledgeService {
         if (!StringUtils.hasText(encoded)) return "";
         byte[] bytes;
         try { bytes = Base64.getDecoder().decode(encoded); } catch (IllegalArgumentException ex) { return ""; }
+        return extractContent(bytes, ext);
+    }
+
+    private String extractContent(byte[] bytes, String ext) {
+        if (bytes == null || bytes.length == 0) return "";
         if ("txt".equals(ext) || "md".equals(ext)) return new String(bytes, StandardCharsets.UTF_8);
         if ("pdf".equals(ext)) return pdfText(bytes);
         return xmlText(bytes);
@@ -567,6 +777,11 @@ public class AgentProjectKnowledgeService {
 
     private static String emptyExtractionStatus(String ext) {
         return "pdf".equals(ext) ? "NEEDS_OCR" : "UNSUPPORTED";
+    }
+
+    private static boolean supportedExtension(String ext) {
+        return "txt".equals(ext) || "md".equals(ext) || "docx".equals(ext)
+                || "xlsx".equals(ext) || "pdf".equals(ext);
     }
 
     /** 数字 PDF 按页提取，保留页码标记以便后续引用能返回稳定定位。 */
@@ -880,6 +1095,27 @@ public class AgentProjectKnowledgeService {
         return current;
     }
 
+    /** 目录源的 fileId 只在同一 libraryId 内有意义，必须同时核对库、文件与版本。 */
+    static List<Map<String, Object>> currentFolderSources(List<Map<String, Object>> sources,
+                                                           Map<Long, Map<Long, String>> folderVersions) {
+        List<Map<String, Object>> current = new ArrayList<>();
+        for (Map<String, Object> source : sources) {
+            if (!"KOD_FOLDER".equals(source.get("sourceType"))
+                    || visibleFolderSource(source, folderVersions.get(number(source.get("libraryId"))))) {
+                current.add(source);
+            }
+        }
+        return current;
+    }
+
+    static boolean visibleFolderSource(Map<String, Object> source, Map<Long, String> visibleVersions) {
+        if (visibleVersions == null || visibleVersions.isEmpty()) return false;
+        long fileId = number(source.get("fileId"));
+        String current = visibleVersions.get(fileId);
+        String indexed = String.valueOf(source.getOrDefault("contentVersion", ""));
+        return fileId > 0 && StringUtils.hasText(current) && current.equals(indexed);
+    }
+
     private Map<String, Object> result(String query, String mode, List<Map<String, Object>> hits, Object asOf) {
         Map<String, Object> result = new LinkedHashMap<>(); result.put("query", query); result.put("retrievalMode", mode); result.put("hits", hits); result.put("total", hits.size()); result.put("asOf", asOf == null ? OffsetDateTime.now() : asOf); return result;
     }
@@ -925,6 +1161,7 @@ public class AgentProjectKnowledgeService {
             item.put("sourceId", source.get("sourceId"));
             item.put("sourceType", source.get("sourceType"));
             item.put("projectId", source.get("projectId"));
+            item.put("libraryId", source.get("libraryId"));
             item.put("fileId", source.get("fileId"));
             item.put("name", source.get("name"));
             result.add(item);
@@ -932,6 +1169,7 @@ public class AgentProjectKnowledgeService {
         return result;
     }
     private static long number(Object value) { try { return Long.parseLong(String.valueOf(value)); } catch (RuntimeException ex) { return 0; } }
+    private static Long numberObject(Object value) { long result = number(value); return result > 0 ? result : null; }
     private static String extension(String name) { int dot = name.lastIndexOf('.'); return dot < 0 ? "" : name.substring(dot + 1).toLowerCase(); }
     private static String sha256(byte[] value) {
         try {

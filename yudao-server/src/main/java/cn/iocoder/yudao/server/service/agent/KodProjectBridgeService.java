@@ -105,6 +105,30 @@ public class KodProjectBridgeService {
     }
 
     /**
+     * 浏览当前 KodCloud 用户可读的目录。folderId 为空时由插件返回用户根目录；
+     * Java 只获得目录编号和展示名，不接触 KodCloud 路径或浏览器会话。
+     */
+    public Map<String, Object> knowledgeFolder(Long tenantId, Long userId, Long folderId) {
+        return callFolder("knowledge_folder", tenantId, userId, folderId);
+    }
+
+    /** 当前用户在指定目录中实时可见的文件元数据，用于检索前版本和权限复核。 */
+    public Map<String, Object> knowledgeDocuments(Long tenantId, Long userId, long folderId) {
+        if (folderId <= 0) throw new IllegalArgumentException("知识目录编号必须为正整数");
+        return callFolder("knowledge_documents", tenantId, userId, folderId);
+    }
+
+    /** 读取当前用户可见目录中的已枚举文件正文，仅供 Java 索引任务使用。 */
+    public Map<String, Object> knowledgeDocument(Long tenantId, Long userId, long folderId, long fileId) {
+        if (folderId <= 0 || fileId <= 0) throw new IllegalArgumentException("知识目录或文件编号必须为正整数");
+        if (!StringUtils.hasText(properties.getBridgeSecret()) || properties.getBridgeSecret().length() < 32) {
+            throw new IllegalStateException("项目桥接密钥未配置");
+        }
+        long kodUserId = kodUserId(tenantId, userId);
+        return callAsKodUser("knowledge_document", tenantId, userId, kodUserId, null, fileId, folderId);
+    }
+
+    /**
      * 读取管理员配置的共享制度目录。目录访问固定使用单独的 KodCloud 只读服务账号，
      * 不会借用当前聊天用户的会话或令牌。
      */
@@ -167,6 +191,14 @@ public class KodProjectBridgeService {
         }
         long kodUserId = kodUserId(tenantId, userId);
         return callAsKodUser(action, tenantId, userId, kodUserId, projectId, fileId, null);
+    }
+
+    private Map<String, Object> callFolder(String action, Long tenantId, Long userId, Long folderId) {
+        if (!StringUtils.hasText(properties.getBridgeSecret()) || properties.getBridgeSecret().length() < 32) {
+            throw new IllegalStateException("项目桥接密钥未配置");
+        }
+        long kodUserId = kodUserId(tenantId, userId);
+        return callAsKodUser(action, tenantId, userId, kodUserId, null, null, folderId);
     }
 
     /**
