@@ -12,7 +12,7 @@ export function getOaAgentErrorStatus(error: unknown): number {
 }
 
 export async function getOaAgentHeaders(
-  permission = "agent:audit",
+  permission: "agent:audit" | "knowledge:manage" | string = "agent:audit",
 ): Promise<Record<string, string>> {
   const apiKey = process.env.OA_AGENT_API_KEY;
   if (!apiKey) {

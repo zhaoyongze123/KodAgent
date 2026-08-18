@@ -4,6 +4,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Proxy;
+import java.sql.ResultSet;
 import java.util.Arrays;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -182,6 +184,49 @@ class AgentProjectKnowledgeServiceTest {
     }
 
     @Test
+    void semanticFolderCandidatePreservesLibraryIdentityForPermissionRecheck() throws Exception {
+        Map<String, Object> values = new LinkedHashMap<>();
+        values.put("chunk_id", 9L);
+        values.put("source_id", 6L);
+        values.put("source_type", "KOD_FOLDER");
+        values.put("project_id", null);
+        values.put("kod_file_id", 41L);
+        values.put("library_id", 310L);
+        values.put("display_name", "综合交通提升规划任务书.docx");
+        values.put("document_type", "docx");
+        values.put("content_version", "v20260818");
+        values.put("section", "第 3 章");
+        values.put("ordinal", 2);
+        values.put("content", "停车组织应形成专项建议。");
+        values.put("semantic_score", 0.86D);
+
+        Map<String, Object> candidate = AgentProjectEmbeddingService.semanticCandidate(resultSet(values), 1);
+
+        assertEquals(Long.valueOf(310L), candidate.get("libraryId"));
+        assertTrue(AgentProjectKnowledgeService.visibleFolderSource(candidate,
+                Collections.singletonMap(41L, "v20260818")));
+    }
+
+    @Test
+    void changedMetadataVersionRequiresAFreshIndexBeforeTheSourceCanBeReady() {
+        assertTrue(AgentProjectKnowledgeService.requiresFreshIndex("v20260817", "v20260818"));
+        assertFalse(AgentProjectKnowledgeService.requiresFreshIndex("v20260818", "v20260818"));
+    }
+
+    @Test
+    void changedSourceIsMadeUnsearchableBeforeOldDerivedContentIsDeleted() throws Exception {
+        AgentProjectKnowledgeService service = new AgentProjectKnowledgeService();
+        SqlHistoryJdbcTemplate jdbcTemplate = new SqlHistoryJdbcTemplate();
+        setField(service, "jdbcTemplate", jdbcTemplate);
+
+        service.prepareExistingSource(91L, "v1", "进度报告.docx", "docx", "v2");
+
+        assertEquals(2, jdbcTemplate.sqls.size());
+        assertTrue(jdbcTemplate.sqls.get(0).contains("extraction_status='PENDING'"));
+        assertTrue(jdbcTemplate.sqls.get(1).startsWith("DELETE FROM agent_knowledge_document"));
+    }
+
+    @Test
     void hybridRankingPromotesSemanticEvidenceWithoutDiscardingExactTitleMatch() {
         Map<String, Object> exactTitle = new LinkedHashMap<>();
         exactTitle.put("chunkId", 1L);
@@ -213,6 +258,7 @@ class AgentProjectKnowledgeServiceTest {
         raw.put("name", "综合交通提升规划任务书.docx");
         raw.put("sourceType", "PROJECT_FILES");
         raw.put("projectId", 101L);
+        raw.put("libraryId", 310L);
         raw.put("fileId", 88L);
         raw.put("contentVersion", "v20260817");
         raw.put("section", "第 3 章 工作内容");
@@ -225,6 +271,7 @@ class AgentProjectKnowledgeServiceTest {
         Map<String, Object> evidence = AgentProjectKnowledgeService.evidence(raw, 1);
 
         assertEquals("资料 1", evidence.get("citationId"));
+        assertEquals(Long.valueOf(310L), evidence.get("libraryId"));
         assertEquals("第 3 章 工作内容", evidence.get("section"));
         assertTrue(String.valueOf(evidence.get("excerpt")).length() <= 280);
         assertFalse(evidence.containsKey("content"));
@@ -372,6 +419,27 @@ class AgentProjectKnowledgeServiceTest {
         Field field = target.getClass().getDeclaredField(name);
         field.setAccessible(true);
         field.set(target, value);
+    }
+
+    private static ResultSet resultSet(final Map<String, Object> values) {
+        return (ResultSet) Proxy.newProxyInstance(
+                AgentProjectKnowledgeServiceTest.class.getClassLoader(),
+                new Class<?>[] {ResultSet.class},
+                (proxy, method, args) -> {
+                    String name = method.getName();
+                    String column = args != null && args.length > 0 ? String.valueOf(args[0]) : null;
+                    Object value = values.get(column);
+                    if ("getObject".equals(name) || "getString".equals(name)) {
+                        return value == null ? null : String.class.equals(method.getReturnType())
+                                ? String.valueOf(value) : value;
+                    }
+                    if ("getLong".equals(name)) return value == null ? 0L : ((Number) value).longValue();
+                    if ("getInt".equals(name)) return value == null ? 0 : ((Number) value).intValue();
+                    if ("getDouble".equals(name)) return value == null ? 0D : ((Number) value).doubleValue();
+                    if ("wasNull".equals(name)) return value == null;
+                    if ("toString".equals(name)) return "ResultSet" + values;
+                    throw new UnsupportedOperationException(name);
+                });
     }
 
     private static final class RecordingJdbcTemplate extends JdbcTemplate {

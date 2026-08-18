@@ -24,6 +24,18 @@ def _hit(file_id: str, chunk_id: str) -> dict[str, str]:
     }
 
 
+def _local_upload_hit(library_id: str, chunk_id: str) -> dict[str, str]:
+    return {
+        "libraryId": library_id,
+        "chunkId": chunk_id,
+        "citationId": f"资料 {library_id}",
+        "sourceType": "LOCAL_UPLOAD",
+        "name": f"本地资料-{library_id}.docx",
+        "contentVersion": "v1",
+        "section": "正文",
+    }
+
+
 def _case(index: int, *, exact_name: bool = False, forbidden: list[str] | None = None) -> dict[str, object]:
     return {
         "id": f"case-{index}",
@@ -71,6 +83,27 @@ class ProjectRagEvaluationTest(unittest.TestCase):
         self.assertEqual(1, report["modes"]["hybrid"]["permissionLeakCount"])
         self.assertFalse(report["gate"]["eligible"])
         self.assertIn("hybrid_permission_leakage", report["gate"]["reasons"])
+
+    def test_local_upload_evidence_is_evaluated_by_its_library_identity(self) -> None:
+        cases = [{
+            "id": "local-upload",
+            "expectedEvidence": [{
+                "sourceType": "LOCAL_UPLOAD",
+                "libraryId": "library-301",
+                "chunkId": "chunk-8",
+                "contentVersion": "v1",
+            }],
+        }]
+        local_hit = _local_upload_hit("library-301", "chunk-8")
+        results = [
+            {"id": "local-upload", "mode": mode, "hits": [local_hit]}
+            for mode in ("keyword", "semantic", "hybrid")
+        ]
+
+        report = evaluate_project_rag(cases, results)
+
+        self.assertEqual(1.0, report["modes"]["hybrid"]["recallAt5"])
+        self.assertEqual(1.0, report["modes"]["hybrid"]["citationAccuracyAt5"])
 
 
 if __name__ == "__main__":

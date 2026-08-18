@@ -666,78 +666,93 @@ public class AgentProjectKnowledgeService {
     }
 
     private long upsertSource(Long tenantId, long projectId, long fileId, Map<String, Object> file) {
-        List<Long> ids = jdbcTemplate.query("SELECT source_id FROM agent_knowledge_source WHERE tenant_id=? AND source_type='PROJECT_FILES' AND project_id=? AND kod_file_id=?", (rs, rowNum) -> rs.getLong(1), tenantId, projectId, fileId);
+        List<ExistingSource> sources = jdbcTemplate.query("SELECT source_id, content_version FROM agent_knowledge_source WHERE tenant_id=? AND source_type='PROJECT_FILES' AND project_id=? AND kod_file_id=?", (rs, rowNum) -> new ExistingSource(rs.getLong("source_id"), rs.getString("content_version")), tenantId, projectId, fileId);
         String name = String.valueOf(file.getOrDefault("name", "未命名资料"));
         String type = extension(name);
         String version = String.valueOf(file.getOrDefault("version", file.getOrDefault("contentHash", "")));
-        if (ids.isEmpty()) {
+        if (sources.isEmpty()) {
             Number created = jdbcTemplate.queryForObject("INSERT INTO agent_knowledge_source (tenant_id, source_type, project_id, kod_file_id, display_name, document_type, content_version) VALUES (?, 'PROJECT_FILES', ?, ?, ?, ?, ?) RETURNING source_id", Number.class, tenantId, projectId, fileId, name, type, version);
             return created == null ? 0 : created.longValue();
         }
-        jdbcTemplate.update("UPDATE agent_knowledge_source SET display_name=?, document_type=?, content_version=?, updated_at=CURRENT_TIMESTAMP, invalidated_at=NULL WHERE source_id=?", name, type, version, ids.get(0));
-        return ids.get(0);
+        ExistingSource source = sources.get(0);
+        return prepareExistingSource(source.sourceId, source.contentVersion, name, type, version);
     }
 
     /** 制度来源没有 project_id，使用租户 + 文件编号保持幂等。 */
     private long upsertPolicySource(Long tenantId, long fileId, Map<String, Object> file) {
-        List<Long> ids = jdbcTemplate.query(
-                "SELECT source_id FROM agent_knowledge_source WHERE tenant_id=? "
+        List<ExistingSource> sources = jdbcTemplate.query(
+                "SELECT source_id, content_version FROM agent_knowledge_source WHERE tenant_id=? "
                         + "AND source_type='POLICY_LIBRARY' AND kod_file_id=?",
-                (rs, rowNum) -> rs.getLong(1), tenantId, fileId);
+                (rs, rowNum) -> new ExistingSource(rs.getLong("source_id"), rs.getString("content_version")), tenantId, fileId);
         String name = String.valueOf(file.getOrDefault("name", "未命名制度"));
         String type = extension(name);
         String version = String.valueOf(file.getOrDefault("version", file.getOrDefault("contentHash", "")));
-        if (ids.isEmpty()) {
+        if (sources.isEmpty()) {
             Number created = jdbcTemplate.queryForObject(
                     "INSERT INTO agent_knowledge_source (tenant_id, source_type, kod_file_id, display_name, "
                             + "document_type, content_version) VALUES (?, 'POLICY_LIBRARY', ?, ?, ?, ?) RETURNING source_id",
                     Number.class, tenantId, fileId, name, type, version);
             return created == null ? 0 : created.longValue();
         }
-        jdbcTemplate.update("UPDATE agent_knowledge_source SET display_name=?, document_type=?, content_version=?, "
-                        + "updated_at=CURRENT_TIMESTAMP, invalidated_at=NULL WHERE source_id=?",
-                name, type, version, ids.get(0));
-        return ids.get(0);
+        ExistingSource source = sources.get(0);
+        return prepareExistingSource(source.sourceId, source.contentVersion, name, type, version);
     }
 
     private long upsertFolderSource(Long tenantId, long libraryId, long fileId, Map<String, Object> file) {
-        List<Long> ids = jdbcTemplate.query("SELECT source_id FROM agent_knowledge_source WHERE tenant_id=? "
+        List<ExistingSource> sources = jdbcTemplate.query("SELECT source_id, content_version FROM agent_knowledge_source WHERE tenant_id=? "
                         + "AND source_type='KOD_FOLDER' AND library_id=? AND kod_file_id=?",
-                (rs, rowNum) -> rs.getLong(1), tenantId, libraryId, fileId);
+                (rs, rowNum) -> new ExistingSource(rs.getLong("source_id"), rs.getString("content_version")), tenantId, libraryId, fileId);
         String name = String.valueOf(file.getOrDefault("name", "未命名资料"));
         String type = extension(name);
         String version = String.valueOf(file.getOrDefault("version", file.getOrDefault("contentHash", "")));
-        if (ids.isEmpty()) {
+        if (sources.isEmpty()) {
             Number created = jdbcTemplate.queryForObject("INSERT INTO agent_knowledge_source "
                             + "(tenant_id, source_type, library_id, kod_file_id, display_name, document_type, content_version) "
                             + "VALUES (?, 'KOD_FOLDER', ?, ?, ?, ?, ?) RETURNING source_id",
                     Number.class, tenantId, libraryId, fileId, name, type, version);
             return created == null ? 0 : created.longValue();
         }
-        jdbcTemplate.update("UPDATE agent_knowledge_source SET display_name=?, document_type=?, content_version=?, "
-                        + "updated_at=CURRENT_TIMESTAMP, invalidated_at=NULL WHERE source_id=?",
-                name, type, version, ids.get(0));
-        return ids.get(0);
+        ExistingSource source = sources.get(0);
+        return prepareExistingSource(source.sourceId, source.contentVersion, name, type, version);
     }
 
     private long upsertLocalUploadSource(Long tenantId, long libraryId, Map<String, Object> upload) {
-        List<Long> ids = jdbcTemplate.query("SELECT source_id FROM agent_knowledge_source WHERE tenant_id=? "
+        List<ExistingSource> sources = jdbcTemplate.query("SELECT source_id, content_version FROM agent_knowledge_source WHERE tenant_id=? "
                         + "AND source_type='LOCAL_UPLOAD' AND library_id=?",
-                (rs, rowNum) -> rs.getLong(1), tenantId, libraryId);
+                (rs, rowNum) -> new ExistingSource(rs.getLong("source_id"), rs.getString("content_version")), tenantId, libraryId);
         String name = String.valueOf(upload.getOrDefault("filename", "未命名资料"));
         String type = extension(name);
         String version = String.valueOf(upload.getOrDefault("contentVersion", upload.getOrDefault("contentHash", "")));
-        if (ids.isEmpty()) {
+        if (sources.isEmpty()) {
             Number created = jdbcTemplate.queryForObject("INSERT INTO agent_knowledge_source "
                             + "(tenant_id, source_type, library_id, display_name, document_type, content_version) "
                             + "VALUES (?, 'LOCAL_UPLOAD', ?, ?, ?, ?) RETURNING source_id",
                     Number.class, tenantId, libraryId, name, type, version);
             return created == null ? 0 : created.longValue();
         }
+        ExistingSource source = sources.get(0);
+        return prepareExistingSource(source.sourceId, source.contentVersion, name, type, version);
+    }
+
+    /**
+     * 同步读取前先撤销来源的可检索资格。这样远端读取、提取或重建期间，搜索不会将
+     * 旧 chunk 伪装成新版本；版本变更时立即级联删除旧 document/chunk/embedding。
+     */
+    long prepareExistingSource(long sourceId, String indexedVersion, String name, String type, String version) {
+        boolean freshIndexRequired = requiresFreshIndex(indexedVersion, version);
         jdbcTemplate.update("UPDATE agent_knowledge_source SET display_name=?, document_type=?, content_version=?, "
-                        + "updated_at=CURRENT_TIMESTAMP, invalidated_at=NULL WHERE source_id=?",
-                name, type, version, ids.get(0));
-        return ids.get(0);
+                        + "extraction_status='PENDING', invalidated_at=NULL, updated_at=CURRENT_TIMESTAMP WHERE source_id=?",
+                name, type, version, sourceId);
+        if (freshIndexRequired) {
+            jdbcTemplate.update("DELETE FROM agent_knowledge_document WHERE source_id=?", sourceId);
+        }
+        return sourceId;
+    }
+
+    /** 元数据版本是同步前可用的唯一内容变更事实；不同版本绝不能复用旧派生索引。 */
+    static boolean requiresFreshIndex(String indexedVersion, String incomingVersion) {
+        return !String.valueOf(indexedVersion == null ? "" : indexedVersion)
+                .equals(String.valueOf(incomingVersion == null ? "" : incomingVersion));
     }
 
     private void reindex(long sourceId, String name, String hash, String content) {
@@ -758,6 +773,16 @@ public class AgentProjectKnowledgeService {
 
     private void updateSource(long sourceId, String status, String hash) {
         jdbcTemplate.update("UPDATE agent_knowledge_source SET extraction_status=?, content_hash=COALESCE(?, content_hash), indexed_at=CASE WHEN ?='READY' THEN CURRENT_TIMESTAMP ELSE indexed_at END, updated_at=CURRENT_TIMESTAMP WHERE source_id=?", status, hash, status, sourceId);
+    }
+
+    private static final class ExistingSource {
+        private final long sourceId;
+        private final String contentVersion;
+
+        private ExistingSource(long sourceId, String contentVersion) {
+            this.sourceId = sourceId;
+            this.contentVersion = contentVersion;
+        }
     }
 
     private String extractContent(Map<String, Object> result, String ext) {
@@ -1011,6 +1036,7 @@ public class AgentProjectKnowledgeService {
         result.put("chunkId", candidate.get("chunkId"));
         result.put("sourceType", candidate.get("sourceType"));
         result.put("projectId", candidate.get("projectId"));
+        result.put("libraryId", candidate.get("libraryId"));
         result.put("fileId", candidate.get("fileId"));
         result.put("name", candidate.get("name"));
         result.put("documentType", candidate.get("documentType"));

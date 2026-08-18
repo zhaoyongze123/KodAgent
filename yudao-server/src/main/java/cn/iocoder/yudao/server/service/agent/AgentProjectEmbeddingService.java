@@ -17,6 +17,8 @@ import org.springframework.web.client.RestTemplate;
 import javax.annotation.Resource;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -101,7 +103,7 @@ public class AgentProjectEmbeddingService {
             List<Double> vector = queryEmbedding(query);
             String placeholders = String.join(",", Collections.nCopies(sourceIds.size(), "?"));
             String vectorLiteral = vectorLiteral(vector);
-            String sql = "SELECT c.chunk_id, d.source_id, s.source_type, s.project_id, s.kod_file_id, "
+            String sql = "SELECT c.chunk_id, d.source_id, s.source_type, s.project_id, s.kod_file_id, s.library_id, "
                     + "s.display_name, s.document_type, s.content_version, c.section, c.ordinal, c.content, "
                     + "1 - (e.embedding_projected <=> CAST(? AS vector)) semantic_score "
                     + "FROM agent_knowledge_chunk_embedding e "
@@ -118,27 +120,32 @@ public class AgentProjectEmbeddingService {
             args.addAll(sourceIds);
             args.add(vectorLiteral);
             args.add(Math.min(30, Math.max(1, limit)));
-            List<Map<String, Object>> rows = jdbcTemplate.query(sql, (rs, rowNum) -> {
-                Map<String, Object> item = new LinkedHashMap<>();
-                item.put("chunkId", rs.getLong("chunk_id"));
-                item.put("sourceId", rs.getLong("source_id"));
-                item.put("sourceType", rs.getString("source_type"));
-                item.put("projectId", rs.getObject("project_id"));
-                item.put("fileId", rs.getObject("kod_file_id"));
-                item.put("name", rs.getString("display_name"));
-                item.put("documentType", rs.getString("document_type"));
-                item.put("contentVersion", rs.getString("content_version"));
-                item.put("section", rs.getString("section"));
-                item.put("ordinal", rs.getInt("ordinal"));
-                item.put("content", rs.getString("content"));
-                item.put("semanticScore", rs.getDouble("semantic_score"));
-                item.put("semanticRank", rowNum + 1);
-                return item;
-            }, args.toArray());
+            List<Map<String, Object>> rows = jdbcTemplate.query(sql,
+                    (rs, rowNum) -> semanticCandidate(rs, rowNum + 1), args.toArray());
             return fromSemanticCandidates(rows);
         } catch (RuntimeException ex) {
             return SemanticSearch.unavailable(safeError(ex));
         }
+    }
+
+    /** 语义候选必须保留库标识，后续才能用“库 + 文件 + 版本”复核 KodCloud 权限。 */
+    static Map<String, Object> semanticCandidate(ResultSet rs, int rank) throws SQLException {
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("chunkId", rs.getLong("chunk_id"));
+        item.put("sourceId", rs.getLong("source_id"));
+        item.put("sourceType", rs.getString("source_type"));
+        item.put("projectId", rs.getObject("project_id"));
+        item.put("fileId", rs.getObject("kod_file_id"));
+        item.put("libraryId", rs.getObject("library_id"));
+        item.put("name", rs.getString("display_name"));
+        item.put("documentType", rs.getString("document_type"));
+        item.put("contentVersion", rs.getString("content_version"));
+        item.put("section", rs.getString("section"));
+        item.put("ordinal", rs.getInt("ordinal"));
+        item.put("content", rs.getString("content"));
+        item.put("semanticScore", rs.getDouble("semantic_score"));
+        item.put("semanticRank", rank);
+        return item;
     }
 
     boolean isEnabled() {

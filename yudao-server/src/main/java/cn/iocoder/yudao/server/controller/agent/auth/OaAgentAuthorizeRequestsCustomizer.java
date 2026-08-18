@@ -25,7 +25,8 @@ public class OaAgentAuthorizeRequestsCustomizer extends AuthorizeRequestsCustomi
                 .requestMatchers(
                         "/admin-api/agent/model-providers/**",
                         "/admin-api/agent/models/**",
-                        "/admin-api/agent/model-bindings/**"
+                        "/admin-api/agent/model-bindings/**",
+                        "/admin-api/agent/knowledge-libraries/**"
                 ).permitAll();
     }
 }

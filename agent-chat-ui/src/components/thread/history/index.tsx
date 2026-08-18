@@ -19,6 +19,7 @@ import {
   Trash2,
   Settings,
   ChartNoAxesCombined,
+  LibraryBig,
   LoaderCircle,
 } from "lucide-react";
 import Link from "next/link";
@@ -295,6 +296,16 @@ export default function ThreadHistory() {
             variant="ghost"
             className="w-full justify-start gap-2 font-normal"
           >
+            <Link href="/knowledge" aria-label="打开知识源管理">
+              <LibraryBig className="size-4" />
+              知识源管理
+            </Link>
+          </Button>
+          <Button
+            asChild
+            variant="ghost"
+            className="w-full justify-start gap-2 font-normal"
+          >
             <Link
               href="/settings"
               aria-label="打开设置"
@@ -351,6 +362,20 @@ export default function ThreadHistory() {
                 >
                   <ChartNoAxesCombined className="size-4" />
                   运行统计
+                </Link>
+              </Button>
+              <Button
+                asChild
+                variant="ghost"
+                className="w-full justify-start gap-2 font-normal"
+              >
+                <Link
+                  href="/knowledge"
+                  aria-label="打开知识源管理"
+                  onClick={() => setChatHistoryOpen(false)}
+                >
+                  <LibraryBig className="size-4" />
+                  知识源管理
                 </Link>
               </Button>
               <Button

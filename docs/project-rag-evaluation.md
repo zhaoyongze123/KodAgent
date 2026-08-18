@@ -7,12 +7,12 @@
 `cases.jsonl` 每行一个案例，至少准备 40 条自然语言问题，覆盖项目方案、交通专题、进度报告、制度要求、简称/同义表达和精确文件名查询。
 
 ```json
-{"id":"case-001","tags":["exact_file_name"],"expectedEvidence":[{"fileId":"123","chunkId":"456","contentVersion":"sha256-or-version"}],"forbiddenFileIds":["789"]}
+{"id":"case-001","tags":["exact_file_name"],"expectedEvidence":[{"sourceType":"PROJECT_FILES","fileId":"123","chunkId":"456","contentVersion":"sha256-or-version"}],"forbiddenFileIds":["789"],"forbiddenLibraryIds":["321"]}
 ```
 
-- `expectedEvidence`：人工确认应命中的文件/片段。`fileId` 必填；`chunkId`、`contentVersion` 存在时也会参与匹配。
+- `expectedEvidence`：人工确认应命中的文件/片段。项目资料和 KodCloud 目录使用 `fileId`；本地上传使用 `sourceType=LOCAL_UPLOAD + libraryId`。`chunkId`、`contentVersion` 存在时也会参与匹配。
 - `tags`：精确文件名查询标注为 `exact_file_name`，用于防止混合检索削弱文件名检索。
-- `forbiddenFileIds`：以同一用户身份查询时绝不能出现的文件，用于权限回归。
+- `forbiddenFileIds`、`forbiddenLibraryIds`：以同一用户身份查询时绝不能出现的文件或本地上传知识源，用于目录失权和本地 ACL 的权限回归。
 
 ## 结果输入
 
@@ -21,7 +21,7 @@
 `results.jsonl` 每行包含一个模式的一次结果：
 
 ```json
-{"id":"case-001","mode":"hybrid","elapsedMs":82,"hits":[{"citationId":"资料 1","fileId":"123","chunkId":"456","name":"脱敏文件名.docx","contentVersion":"sha256-or-version","section":"第 2 章"}]}
+{"id":"case-001","mode":"hybrid","elapsedMs":82,"hits":[{"citationId":"资料 1","sourceType":"PROJECT_FILES","fileId":"123","libraryId":null,"chunkId":"456","name":"脱敏文件名.docx","contentVersion":"sha256-or-version","section":"第 2 章"}]}
 ```
 
 检索服务返回异常时记录 `failureCode`，不要把异常当作空命中。
@@ -42,5 +42,9 @@ python3 agent-python/src/project_rag_evaluation.py \
 2. 混合检索 `Recall@5` 严格高于全文检索。
 3. 精确文件名案例的混合召回不低于全文检索。
 4. 任一模式均无权限泄露和运行时错误。
+
+## 统一知识源补充样例
+
+在 40 条案例中至少加入以下四类：KodCloud 目录文件失权、目录文件版本变更、本地上传资料的指定部门命中、同一资料对未授权用户的 `forbiddenLibraryIds` 拒绝命中。目录源与本地上传均应分别跑三种检索模式；embedding 不可用时记录 `keyword_fallback`，不能将服务失败记作零命中。
 
 评测失败时保持全文检索，排查资料抽取、版本同步、权限过滤或 embedding 服务，而不是放宽权限、忽略失败或修改标注来通过门禁。

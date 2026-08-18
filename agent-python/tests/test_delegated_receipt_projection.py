@@ -63,6 +63,7 @@ class DelegatedReceiptProjectionTest(unittest.TestCase):
                 "excerpt": "受限摘录",
                 "chunkId": 9,
                 "projectId": 101,
+                "libraryId": 301,
                 "fusionScore": 0.1,
                 "matchedTerms": ["进度"],
             }
@@ -71,6 +72,7 @@ class DelegatedReceiptProjectionTest(unittest.TestCase):
         self.assertEqual("资料 1", visible["citationId"])
         self.assertNotIn("chunkId", visible)
         self.assertNotIn("projectId", visible)
+        self.assertNotIn("libraryId", visible)
         self.assertNotIn("fusionScore", visible)
         self.assertNotIn("matchedTerms", visible)
 

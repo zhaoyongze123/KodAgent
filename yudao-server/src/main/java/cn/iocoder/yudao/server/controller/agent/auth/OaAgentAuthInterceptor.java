@@ -101,6 +101,7 @@ public class OaAgentAuthInterceptor implements HandlerInterceptor {
         // Agent Provider 和谁可维护用户映射/资料同步，而不是替代项目成员权限。
         mapping.put("project:read", new String[]{"system:agent-project:read", "system:agent-project:manage"});
         mapping.put("project:manage", new String[]{"system:agent-project:manage"});
+        mapping.put("knowledge:manage", new String[]{"system:agent-project:manage"});
         mapping.put("model:read", new String[]{"system:agent-model:query"});
         mapping.put("model:manage", new String[]{"system:agent-model:manage"});
         // 运行台展示跨用户的全院聚合与追踪，不能复用所有人均可写事件的 agent:audit。

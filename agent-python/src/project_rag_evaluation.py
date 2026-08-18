@@ -14,7 +14,8 @@ from typing import Any, Iterable, Mapping
 
 
 RETRIEVAL_MODES = ("keyword", "semantic", "hybrid")
-_CITATION_FIELDS = ("citationId", "fileId", "chunkId", "name", "contentVersion", "section")
+_CITATION_FIELDS = ("citationId", "chunkId", "name", "contentVersion", "section")
+_MATCH_FIELDS = ("sourceType", "libraryId", "fileId", "chunkId", "contentVersion")
 
 
 def _text(value: Any) -> str:
@@ -33,11 +34,14 @@ def _case_evidence(case: Mapping[str, Any]) -> list[dict[str, str]]:
 
 
 def _matches(hit: Mapping[str, Any], expected: Mapping[str, str]) -> bool:
-    for key in ("fileId", "chunkId", "contentVersion"):
+    identified = False
+    for key in _MATCH_FIELDS:
         value = _text(expected.get(key))
         if value and _text(hit.get(key)) != value:
             return False
-    return bool(_text(hit.get("fileId")))
+        if value and key in ("libraryId", "fileId"):
+            identified = True
+    return identified
 
 
 def _mode_result(result_rows: Iterable[Mapping[str, Any]]) -> dict[str, dict[str, Mapping[str, Any]]]:
@@ -84,11 +88,15 @@ def _evaluate_mode(cases: list[Mapping[str, Any]], results: Mapping[str, Mapping
                 exact_retrieved += 1
         for hit in top_hits:
             citation_total += 1
-            complete = all(_text(hit.get(field)) for field in _CITATION_FIELDS)
+            complete = (all(_text(hit.get(field)) for field in _CITATION_FIELDS)
+                        and bool(_text(hit.get("fileId")) or _text(hit.get("libraryId"))))
             if complete and any(_matches(hit, item) for item in expected):
                 citation_correct += 1
         forbidden = {_text(value) for value in _values(case.get("forbiddenFileIds")) if _text(value)}
         if forbidden and any(_text(hit.get("fileId")) in forbidden for hit in hits):
+            permission_leak_case_ids.append(case_id)
+        forbidden_libraries = {_text(value) for value in _values(case.get("forbiddenLibraryIds")) if _text(value)}
+        if forbidden_libraries and any(_text(hit.get("libraryId")) in forbidden_libraries for hit in hits):
             permission_leak_case_ids.append(case_id)
 
     return {

@@ -55,7 +55,10 @@ public class OaAgentAuthConfiguration implements WebMvcConfigurer {
                         // authenticated by the same Agent identity ticket.
                         "/admin-api/agent/model-providers/**",
                         "/admin-api/agent/models/**",
-                        "/admin-api/agent/model-bindings/**"
+                        "/admin-api/agent/model-bindings/**",
+                        // 知识源管理同样由 Next.js 代理携带 Agent 身份票据，不能落到
+                        // 默认 OAuth 会话链路，否则管理员工作台无法完成权限复核。
+                        "/admin-api/agent/knowledge-libraries/**"
                 );
     }
 }
