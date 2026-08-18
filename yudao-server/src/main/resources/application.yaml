@@ -3,10 +3,16 @@ spring:
     name: yudao-server
 
   profiles:
-    active: local
+    active: ${SPRING_PROFILES_ACTIVE:}
 
   main:
     allow-circular-references: true # 允许循环依赖，因为项目是三层架构，无法避免这个情况。
+
+  autoconfigure:
+    exclude:
+      # OA 不启用微信公众号和小程序，避免空的微信配置阻断应用启动。
+      - com.binarywang.spring.starter.wxjava.mp.config.WxMpAutoConfiguration
+      - com.binarywang.spring.starter.wxjava.miniapp.config.WxMaAutoConfiguration
 
   # Servlet 配置
   servlet:
@@ -69,7 +75,7 @@ mybatis-plus:
     map-underscore-to-camel-case: true # 虽然默认为 true ，但是还是显示去指定下。
   global-config:
     db-config:
-      id-type: NONE # “智能”模式，基于 IdTypeEnvironmentPostProcessor + 数据源的类型，自动适配成 AUTO、INPUT 模式。
+      id-type: ${MYBATIS_PLUS_GLOBAL_CONFIG_DB_CONFIG_ID_TYPE:NONE} # NONE 时由数据源类型自动适配；生产 MySQL 通过 profile 默认显式使用 AUTO。
 #      id-type: AUTO # 自增 ID，适合 MySQL 等直接自增的数据库
 #      id-type: INPUT # 用户输入 ID，适合 Oracle、PostgreSQL、Kingbase、DB2、H2 数据库
 #      id-type: ASSIGN_ID # 分配 ID，默认使用雪花算法。注意，Oracle、PostgreSQL、Kingbase、DB2、H2 数据库时，需要去除实体类上的 @KeySequence 注解
@@ -78,7 +84,7 @@ mybatis-plus:
     banner: false # 关闭控制台的 Banner 打印
   type-aliases-package: ${yudao.info.base-package}.module.*.dal.dataobject
   encryptor:
-    password: ${Yudao_MYBATIS_ENCRYPTOR_PASSWORD:} # Production must inject this secret.
+    password: ${MYBATIS_ENCRYPTOR_PASSWORD:} # 服务器运行时提供，不能写入 JAR
 
 mybatis-plus-join:
   banner: false # 是否打印 mybatis plus join banner，默认true
@@ -155,42 +161,42 @@ spring:
       qdrant:
         initialize-schema: true
         collection-name: knowledge_segment # Qdrant 中向量集合的名称：用于存储向量数据的集合标识符，所有相关的向量操作都会在这个集合中进行
-        host: 127.0.0.1
-        port: 6334
+        host: ${QDRANT_HOST:}
+        port: ${QDRANT_PORT:}
       milvus:
         initialize-schema: true
         database-name: default # Milvus 中数据库的名称
         collection-name: knowledge_segment # Milvus 中集合的名称：用于存储向量数据的集合标识符，所有相关的向量操作都会在这个集合中进行
         client:
-          host: 127.0.0.1
-          port: 19530
+          host: ${MILVUS_HOST:}
+          port: ${MILVUS_PORT:}
     qianfan: # 文心一言
-      api-key: ${SPRING_AI_QIANFAN_API_KEY:}
-      secret-key: ${SPRING_AI_QIANFAN_SECRET_KEY:}
+      api-key: ${QIANFAN_API_KEY:}
+      secret-key: ${QIANFAN_SECRET_KEY:}
     zhipuai: # 智谱 AI
-      api-key: ${SPRING_AI_ZHIPU_API_KEY:}
+      api-key: ${ZHIPUAI_API_KEY:}
     openai: # OpenAI 官方
-      api-key: ${SPRING_AI_OPENAI_API_KEY:}
-      base-url: ${SPRING_AI_OPENAI_BASE_URL:https://api.openai.com}
+      api-key: ${OPENAI_API_KEY:}
+      base-url: ${OPENAI_BASE_URL:}
     azure: # OpenAI 微软
       openai:
-        endpoint: https://eastusprejade.openai.azure.com
+        endpoint: ${AZURE_OPENAI_ENDPOINT:}
     anthropic: # Anthropic Claude
-      api-key: ${SPRING_AI_ANTHROPIC_API_KEY:}
+      api-key: ${ANTHROPIC_API_KEY:}
     ollama:
-      base-url: http://127.0.0.1:11434
+      base-url: ${OLLAMA_BASE_URL:}
       chat:
         model: llama3
     stabilityai:
-      api-key: ${SPRING_AI_STABILITY_API_KEY:}
+      api-key: ${STABILITYAI_API_KEY:}
     dashscope: # 通义千问
-      api-key: ${SPRING_AI_DASHSCOPE_API_KEY:}
+      api-key: ${DASHSCOPE_API_KEY:}
     minimax: # Minimax：https://www.minimaxi.com/
-      api-key: ${SPRING_AI_MINIMAX_API_KEY:}
+      api-key: ${MINIMAX_API_KEY:}
     moonshot: # 月之暗面（KIMI）
-      api-key: ${SPRING_AI_MOONSHOT_API_KEY:}
+      api-key: ${MOONSHOT_API_KEY:}
     deepseek: # DeepSeek
-      api-key: ${SPRING_AI_DEEPSEEK_API_KEY:}
+      api-key: ${DEEPSEEK_API_KEY:}
       chat:
         options:
           model: deepseek-chat
@@ -209,7 +215,7 @@ spring:
         sse:
           connections:
             filesystem:
-              url: http://127.0.0.1:8089
+              url: ${MCP_FILESYSTEM_URL:}
               sse-endpoint: /sse
         annotation-scanner:
           enabled: false # TODO @芋艿：有 bug https://github.com/spring-projects/spring-ai/issues/4917 需要官方修复
@@ -227,43 +233,43 @@ yudao:
         retry-delay-ms: ${AGENT_EVENT_OUTBOX_RETRY_DELAY_MS:5000}
   ai:
     gemini: # 谷歌 Gemini
-      enable: ${Yudao_AI_GEMINI_ENABLED:false}
-      api-key: ${Yudao_AI_GEMINI_API_KEY:}
+      enable: true
+      api-key: ${GEMINI_API_KEY:}
       model: gemini-2.5-flash
     doubao: # 字节豆包
-      enable: ${Yudao_AI_DOUBAO_ENABLED:false}
-      api-key: ${Yudao_AI_DOUBAO_API_KEY:}
+      enable: true
+      api-key: ${DOUBAO_API_KEY:}
       model: doubao-1-5-lite-32k-250115
     hunyuan: # 腾讯混元
-      enable: ${Yudao_AI_HUNYUAN_ENABLED:false}
-      api-key: ${Yudao_AI_HUNYUAN_API_KEY:}
+      enable: true
+      api-key: ${HUNYUAN_API_KEY:}
       model: hunyuan-turbo
     siliconflow: # 硅基流动
-      enable: ${Yudao_AI_SILICONFLOW_ENABLED:false}
-      api-key: ${Yudao_AI_SILICONFLOW_API_KEY:}
+      enable: true
+      api-key: ${SILICONFLOW_API_KEY:}
       model: deepseek-ai/DeepSeek-R1-Distill-Qwen-7B
     xinghuo: # 讯飞星火
-      enable: ${Yudao_AI_XINGHUO_ENABLED:false}
-      appKey: ${Yudao_AI_XINGHUO_APP_KEY:}
-      secretKey: ${Yudao_AI_XINGHUO_SECRET_KEY:}
+      enable: true
+      appKey: ${XINGHUO_APP_KEY:}
+      secretKey: ${XINGHUO_SECRET_KEY:}
       model: x1
     baichuan: # 百川智能
-      enable: ${Yudao_AI_BAICHUAN_ENABLED:false}
-      api-key: ${Yudao_AI_BAICHUAN_API_KEY:}
+      enable: true
+      api-key: ${BAICHUAN_API_KEY:}
       model: Baichuan4-Turbo
     midjourney:
-      enable: ${Yudao_AI_MIDJOURNEY_ENABLED:false}
+      enable: true
   #    base-url: https://api.holdai.top/mj-relax/mj
-      base-url: https://api.holdai.top/mj
-      api-key: ${Yudao_AI_MIDJOURNEY_API_KEY:}
-      notify-url: http://java.nat300.top/admin-api/ai/image/midjourney/notify
+      base-url: ${MIDJOURNEY_BASE_URL:}
+      api-key: ${MIDJOURNEY_API_KEY:}
+      notify-url: ${MIDJOURNEY_NOTIFY_URL:}
     suno:
-      enable: ${Yudao_AI_SUNO_ENABLED:false}
+      enable: true
   #    base-url: https://suno-55ishh05u-status2xxs-projects.vercel.app
-      base-url: http://127.0.0.1:3001
+      base-url: ${SUNO_BASE_URL:}
     web-search:
-      enable: ${Yudao_AI_WEB_SEARCH_ENABLED:false}
-      api-key: ${Yudao_AI_WEB_SEARCH_API_KEY:}
+      enable: true
+      api-key: ${WEB_SEARCH_API_KEY:}
 
 --- #################### 芋道相关配置 ####################
 
@@ -286,7 +292,7 @@ yudao:
       header-name: X-Agent-Identity
   web:
     admin-ui:
-      url: http://dashboard.yudao.iocoder.cn # Admin 管理后台 UI 的地址
+      url: ${YUDao_ADMIN_UI_URL:} # Admin 管理后台 UI 的地址，由运行时环境提供
   xss:
     enable: false
     exclude-urls: # 如下两个 url，仅仅是为了演示，去掉配置也没关系
@@ -296,11 +302,16 @@ yudao:
     permit-all_urls:
       - /admin-api/mp/open/** # 微信公众号开放平台，微信回调接口，不需要登录
   api-encrypt:
-    enable: ${Yudao_API_ENCRYPT_ENABLED:false} # Production must explicitly enable this with injected keys.
-    algorithm: AES # 加密算法，支持 AES、RSA 等
-    request-key: ${Yudao_API_ENCRYPT_REQUEST_KEY:}
-    response-key: ${Yudao_API_ENCRYPT_RESPONSE_KEY:}
-# RSA examples are intentionally omitted; inject keys through environment variables.
+    enable: ${API_ENCRYPT_ENABLE:} # 服务器运行时提供
+    algorithm: ${API_ENCRYPT_ALGORITHM:}
+    request-key: ${API_ENCRYPT_REQUEST_KEY:}
+    response-key: ${API_ENCRYPT_RESPONSE_KEY:}
+  file-preview:
+    token-expire-seconds: ${OA_FILE_PREVIEW_TOKEN_EXPIRE_SECONDS:300}
+  wxa-code:
+    env-version: release
+  wxa-subscribe-message:
+    miniprogram-state: formal
   websocket:
     enable: true # websocket的开关
     path: /infra/ws # 路径
@@ -331,7 +342,8 @@ yudao:
     unit-test-enable: false # 是否生成单元测试
     import-enable: false # 是否生成 Excel 导入接口
   tenant: # 多租户相关配置项
-    enable: true
+    # OA 当前为单租户部署；如确需启用，可由服务器环境变量覆盖。
+    enable: ${TENANT_ENABLE:false}
     ignore-urls:
       - /jmreport/* # 积木报表，无法携带租户编号
     ignore-visit-urls:
@@ -348,6 +360,10 @@ yudao:
       - sms_template
       - iot:device
       - iot:thing_model_list
+  bpm:
+    # Flowable 单租户兼容策略：不要求历史模型必须存在租户字段，新增数据统一写入该租户。
+    single-tenant-enabled: ${FLOWABLE_SINGLE_TENANT_ENABLED:true}
+    single-tenant-id: ${FLOWABLE_SINGLE_TENANT_ID:1}
   sms-code: # 短信验证码相关的配置项
     expire-times: 10m
     send-frequency: 1m
@@ -363,12 +379,12 @@ yudao:
     express:
       client: kd_100
       kd-niao:
-        api-key: ${Yudao_KD_NIAO_API_KEY:}
-        business-id: ${Yudao_KD_NIAO_BUSINESS_ID:}
+        api-key: ${KD_NIAO_API_KEY:}
+        business-id: ${KD_NIAO_BUSINESS_ID:}
         request-type: 1002 # 免费版 1002；付费版 8001
       kd100:
-        key: ${Yudao_KD100_KEY:}
-        customer: ${Yudao_KD100_CUSTOMER:}
+        key: ${KD100_KEY:}
+        customer: ${KD100_CUSTOMER:}
   iot:
     message-bus:
       type: redis # 消息总线的类型

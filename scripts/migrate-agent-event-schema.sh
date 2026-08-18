@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # The canonical Agent event-store schema is migration-owned, not Java-owned.
-# This script is the local development entry point; production uses the
-# equivalent `agent-event-schema-migrate` Compose job.
+# This script is the explicit Agent runtime migration entry point. The OA/BPM
+# Docker Compose stack does not own the Agent PostgreSQL container.
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # Java/OA owns the MySQL business schema. Run its canonical migration before
@@ -36,7 +36,7 @@ done
 
 if ! docker inspect "${POSTGRES_CONTAINER}" >/dev/null 2>&1; then
   echo "[错误] Agent PostgreSQL 容器不存在: ${POSTGRES_CONTAINER}" >&2
-  echo "[提示] 请先启动 script/docker/docker-compose.yml 中的 langgraph-postgres 服务" >&2
+  echo "[提示] 请先通过 Agent 运行时启动该容器，再重新执行迁移" >&2
   exit 1
 fi
 if [ "$(docker inspect -f '{{.State.Running}}' "${POSTGRES_CONTAINER}")" != "true" ]; then

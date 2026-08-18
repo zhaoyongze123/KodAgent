@@ -1,0 +1,10 @@
+services:
+  preview:
+    image: ${PREVIEW_IMAGE:-keking/kkfileview:4.1.0}
+    container_name: ${PREVIEW_CONTAINER:-oa-manual-preview}
+    restart: unless-stopped
+    ports:
+      - "${PREVIEW_BIND_HOST:-127.0.0.1}:${PREVIEW_HOST_PORT:-18112}:${PREVIEW_CONTAINER_PORT:-8012}"
+    environment:
+      TZ: Asia/Shanghai
+      KK_BASE_URL: ${PREVIEW_PUBLIC_URL:-http://127.0.0.1:18112}

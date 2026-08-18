@@ -73,11 +73,13 @@ NEXT_PUBLIC_AUTH_SCHEME=
 这一阶段用于验证 LangGraph Thread、流式 Run 和 Interrupt。`langgraph dev` 是开发运行时，
 不会使用下面配置的 PostgreSQL。需要可恢复的 PostgreSQL 运行时，使用项目中的
 `kodagent Python LangGraph PostgreSQL 重启.sh`，它通过 `langgraph up` 启动 LangGraph API
-容器；Java、Python Agent 代码仍然来自当前本地项目，不需要新增 Java 事件微服务：
+容器；Java、Python Agent 代码仍然来自当前本地项目，不需要新增 Java 事件微服务。Agent
+PostgreSQL 必须先由 Agent 运行时创建并保持运行；`script/docker/docker-compose.yml` 只负责
+OA/BPM，不提供 `langgraph-postgres` 服务：
 
 ```bash
 cd /Users/mac/项目/kodagent
-docker compose -f script/docker/docker-compose.yml up -d langgraph-postgres redis
+docker inspect --format '{{.State.Running}}' kodagent-langgraph-postgres
 
 cd agent-python
 set -a && source .env && set +a

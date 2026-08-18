@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1" />
+    <meta name="renderer" content="webkit" />
+    <meta name="description" content="A Modern Back-end Management System" />
+    <meta name="keywords" content="Vben Admin Vue3 Vite" />
+    <meta name="author" content="Vben" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1.0,minimum-scale=1.0,maximum-scale=1.0,user-scalable=0"
+    />
+    <!-- 由 vite 注入 VITE_APP_TITLE 变量，在 .env 文件内配置 -->
+    <title>%VITE_APP_TITLE%</title>
+    <link rel="icon" href="%VITE_BASE%favicon.ico" />
+    <script>
+      (function () {
+        var base = '%VITE_BASE%' || '/';
+        if (base.charAt(base.length - 1) !== '/') {
+          base += '/';
+        }
+        var pathname = window.location.pathname || '/';
+        var search = window.location.search || '';
+        var hash = window.location.hash || '';
+        if (hash) {
+          return;
+        }
+        var routePath = pathname;
+        if (base !== '/' && pathname.indexOf(base) === 0) {
+          routePath = pathname.slice(base.length - 1) || '/';
+        }
+        var hashFallbackPrefixes = [
+          '/auth/kod-sso-login',
+          '/meeting-room',
+          '/schedule',
+          '/party-file',
+        ];
+        var shouldRewrite = hashFallbackPrefixes.some(function (prefix) {
+          return routePath === prefix || routePath.indexOf(prefix + '/') === 0;
+        });
+        if (!shouldRewrite) {
+          return;
+        }
+        var target = base + '#' + routePath + search;
+        window.location.replace(target);
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

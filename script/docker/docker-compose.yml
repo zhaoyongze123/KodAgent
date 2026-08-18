@@ -1,0 +1,98 @@
+services:
+  mysql:
+    image: docker.m.daocloud.io/library/mysql:8
+    container_name: ${MYSQL_CONTAINER:-ruoyi-mysql}
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-ruoyi-vue-pro}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-123456}
+      TZ: Asia/Shanghai
+    ports:
+      - "${MYSQL_PORT:-13306}:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ../../sql/mysql/ruoyi-vue-pro.sql:/docker-entrypoint-initdb.d/01-ruoyi.sql:ro
+
+  redis:
+    image: docker.m.daocloud.io/library/redis:6-alpine
+    container_name: ${REDIS_CONTAINER:-ruoyi-redis}
+    restart: unless-stopped
+    command:
+      - sh
+      - -c
+      - >-
+        if [ -n "$$REDIS_PASSWORD" ]; then
+        exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD";
+        else
+        exec redis-server --appendonly yes;
+        fi
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    ports:
+      - "${REDIS_PORT:-16379}:6379"
+    volumes:
+      - redis-data:/data
+
+  server:
+    build:
+      context: ../..
+      dockerfile: script/docker/backend.Dockerfile
+    image: ruoyi-server:local
+    container_name: ${SERVER_CONTAINER:-ruoyi-server}
+    restart: unless-stopped
+    depends_on:
+      - mysql
+      - redis
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-local}
+      JAVA_OPTS: ${JAVA_OPTS:- -Xms512m -Xmx1024m -Djava.security.egd=file:/dev/./urandom}
+      ARGS: >-
+        --spring.datasource.dynamic.datasource.master.url=${MASTER_DATASOURCE_URL:-jdbc:mysql://mysql:3306/ruoyi-vue-pro?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true&rewriteBatchedStatements=true}
+        --spring.datasource.dynamic.datasource.master.username=${MASTER_DATASOURCE_USERNAME:-root}
+        --spring.datasource.dynamic.datasource.master.password=${MASTER_DATASOURCE_PASSWORD:-123456}
+        --spring.datasource.dynamic.datasource.slave.url=${SLAVE_DATASOURCE_URL:-jdbc:mysql://mysql:3306/ruoyi-vue-pro?useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&nullCatalogMeansCurrent=true&rewriteBatchedStatements=true}
+        --spring.datasource.dynamic.datasource.slave.username=${SLAVE_DATASOURCE_USERNAME:-root}
+        --spring.datasource.dynamic.datasource.slave.password=${SLAVE_DATASOURCE_PASSWORD:-123456}
+        --spring.redis.host=${REDIS_HOST:-redis}
+        --spring.redis.port=${REDIS_INTERNAL_PORT:-6379}
+        --spring.redis.password=${REDIS_PASSWORD:-}
+        --yudao.kod-sso.enabled=${KOD_SSO_ENABLED:-false}
+        --yudao.kod-sso.base-url=${KOD_SSO_BASE_URL:-http://replace-with-kodbox-host}
+        --yudao.kod-sso.server-base-url=${KOD_SSO_SERVER_BASE_URL:-}
+        --yudao.kod-sso.app-name=${KOD_SSO_APP_NAME:-user:all}
+        --yudao.kod-sso.redirect-uri=${KOD_SSO_REDIRECT_URI:-http://replace-with-frontend-host/#/auth/kod-sso-login?tenantId=1}
+        --yudao.kod-sso.callback-base-url=${KOD_SSO_CALLBACK_BASE_URL:-http://replace-with-backend-host}
+        --yudao.kod-sso.tenant-id=${KOD_SSO_TENANT_ID:-1}
+        --yudao.kod-sso.auto-create-user=${KOD_SSO_AUTO_CREATE_USER:-false}
+        --yudao.kod-sso.organization-sync-enabled=${KOD_ORGANIZATION_SYNC_ENABLED:-false}
+        --yudao.kod-sso.organization-sync-username=${KOD_ORGANIZATION_SYNC_USERNAME:-}
+        --yudao.kod-sso.organization-sync-password=${KOD_ORGANIZATION_SYNC_PASSWORD:-}
+        --yudao.kod-sso.organization-sync-access-token=${KOD_ORGANIZATION_SYNC_ACCESS_TOKEN:-}
+        --yudao.kod-sso.organization-sync-endpoint=${KOD_ORGANIZATION_SYNC_ENDPOINT:-}
+        --yudao.kod-sso.organization-sync-root-group-id=${KOD_ORGANIZATION_SYNC_ROOT_GROUP_ID:-1}
+        --yudao.kod-sso.organization-sync-cron=${KOD_ORGANIZATION_SYNC_CRON:--}
+        --yudao.captcha.enable=${CAPTCHA_ENABLE:-true}
+    ports:
+      - "${SERVER_PORT:-48080}:48080"
+
+  admin:
+    build:
+      context: ../..
+      dockerfile: script/docker/frontend.Dockerfile
+      args:
+        FRONTEND_ENV_FILE: ${FRONTEND_ENV_FILE:-script/docker/frontend.env.production}
+        INTRANET_APP_ORIGIN: ${INTRANET_APP_ORIGIN:-http://127.0.0.1:18080}
+    image: ruoyi-admin:local
+    container_name: ${ADMIN_CONTAINER:-ruoyi-admin}
+    restart: unless-stopped
+    depends_on:
+      - server
+    ports:
+      - "${ADMIN_PORT:-18080}:80"
+
+volumes:
+  mysql-data:
+  redis-data:
