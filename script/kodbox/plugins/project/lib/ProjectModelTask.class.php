@@ -14,17 +14,17 @@ class ProjectModelTask extends ModelBase{
 	protected $dataAuto = array(
 		array('modifyTime','time','insert,update','function'), 	//插入或更新时自动添加 callback=当前类方法/function=全局函数;
 		array('createTime','time','insert','function'), 		//插入时自定添加
-		
+
 		array('name','textEncode','insert,update','filter'),
 		array('name','textDecode','select','filter'),
 		array('desc','textEncode','insert,update','filter'),
 		array('desc','textDecode','select','filter'),
 	);
-	
+
 	const STATUS_DOING		= 1;	//正常
 	const STATUS_ARCHIVED	= 2;	//已归档
 	const STATUS_DELETED	= 0;	//已删除
-	
+
 	public $plugin;public $model;public $modelLog;public $modelUser;public $modelMeta;
 	public function __construct($plugin){
 		parent::__construct();
@@ -48,9 +48,9 @@ class ProjectModelTask extends ModelBase{
 		'timePlan','timeReal','timeDataAdd',// 计划工时,实际工时,工时添加记录
 	);
 	public $metaKeyJson = array('');
-	
+
 	private static $_listCache = array();
-	private static $_listCacheSimple = array();	
+	private static $_listCacheSimple = array();
 	protected function getInfoSimple($id,$makeCache=false){
 		$id = $id.'';
 		if(isset(self::$_listCacheSimple[$id])){return self::$_listCacheSimple[$id];}
@@ -76,7 +76,7 @@ class ProjectModelTask extends ModelBase{
 		if(isset(self::$_listCacheSimple[$id])){unset(self::$_listCacheSimple[$id]);}
 		if(isset(self::$_listCache[$id])){unset(self::$_listCache[$id]);}
 	}
-	
+
 	protected function getInfoWithChildren($id){
 		$taskInfo = $this->getInfo($id);
 		$projectTask = $this->listProjectTask($taskInfo['projectID'],true);
@@ -84,7 +84,7 @@ class ProjectModelTask extends ModelBase{
 		if(!$taskInfoRes && $taskInfo){$taskInfoRes = $taskInfo;}
 		return $taskInfoRes;
 	}
-	
+
 	protected function dataAdd($data,$beforeTask=''){
 		if(isset($data['sort']) && $data['sort']){
 			$sortInfo = array('sort'=>$data['sort'],'change'=>array());
@@ -97,7 +97,7 @@ class ProjectModelTask extends ModelBase{
 			$data['isList'] = '0';
 			$data['ownerUser'] = USER_ID;
 		}
-		
+
 		// 项目状态;1=正常;2=已归档;0=已删除; 设置了_status,则保持该状态;
 		$status  = isset($data['_status']) ? $data['_status']:self::STATUS_DOING;
 		$dataAdd = array(
@@ -106,7 +106,7 @@ class ProjectModelTask extends ModelBase{
 			'name'			=> $data['name'],	// 名称
 			'desc'			=> $data['desc'] ? $data['desc']:'',	// 描述
 			'status'		=> $status,
-			
+
 			'isList'		=> $data['isList'],	// 是否为列表;
 			'sort'			=> $sortInfo['sort'],// 排序;
 			'ownerUser'		=> isset($data['ownerUser']) ? $data['ownerUser']:'', //任务负责人
@@ -115,12 +115,12 @@ class ProjectModelTask extends ModelBase{
 		);
 		$result = $this->add($dataAdd);
 		$this->dataSetSortOthers($sortInfo['change']);
-		
+
 		$dataLog = $dataAdd;$dataLog['beforeTask'] = $beforeTask;
 		$this->addLog($data['projectID'],$result,'task.add',$dataLog);
 		return $result;
 	}
-	
+
 	// 批量添加任务;默认添加到最后(或保持原顺序)
 	public function dataAddMutil($taskArr,$projectTask,$option=array()){
 		if(!is_array($taskArr) || !$taskArr || !$projectTask){return array();}
@@ -130,7 +130,7 @@ class ProjectModelTask extends ModelBase{
 		$projectID   = $projectTask['info']['projectID'];
 		$userAll 	 = $projectTask['info']['dataInfo']['userList'];
 		$listAll 	 = $projectTask['listAll'];
-		
+
 		$modifyUser  = rand_from_to(500000000,900000000);// 随机数,用于批量插入后查询; 查询后重新更新;
 		$sortMap = array('list'=> 0,'task'=>array());// taskChild parentTaskID => last;
 		foreach($taskArr as $index => $data) {
@@ -140,7 +140,7 @@ class ProjectModelTask extends ModelBase{
 				'name'			=> _get($data,'name',''),		// 名称
 				'desc'			=> _get($data,'desc',''),		// 描述
 				'status'		=> _get($data,'status',self::STATUS_DOING),
-				
+
 				'isList'		=> _get($data,'isList','0'),	// 是否为列表;
 				'sort'			=> _get($data,'sort','0'),		// 排序; 默认添加到最后(序号处理)
 				'ownerUser'		=> _get($data,'ownerUser',''), 	// 任务负责人
@@ -165,16 +165,16 @@ class ProjectModelTask extends ModelBase{
 				}
 				$dataAdd['sort'] = $sortMap['task'][$pid]++;
 			}
-			
+
 			$addResArr[] = '';
 			$parentTask  = ($dataAdd['pid'] == '0') ? true:$listAll[$pid];
 			$desc = $dataAdd['desc'];
 			if($desc){$desc = ModelBase::textEncode(Html::clean($desc));}
 			if(!$parentTask || !$dataAdd['name'] || strlen($desc) > 60000){continue;}
-			
+
 			$ownerUser = $dataAdd['ownerUser'];
 			if($ownerUser && !isset($userAll[$ownerUser]) ){$dataAdd['ownerUser'] = '';}
-						
+
 			$taskUser = array();
 			if(isset($data['userHas'])){
 				$users = $data['userHas'] ? explode(',',$data['userHas']):array();
@@ -192,7 +192,7 @@ class ProjectModelTask extends ModelBase{
 					$taskMeta[] = array('taskID' =>'','key' => $key,'value' => $value);
 				}
 			}
-			
+
 			$dataLog = $dataAdd;$dataLog['createUser'] = USER_ID;
 			$dataArrLog[] = array(
 				'projectID'	=> $projectID,	//项目id
@@ -207,12 +207,12 @@ class ProjectModelTask extends ModelBase{
 			$addMapAt[]   = $index;
 		}
 		if(!$addArr){return array();}
-		
+
 		$this->addAll($addArr);
 		$resultWhere = array('projectID'=>$projectID,'modifyUser'=>$modifyUser);
 		$addResult = $this->field('taskID,name,pid,isList')->where($resultWhere)->select();
 		$this->where($resultWhere)->save(array('modifyUser'=>USER_ID));
-		
+
 		// 刚插入的多个任务; 数量=$addArr=$addArrResult=$addArrMeta=$addArrUser;
 		$dataUserHas = array();$dataMetaInfo = array();
 		foreach($addResult as $i => $task){
@@ -227,7 +227,7 @@ class ProjectModelTask extends ModelBase{
 			$dataArrLog[$i]['taskID'] = $task['taskID'];
 			$addResArr[$addMapAt[$i]] = $task;
 		}
-		
+
 		// trace_log(['resAll'=>$addResArr,'res'=>$addResult,'add'=>$addArr,'userHas'=>$dataUserHas,'meta'=>$dataMetaInfo,'log'=>$dataArrLog]);
 		if($dataUserHas){$this->modelUser->addAll($dataUserHas);}
 		if($dataMetaInfo){$this->modelMeta->addAll($dataMetaInfo);}
@@ -235,7 +235,7 @@ class ProjectModelTask extends ModelBase{
 		$this->modelLog->lastID($projectID,'clear');
 		return $addResArr;// [{taskID,name,pid,isList},'',{},...];//index和$taskArr一致;忽略的为空字符串;
 	}
-	
+
 	// 批量添加任务(包含子任务; 列表--任务--子任务);
 	public function dataAddMutilAndChild($taskArr,$projectID){
 		if(!is_array($taskArr) || count($taskArr) == 0){return;}
@@ -244,7 +244,7 @@ class ProjectModelTask extends ModelBase{
 		$addTask = $this->_dataAddTaskLoop($taskArr,$projectTask,$addArr,0);
 		// trace_log([101,$taskArr,$addTask]);
 		return $addTask;
-	}	
+	}
 	private function _dataAddTaskLoop($taskArr,$projectTask,&$addArr,$deep){
 		if(!is_array($taskArr) || count($taskArr) == 0 || $deep >= 50){return;}
 		$taskArrNew = array();
@@ -263,8 +263,8 @@ class ProjectModelTask extends ModelBase{
 		// trace_log([$deep,$taskArr,$addResArr,$taskArrNew]);
 		$this->_dataAddTaskLoop($taskArrNew,$projectTask,$addArr,$deep++);
 		return $addResArr;
-	}	
-	
+	}
+
 	protected function dataEdit($id,$dataSet){
 		$taskInfo 	= $this->getInfoSimple($id);
 		$dataChange = array();$log = array();
@@ -275,7 +275,7 @@ class ProjectModelTask extends ModelBase{
 			$log[$key] = array($taskInfo[$key],$value);
 		}
 		if(!$dataChange) return true;
-		
+
 		$dataChange['modifyUser'] = USER_ID;
 		$result = $this->where(array("taskID"=>$id))->save($dataChange);
 		$this->addLog($taskInfo['projectID'],$id,'task.edit',$log);
@@ -287,11 +287,11 @@ class ProjectModelTask extends ModelBase{
 		if($pid == $taskInfo['pid'] && $id == $beforeTask){return true;}
 		$sortInfo 	= $this->getSortInfo($taskInfo['projectID'],$id,$pid,$beforeTask);
 		if(!$sortInfo){return false;}
-		
+
 		$dataChange = array('pid'=>$pid,'sort'=>$sortInfo['sort']);
 		$result = $this->where(array("taskID"=>$id))->save($dataChange);
 		$this->dataSetSortOthers($sortInfo['change']);
-		
+
 		$pidTaskBefore = $taskInfo['pid'] ? $this->getInfoSimple($taskInfo['pid']):false;
 		$pidTask = ($pid && $pid!= '0') ? $this->getInfoSimple($pid):false;
 		$beforeTaskInfo = ($beforeTask && $beforeTask != '0') ? $this->getInfoSimple($beforeTask):false;
@@ -304,7 +304,7 @@ class ProjectModelTask extends ModelBase{
 		if($addLog){$this->addLog($taskInfo['projectID'],$id,'task.setSort',$log);}
 		return $result;
 	}
-	
+
 	// 更新其他排序序号修改的任务;
 	private function dataSetSortOthers($change){
 		if(!is_array($change) || !count($change)) return;
@@ -314,7 +314,7 @@ class ProjectModelTask extends ModelBase{
 		}
 		$this->saveAll($saveData);
 	}
-	
+
 	// 获取排序序号; 前后=从小到大; $id=0则代表新建; $pid=0代表新建列表; $beforeTask(前一个任务,空=最前面,'-'=最后面);
 	// 列表新建拖拽[最前,x之后]; 任务新建[最前,中间,最后];任务拖拽[同列表最前,通列表x之后; 新列表x最前,新列表x之后];
 	private function getSortInfo($projectID,$id,$pid,$beforeTask){
@@ -330,11 +330,11 @@ class ProjectModelTask extends ModelBase{
 		// 任务排序;
 		$taskInfo  = $listAll[$id];
 		$taskChild = $this->taskAllChild($taskInfo);
-		if($pid == $taskInfo['taskID'] || $taskChild[$pid]){return false;} // 不能将任务移动到自己或自己的子任务下;		
+		if($pid == $taskInfo['taskID'] || $taskChild[$pid]){return false;} // 不能将任务移动到自己或自己的子任务下;
 		// trace_log([$taskInfo,$parentList,$taskChild]);
 		return $this->getSortWithList($parentList,$id,$beforeTask);
 	}
-	
+
 	private function taskAllChild($taskInfo,&$child=false){
 		if(!$child){$child = array();}
 		if(!$taskInfo || !is_array($taskInfo['children'])){return $child;}
@@ -345,7 +345,7 @@ class ProjectModelTask extends ModelBase{
 		}
 		return $child;
 	}
-	
+
 	private function getSortWithList($listAll,$id,$beforeTask){
 		$sort = array('sort'=>1,'change'=>array());//返回
 		$isToFirst 	= (!$beforeTask || $beforeTask == '0') ? true:false;
@@ -393,7 +393,7 @@ class ProjectModelTask extends ModelBase{
 		}
 		return $metaKeys;
 	}
-	
+
 	protected function dataSetMeta($id,$metaData){
 		$taskInfo = $this->getInfo($id);
 		$dataChange = array();$log = array();
@@ -402,7 +402,7 @@ class ProjectModelTask extends ModelBase{
 			$valueBefore = $taskInfo['metaInfo'][$key];
 			if(is_array($valueBefore)){$valueBefore = json_encode($valueBefore);}
 			if(is_array($value)){$value = json_encode($value);}
-			
+
 			if(!$value && !$valueBefore) continue;
 			if($value == $valueBefore) continue;
 			$dataChange[$key] = $value ? $value : null;
@@ -432,14 +432,14 @@ class ProjectModelTask extends ModelBase{
 			);
 		}
 		if($dataAdd){$this->modelUser->addAll($dataAdd);}
-		
+
 		$toUser = array_to_keyvalue($dataAdd,'','userID');
 		$changeLog = array('from'=>$taskInfo['userHas'],'to'=>implode(',',$toUser));
 		$this->addLog($taskInfo['projectID'],$id,'task.setUser',$changeLog);
 		return true;
 	}
-	
-	
+
+
 	// 任务或列表移动; $pid=0 代表列表移动;  列表:本身及任务[及子任务]; 任务:本身及子任务;
 	// 列表[目标项目,前一个任务id(分组序号,0=最前,空=最后)]; 任务[目标项目,分组,前一个任务id(0=最前,空=最后)]
 	protected function taskMoveTo($id,$projectTo,$pid,$beforeTask){
@@ -451,7 +451,7 @@ class ProjectModelTask extends ModelBase{
 			$pidTask = $this->getInfoSimple($pid);
 			if(!$pidTask || $pidTask['projectID'] != $projectTo){return false;}
 		}
-		
+
 		if($taskInfo['projectID'] == $projectTo){ // 同项目;则处理为排序;
 			$this->_changeStatus($id,self::STATUS_DOING);
 			return $this->dataSetSort($id,$pid,$beforeTask);
@@ -473,7 +473,7 @@ class ProjectModelTask extends ModelBase{
 		$this->where(array('taskID' => array('in',$arrayID)))->save($saveData);
 		$this->modelLog->where(array('taskID' => array('in',$arrayID)))->save($saveData);
 		$this->modelUser->where(array('taskID' => array('in',$arrayID)))->save($saveData);
-		
+
 		// 当前项目成员,目标项目中成员不存在时移除;
 		$projectNew 	= $this->plugin->model->getInfo($projectTo);
 		$projectUser 	= $projectTask['info']['dataInfo']['userList'];
@@ -490,7 +490,7 @@ class ProjectModelTask extends ModelBase{
 			);
 			$this->modelUser->where($where)->delete();
 		}
-		
+
 		$beforeTaskInfo = ($beforeTask && $beforeTask != '0') ? $this->getInfoSimple($beforeTask):false;
 		$changeLog = array(
 			'projectFrom'	=> $taskInfo['projectID'],'projectFromName'=>$projectTask['info']['name'],
@@ -505,7 +505,7 @@ class ProjectModelTask extends ModelBase{
 		$this->dataSetSort($id,$pid,$beforeTask,false);//修改所属项目后重新排序;
 		return true;
 	}
-	
+
 	// 任务或列表复制; $pid=0 代表列表复制;
 	// 列表[目标项目,前一个任务id(分组序号,0=最前,空=最后)]; 任务[目标项目,分组,前一个任务id(0=最前,空=最后)]
 	public function taskCopyTo($id,$projectTo,$pid,$beforeTask,$options=array()){
@@ -515,21 +515,21 @@ class ProjectModelTask extends ModelBase{
 			$pidTask = $this->getInfoSimple($pid);
 			if(!$pidTask || $pidTask['projectID'] != $projectTo){return false;}
 		}
-		
+
 		$projectTask = $this->listProjectTask($taskInfo['projectID'],true);
 		$taskNow = $projectTask['listAll'][$taskInfo['taskID']];
 		if(!$taskNow){return false;}
-		
+
 		// 创建任务;创建任务meta; 保留任务指定成员(新项目中也包含该成员时);
 		$projectNew  = $this->plugin->model->getInfo($projectTo);
 		$porjectUser = $projectNew['dataInfo']['userList'];
-		
+
 		$options['_checkTaskStatus'] = $taskInfo['status'] == self::STATUS_DOING ? true:false; // 过滤正常状态任务;
-		return $this->copyCreate($taskNow,$projectTo,$pid,$beforeTask,false,$porjectUser,$options);		
+		return $this->copyCreate($taskNow,$projectTo,$pid,$beforeTask,false,$porjectUser,$options);
 	}
-	
+
 	// 获取列表(本身+多个任务+任务子任务); 任务(本身+子任务);
-	private function copyCreate($taskNow,$projectTo,$pid,$beforeTask,$keepSort=true,$porjectUser,$options){
+	private function copyCreate($taskNow,$projectTo,$pid,$beforeTask,$keepSort,$porjectUser,$options){
 		$taskNow['projectID'] = $projectTo;
 		$taskNow['pid'] = $pid;
 		if(!$keepSort){$taskNow['sort'] = false;}
@@ -550,7 +550,7 @@ class ProjectModelTask extends ModelBase{
 			if($userSet){$this->dataSetUser($createID,implode(',',$userSet));}
 		}
 		if(!is_array($taskNow['children'])) return $createID;
-		
+
 		$children = array();
 		foreach($taskNow['children'] as $taskChildren){
 			if($options['_checkTaskStatus'] && $taskChildren['status'] != self::STATUS_DOING){continue;}
@@ -560,7 +560,7 @@ class ProjectModelTask extends ModelBase{
 		$this->dataAddMutilAndChild($children,$projectTo);//批量复制子任务;
 		return $createID;
 	}
-	
+
 	public function listData($projectID,$allStatus=0){
 		$result = $this->listProjectTask($projectID,$allStatus);
 		return $result['listGroup'];
@@ -583,7 +583,7 @@ class ProjectModelTask extends ModelBase{
 	public function listTaskAllForUser($projectID,$isAdmin,$userID,$initializeFolder=true){
 		$project = $this->model->getInfo($projectID);
 		if(!$project){return false;}
-		
+
 		// 页面读取继续保留插件原有的资料目录初始化行为；Agent 只读桥接层
 		// 传入 false，避免查询项目任务时偷偷创建目录或写入项目元数据。
 		if($initializeFolder){ProjectModelFile::projectCheckFolder($this->model,$project);}
@@ -594,7 +594,7 @@ class ProjectModelTask extends ModelBase{
 		// 任务隐私必须递归应用到所有层级。旧逻辑只过滤列表的第一层，
 		// 深层子任务会在 Agent/报告链路中泄露给普通成员。
 		$taskList = $this->filterTaskTreeForUser($taskList,$userID,$project);
-		
+
 		$result['taskList'] = $taskList;
 		return $result;
 	}
@@ -617,17 +617,17 @@ class ProjectModelTask extends ModelBase{
 		}
 		return $result;
 	}
-	
-	
+
+
 	public function listProjectTask($projectID,$allStatus=0,$isSimple=false){
 		$where = array('projectID'=>$projectID,'status'=>self::STATUS_DOING);
 		if($allStatus){unset($where['status']);}
-		
+
 		$projectInfo = $this->model->getInfo($projectID);
-		$field = $isSimple ? 'taskID,name,pid,sort,status':'*';		
+		$field = $isSimple ? 'taskID,name,pid,sort,status':'*';
 		$list  = $this->field($field)->where($where)->select();
 		if(!$list){$list = array();}
-		
+
 		if(!$isSimple){
 			$this->_listDataApply($list);
 			foreach($list as $item){
@@ -635,7 +635,7 @@ class ProjectModelTask extends ModelBase{
 				self::$_listCache[$item['taskID'].''] = $item;
 			}
 		}
-		
+
 		$listTask  = array_to_keyvalue($list,'taskID');
 		$listGroup = array();$listAll = array();
 		foreach($listTask as &$task){
@@ -667,7 +667,7 @@ class ProjectModelTask extends ModelBase{
 		$listGroup = $this->listDataSort($listGroup);
 		return array('listAll'=>$listAll,'listGroup'=>$listGroup,'info'=>$projectInfo);
 	}
-	
+
 	public function taskSelfAllow($task,$userID = false){
 		$userID = $userID === false ? USER_ID : $userID;
 		if( $task['ownerUser']  == $userID ||
@@ -675,7 +675,7 @@ class ProjectModelTask extends ModelBase{
 			strstr(','.$task['userHas'].',',','.$userID.',')
 		){return true;}
 	}
-	
+
 	// 任务是否完成;
 	public function taskFinished($task,$projectInfo){
 		// return $task['metaInfo']['taskCheck'] == '1';
@@ -691,9 +691,9 @@ class ProjectModelTask extends ModelBase{
 			$find = array_find_by_field($listArr,'type','finished');
 			if(!$find){$find = $listArr[count($listArr) - 1];}
 			if($find && $find['id'] && $find['id'] == $meta['taskStatus']){return true;}
-		}		
+		}
 	}
-	
+
 	public function listTasks($projectID,$taskArr){
 		if(!$taskArr){return array();}
 		$taskArr = array_unique($taskArr);
@@ -702,11 +702,11 @@ class ProjectModelTask extends ModelBase{
 		$this->_listDataApply($list);
 		return $list;
 	}
-	
+
 	public function listTasksSimple($idArray){
 		$idArray = array_unique($idArray);
 		if(!$idArray){return array();}
-		
+
 		$where = array('taskID'=>array('in',$idArray));
 		$list  = $this->where($where)->select();
 		$this->_listAppendMeta($list,$idArray);
@@ -723,7 +723,7 @@ class ProjectModelTask extends ModelBase{
 		}
 		return $listResult;
 	}
-	
+
 	public function _listDataApply(&$list){
 		if(!$list) return;
 		$idArray = array_to_keyvalue($list,'','taskID');
@@ -731,7 +731,7 @@ class ProjectModelTask extends ModelBase{
 		$this->_listAppendUser($list,$idArray);
 		$this->_listAppendCommentCount($list,$idArray);
 	}
-	
+
 	protected function _listAppendUser(&$list,$idArray){
 		$where 	 	 = array('taskID'=>array('in',$idArray));
 		$userAll 	 = $this->modelUser->where($where)->select();
@@ -739,7 +739,7 @@ class ProjectModelTask extends ModelBase{
 		$userOwner   = array_to_keyvalue($list,'','ownerUser');
 		$userCreate  = array_to_keyvalue($list,'','createUser');
 		$userModify  = array_to_keyvalue($list,'','modifyUser');
-		$userIdArr 	 = array_merge(array_to_keyvalue($userAll,'','userID'),$userCreate,$userModify,$userOwner);		
+		$userIdArr 	 = array_merge(array_to_keyvalue($userAll,'','userID'),$userCreate,$userModify,$userOwner);
 		$userListInfo= Model('User')->userListInfo($userIdArr);
 
 		foreach ($list as &$item) {
@@ -750,7 +750,7 @@ class ProjectModelTask extends ModelBase{
 			if(!$item['ownerUser'] || $item['ownerUser'] == '0'){$item['ownerUser'] = '';}
 		};unset($item);
 	}
-	
+
 	protected function _listAppendMeta(&$list,$idArray){
 		$where = array("taskID" => array("in",$idArray));
 		$meta  = $this->modelMeta->field("taskID,key,value")->where($where)->select();
@@ -778,27 +778,27 @@ class ProjectModelTask extends ModelBase{
 			);
 		};unset($item);
 	}
-	
-	
+
+
 	protected function taskRemove($id){return $this->_changeStatus($id,self::STATUS_DELETED,'task.remove');}
 	protected function taskArchive($id){return $this->_changeStatus($id,self::STATUS_ARCHIVED,'task.archive');}
 	protected function taskRemoveCancel($id){return $this->_changeStatus($id,self::STATUS_DOING,'task.removeCancel');}
 	protected function taskArchiveCancel($id){return $this->_changeStatus($id,self::STATUS_DOING,'task.archiveCancel');}
-	
+
 	// 移动任务/列表修改状态(将所有任务子任务都处理为该状态; 如果当前就是该状态则不处理)
 	protected function _changeStatus($id,$status,$logType=''){
 		$dataInfo = $this->getInfoSimple($id);
 		if(!$dataInfo || $dataInfo['status'] == $status) return false;
 		$taskItem  = $this->getInfoAllChildren($id);
 		if(!$taskItem['info'] || !$taskItem['arr']){return false;}
-		
+
 		$this->where(array("taskID"=>array('in',$taskItem['arr'])))->save(array('status'=>$status));
 		if($logType){
 			$this->addLog($dataInfo['projectID'],$id,$logType,array('status'=>$status));
 		}
 		return true;
 	}
-	
+
 	public function addLog($projectID,$taskID,$logType,$data=array()){
 		$dataInfo = $this->getInfoSimple($taskID);
 		$data['taskName'] = $dataInfo['name'];
@@ -809,13 +809,13 @@ class ProjectModelTask extends ModelBase{
 		}
 		$this->_cacheRemove($taskID);
 	}
-	
+
 	// 获取任务所有子任务(包含任务自身id); 子任务;任务/子任务;列表/任务/子任务;
 	private function getInfoAllChildren($id){
 		$taskInfo = $this->getInfoSimple($id);
 		$result   = array('info'=>$taskInfo,'arr'=>array());
 		if(!$taskInfo){return $result;}
-		
+
 		$projectTask = $this->listProjectTask($taskInfo['projectID'],true,true);
 		$taskChild = $this->taskAllChild($projectTask['listAll'][$id]);
 		$result['arr'] = array_keys($taskChild);
@@ -834,7 +834,7 @@ class ProjectModelTask extends ModelBase{
 		$this->modelUser->where($where)->delete();
 		$this->modelMeta->where($where)->delete();
 		Model("Comment")->removeTarget(ProjectModel::COMMENT_TYPE_PROJECT_TASK,$taskItem['arr']);
-		
+
 		$taskInfo = $taskItem['info'];
 		$logData  = array('taskName'=>$taskInfo['name'],'taskID'=>$id,'isList'=>$taskInfo['isList']);
 		$this->modelLog->addLog($taskInfo['projectID'],$id,'task.removeForce',$logData);

@@ -1,0 +1,71 @@
+name: 部署 Stage 环境
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-stage
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: 构建并发布到 stage
+    runs-on:
+      - self-hosted
+      - ruoyi-deploy
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      - name: 生成 stage 环境文件
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp script/docker/env/stage.env.example script/docker/env/.stage.ci.env
+          {
+            echo "MYSQL_ROOT_PASSWORD=${{ secrets.STAGE_MYSQL_ROOT_PASSWORD }}"
+            echo "MASTER_DATASOURCE_PASSWORD=${{ secrets.STAGE_MYSQL_ROOT_PASSWORD }}"
+            echo "SLAVE_DATASOURCE_PASSWORD=${{ secrets.STAGE_MYSQL_ROOT_PASSWORD }}"
+            echo "WX_MP_APP_ID=${{ secrets.STAGE_WX_MP_APP_ID }}"
+            echo "WX_MP_SECRET=${{ secrets.STAGE_WX_MP_SECRET }}"
+            echo "WX_MINIAPP_APP_ID=${{ secrets.STAGE_WX_MINIAPP_APP_ID }}"
+            echo "WX_MINIAPP_SECRET=${{ secrets.STAGE_WX_MINIAPP_SECRET }}"
+          } >> script/docker/env/.stage.ci.env
+          set -a
+          source script/docker/env/.stage.ci.env
+          set +a
+          {
+            echo "DEPLOY_ENV_FILE=${GITHUB_WORKSPACE}/script/docker/env/.stage.ci.env"
+            echo "REMOTE_HOST=${REMOTE_HOST}"
+          } >> "$GITHUB_ENV"
+
+      - name: 配置 SSH 私钥
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "${REMOTE_HOST}" >> ~/.ssh/known_hosts
+
+      - name: 执行 stage 部署
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEPLOY_ENV=stage DEPLOY_ENV_FILE="${DEPLOY_ENV_FILE}" IMPORT_DATABASE=false bash script/docker/deploy.sh
+
+      - name: 清理本地导出文件
+        if: always()
+        shell: bash
+        run: rm -f ruoyi-server-local.tar ruoyi-admin-local.tar script/docker/env/.stage.ci.env

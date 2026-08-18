@@ -1,0 +1,12 @@
+### 请求 /bpm/oa/seal/create 接口 => 成功
+POST {{baseUrl}}/bpm/oa/seal/create
+Content-Type: application/json
+tenant-id: 1
+Authorization: Bearer {{token}}
+
+{
+  "startTime": "2022-03-01",
+  "endTime": "2022-03-05",
+  "type": 1,
+  "reason": "我要用章啦啦啦！"
+}

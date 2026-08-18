@@ -1,0 +1,41 @@
+@reference "@vben/tailwind-config/theme";
+
+/* Make clicks pass-through */
+#nprogress {
+  @apply pointer-events-none;
+}
+
+#nprogress .bar {
+  @apply fixed top-0 left-0 z-1031 h-1 w-full;
+
+  background: linear-gradient(
+    90deg,
+    rgb(37 99 235 / 92%) 0%,
+    rgb(14 165 233 / 90%) 48%,
+    rgb(59 130 246 / 92%) 100%
+  );
+  box-shadow: 0 4px 18px rgb(37 99 235 / 22%);
+}
+
+/* Fancy blur effect */
+#nprogress .peg {
+  @apply absolute right-0 block h-full w-25;
+
+  box-shadow:
+    0 0 14px rgb(14 165 233 / 55%),
+    0 0 8px rgb(37 99 235 / 45%);
+  opacity: 1;
+  transform: rotate(2deg) translate(0, -3px);
+}
+
+#nprogress .spinner {
+  display: none;
+}
+
+.nprogress-custom-parent {
+  @apply relative overflow-hidden;
+}
+
+.nprogress-custom-parent #nprogress .bar {
+  @apply absolute;
+}

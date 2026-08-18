@@ -4,12 +4,12 @@
  * 项目接口: projectInfo,projectLog,projectListSelf,projectListTemplate,
  * 项目操作: projectAdd,projectCopyCreate,projectImport,projectEdit,projectFavAdd,projectFavCancel,
  * 		projectArchive,projectArchiveCancel,projectRemove,projectRemoveCancel,projectRemoveForce,projectExit
- * 
+ *
  * 任务接口: taskProject,taskInfo,taskLog;//(列表默认不拉取desc; taskInfo才获取desc)
  * 任务操作: taskAdd,taskEdit,taskSetUser,taskSetMeta,taskSort,taskCopyTo,taskMoveTo,taskArchive,
  * 			taskArchiveCancel,taskRemove,taskRemoveCancel,taskRemoveForce
  * 			taskAddMutil,taskEditMutil,taskCopyMoveMutil
- * 
+ *
  * 管理员接口: adminInfo,adminList,adminLog,adminOption
  */
 class projectPlugin extends PluginBase{
@@ -33,7 +33,7 @@ class projectPlugin extends PluginBase{
 		);
 		$this->echoFile('static/main.js',$assign);
 	}
-	
+
 	// 检测并创建数据表;
 	private function checkInstall(){
 		if($this->isInstall()) return;
@@ -76,8 +76,8 @@ class projectPlugin extends PluginBase{
 			if(!$this->isInstall()){show_json($error,false);}
 		}
 	}
-	
-	
+
+
 	public $model;
 	public $modelData;
 	public $modelLog;
@@ -99,7 +99,7 @@ class projectPlugin extends PluginBase{
 		include($this->pluginPath.'lib/ProjectModelSelf.class.php');
 		include($this->pluginPath.'lib/ProjectModelGroup.class.php');
 		include($this->pluginPath.'lib/ProjectAgentBridge.class.php');
-		
+
 		$this->options 		= $this->getConfig();
 		$this->modelUser	= Model('plugin_project_user');
 		$this->modelData 	= new ProjectModelData();
@@ -111,7 +111,7 @@ class projectPlugin extends PluginBase{
 		$this->modelGroup 	= new ProjectModelGroup($this);
 		$this->modelGroupTemplate = new ProjectModelGroup($this,'projectTemplate');
 		$this->isAdmin 		= $this->adminCheck(true);
-		
+
 		Hook::bind('project.taskAdd.after',array($this,'taskImageLink'));
 		Hook::bind('project.taskEdit.after',array($this,'taskImageLink'));
 		Hook::bind('project.taskRemove.after',array($this,'taskImageClear'));
@@ -127,9 +127,9 @@ class projectPlugin extends PluginBase{
 		$bridge = new ProjectAgentBridge($this);
 		$bridge->dispatch(strtolower((string)_get($this->in,'agentAction','projects')));
 	}
-	
+
 	// -----------------------------项目列表-----------------------------------
-	// 默认所有接口都传入projectID;(除了项目新建,项目列表等接口); 
+	// 默认所有接口都传入projectID;(除了项目新建,项目列表等接口);
 	// 项目及属性修改,任务及属性修改: 默认都传入logID; 拉取最后更新的日志id;(用作diff处理)
 	public function projectInfo(){
 		$this->checkAuthShow();
@@ -146,7 +146,7 @@ class projectPlugin extends PluginBase{
 		$listGroup = $this->modelGroup->listData();
 		show_json($this->model->listDataSelf(),true,$listGroup);
 	}
-	
+
 	// 模版列表;
 	public function projectListTemplate(){
 		$result = array(
@@ -155,13 +155,13 @@ class projectPlugin extends PluginBase{
 		);
 		show_json($result,true);
 	}
-	
+
 	public function taskListSelf(){
 		KodUser::checkLogin();
 		//array('task'=>array(),'project'=>array());
 		show_json($this->modelSelf->taskListSelf(),true);
 	}
-	
+
 	// 日志筛选条件解析处理;
 	private function logParamParse(){
 		$logMap = array(
@@ -193,7 +193,7 @@ class projectPlugin extends PluginBase{
 		}
 		return $where;
 	}
-	
+
 	// -----------------------------项目操作-----------------------------------
 	public function projectAdd(){
 		KodUser::checkLogin();
@@ -202,16 +202,16 @@ class projectPlugin extends PluginBase{
 			"name"		=> array("check"=>"require"),
 			"desc"		=> array("check"=>"require",'default'=>''),
 		));
-		
+
 		// 新建模版处理;
-		$meta = json_decode(_get($this->in,'meta'),true);$metaOld = $meta;	
+		$meta = json_decode(_get($this->in,'meta'),true);$metaOld = $meta;
 		if(_get($this->in,'isTemplate') == '1'){
 			if(!$this->isAdmin){show_json(LNG('explorer.noPermissionAction'),false);}
 			$data['status'] = ProjectModel::STATUS_TEMPLATE;
 		}
 		$projectID = $this->model->dataAdd($data);
 		$this->projectUpdate($projectID,true);
-		
+
 		$meta = ProjectModelData::projectMeta($projectID,$this->options);
 		$this->projectMetaSet($projectID,$meta,true);
 		show_json($this->getProjectInfo($projectID),true);
@@ -230,12 +230,12 @@ class projectPlugin extends PluginBase{
 		if(_get($this->in,'isTemplate') == '1'){
 			if(!$this->isAdmin){show_json(LNG('explorer.noPermissionAction'),false);}
 		}
-		
+
 		$this->checkAuth('show',$data['projectFrom']);
 		$projectID = $this->model->copyCreate($data);
 		show_json($this->getProjectInfo($projectID),true);
 	}
-	
+
 	// 通过外部项目模版导入(忽略用户;文件内容)
 	public function projectImport(){
 		KodUser::checkLogin();
@@ -250,13 +250,13 @@ class projectPlugin extends PluginBase{
 		if(empty($data['projectInfo']['metaInfo'])){
 			$data['projectInfo']['metaInfo'] = array();
 		}
-		
+
 		$projectID = $this->model->dataAdd($data['projectInfo']);
 		$this->projectMetaSet($projectID,$data['projectInfo']['metaInfo'],true);
 		$this->modelTask->dataAddMutilAndChild($data['taskList'],$projectID);
 		show_json($this->getProjectInfo($projectID),true);
 	}
-	
+
 	public function projectEdit(){
 		$this->checkAuthAdmin();
 		$data = Input::getArray(array(
@@ -280,7 +280,7 @@ class projectPlugin extends PluginBase{
 			$this->model->dataSetUser($projectID,$userList,$isCreate);
 		}
 	}
-	
+
 	// 项目扩展属性设置, 对象数组时最小化变更(避免覆盖问题, 多人修改时全部覆盖为最后一个操作)
 	private function projectMetaDiff($projectInfo,&$meta){
 		if(!isset($this->in['metaDiff'])){return;}
@@ -319,9 +319,9 @@ class projectPlugin extends PluginBase{
 			}
 			$meta[$key] = $value;// 使用diff做最小化变更;
 		}
-		// trace_log([$metaJson,$metaJsonTo,$diff,$meta]);	
+		// trace_log([$metaJson,$metaJsonTo,$diff,$meta]);
 	}
-	
+
 	// 编辑项目meta数据; 模版情况处理;
 	private function projectMetaSet($projectID,$meta,$isCreate){
 		$projectInfo = $this->getProjectInfo($projectID);
@@ -345,8 +345,8 @@ class projectPlugin extends PluginBase{
 		}
 		// trace_log([$metaOld,$meta]);
 		$this->model->dataSetMeta($projectID,$meta,$isCreate);
-	}	
-	
+	}
+
 	private function checkMetaData($metaStr,$allowKeys){
 		$errorField  = LNG('common.unknow').' key [meta]!';
 		$errorLength = LNG('common.lengthLimit').' [meta]!';
@@ -381,7 +381,7 @@ class projectPlugin extends PluginBase{
 	public function projectRemove(){$this->projectAction('dataRemove',true);}
 	public function projectRemoveCancel(){$this->projectAction('dataRemoveCancel',true);}
 	public function projectRemoveForce(){$this->projectAction('removeForce',true);}
-	
+
 	// 文件选择时,自动将文件拷贝到项目文件夹内(条件: 必须是文件/启用了项目文件/自己有编辑权限/在项目文件夹外);
 	public function fileSelectAutoCopy(){
 		$this->checkAuth('edit');
@@ -395,7 +395,7 @@ class projectPlugin extends PluginBase{
 		$data = ProjectModelFile::fileSelectAutoCopy($this->model,$fileInfo,$this->in['projectID']);
 		show_json($data,!!$data);
 	}
-	
+
 	// -----------------------------任务操作-----------------------------------
 	public function taskProject(){
 		$this->checkAuthShow();// 读取权限, 获取项目所有任务列表;
@@ -426,11 +426,11 @@ class projectPlugin extends PluginBase{
 		));
 		if($data['pid'] == '0'){$data['isList'] = '1';}
 		if($data['projectID'] == '0'){$data['isList'] = '0';}
-		
+
 		$this->checkTaskParent($data['pid'],$data['projectID']);
 		$beforeTask = Input::get('beforeTask','require','');// 0=最前面;空=最后面;
 		$this->taskCheckDesc($data);
-		
+
 		// 已归档已删除任务, 添加子任务保持状态和父任务一致;
 		if($data['pid'] && $data['pid'] != 0){
 			$taskParent = $this->modelTask->getInfo($data['pid']);
@@ -438,7 +438,7 @@ class projectPlugin extends PluginBase{
 				$data['_status'] = $taskParent['status'];
 			}
 		}
-		
+
 		$taskID = $this->modelTask->dataAdd($data,$beforeTask);
 		Hook::trigger('project.taskAdd.after',$taskID,$data);
 		$this->taskUpdate($taskID);
@@ -451,8 +451,8 @@ class projectPlugin extends PluginBase{
 	public function taskImageClear($taskID,$json){
 		$descNew = Action('explorer.attachment')->clearTarget($taskID,'project_task_desc');
 	}
-	
-	
+
+
 	private function taskUpdate($taskID){
 		if(isset($this->in['meta']) && $this->in['meta']){
 			$allowKeys = $this->modelTask->metaKeysGet($this->getProjectInfo());
@@ -463,14 +463,14 @@ class projectPlugin extends PluginBase{
 			$this->modelTask->dataSetUser($taskID,$this->in['userHas']);
 		}
 	}
-	
+
 	private function taskCheckDesc(&$data){
 		if(!$data['desc'] || !isset($data['desc'])){return;}
 		$data['desc'] = Html::clean($data['desc']);
 		$desc = ModelBase::textEncode($data['desc']);
 		if(strlen($desc) > 60000){show_json(LNG('common.lengthLimit').' ('.strlen($desc)."/60000)",false);}
 	}
-	
+
 	public function taskEdit(){ // name,desc,ownerUser; user; meta;
 		$taskInfo = $this->checkTaskEdit();
 		$data = Input::getArray(array( // 编辑基本信息,该接口不支持直接修改所属项目;
@@ -486,7 +486,7 @@ class projectPlugin extends PluginBase{
 		if($taskInfo['projectID'] == '0'){
 			$data['ownerUser'] = $taskInfo['createUser'];
 		}
-		
+
 		$this->taskCheckDesc($data);
 		$this->modelTask->dataEdit($this->in['taskID'],$data);
 		$this->taskUpdate($this->in['taskID']);
@@ -504,7 +504,7 @@ class projectPlugin extends PluginBase{
 		if(!$res){show_json(LNG('explorer.error'),false);}
 		$this->showTask();
 	}
-	
+
 	// 任务或列表复制; 任务[指定项目,指定列表,前一个任务]; 列表[指定项目,前一个列表]; pid为空则为列表;
 	public function taskCopyTo(){
 		$taskID = Input::get('taskID','number');
@@ -514,7 +514,7 @@ class projectPlugin extends PluginBase{
 		$showTask = ($this->in['projectID'] == $data['projectTo']) ? $createID : $taskID; // 跨项目复制时不处理;
 		$this->showTask($showTask,true);
 	}
-	
+
 	// 任务或列表移动; 任务[指定项目,指定列表,前一个任务]; 列表[指定项目,前一个列表]; pid为空则为列表;
 	public function taskMoveTo(){
 		$taskID = Input::get('taskID','number');
@@ -529,7 +529,7 @@ class projectPlugin extends PluginBase{
 			"pid"			=> array("check"=>"number",'default'=>'0'),
 			"options"		=> array("check"=>"json",'default'=>array()),
 		));
-		
+
 		$this->in['taskID'] = $taskID;
 		if($action == 'copy'){
 			$this->checkTaskView();
@@ -560,8 +560,8 @@ class projectPlugin extends PluginBase{
 		Hook::trigger('project.taskRemove.after',$this->in['taskID'],array());
 		$this->taskAction('taskRemoveForce');
 	}
-	
-	
+
+
 	// 批量添加任务( ownerUser/userHas/meta; statusAction)
 	public function taskAddMutil(){
 		$this->checkAuthEdit();
@@ -572,7 +572,7 @@ class projectPlugin extends PluginBase{
 		$data = $taskAdd ? $taskAdd : LNG('explorer.error');
 		show_json($data,$code,$this->logChange('task',false));
 	}
-	
+
 	// 批量编辑任务( ownerUser/userHas/meta; statusAction)
 	public function taskEditMutil(){
 		$actionAllow = array('taskArchive','taskArchiveCancel','taskRemove','taskRemoveCancel','taskRemoveForce');
@@ -581,9 +581,9 @@ class projectPlugin extends PluginBase{
 			show_json(LNG('explorer.notNull'),false);
 		}
 		// 批量编辑; 指定了每个任务信息时独立处理;  taskArrSet:{taskIDXXX:{ownerUser:,...,meta:{...},statusAction:xxx },...}
-		$taskArrSet = isset($this->in['taskArrSet']) ? json_decode($this->in['taskArrSet'],true) : false;		
+		$taskArrSet = isset($this->in['taskArrSet']) ? json_decode($this->in['taskArrSet'],true) : false;
 		// pr($taskArr,$action,$this->in);exit;
-		
+
 		foreach($taskArr as $taskID){
 			$this->in['taskID'] = $taskID;
 			if(is_array($taskArrSet)){ // 独立处理,参数覆盖;
@@ -593,7 +593,7 @@ class projectPlugin extends PluginBase{
 					$this->in[$key] = is_array($value) ? json_encode($value) : $value;
 				}
 			}
-			
+
 			$this->checkTaskEdit();
 			if(isset($this->in['ownerUser'])){
 				$data = array('ownerUser'=>$this->in['ownerUser']);
@@ -608,7 +608,7 @@ class projectPlugin extends PluginBase{
 		ProjectModelLog::logAddClear();
 		show_json(LNG('explorer.success'),true,$this->logChange('task',false));
 	}
-	
+
 	// 批量移动复制任务;
 	public function taskCopyMoveMutil(){
 		$taskArr = json_decode(_get($this->in,'taskArr',''));
@@ -618,9 +618,9 @@ class projectPlugin extends PluginBase{
 		}
 
 		// 批量复制/移动; 指定了每个任务信息时独立处理;  taskArrSet:{taskIDXXX:{projectTo,beforeTask,pid,options,  copyMoveAction:xxx },...}
-		$taskArrSet = isset($this->in['taskArrSet']) ? json_decode($this->in['taskArrSet'],true) : false;		
+		$taskArrSet = isset($this->in['taskArrSet']) ? json_decode($this->in['taskArrSet'],true) : false;
 		// pr($taskArr,$action,$this->in);exit;
-		
+
 		$success = 0;$taskResult = array();
 		foreach ($taskArr as $taskID){
 			if(is_array($taskArrSet)){ // 独立处理,参数覆盖;
@@ -630,7 +630,7 @@ class projectPlugin extends PluginBase{
 					$this->in[$key] = is_array($value) ? json_encode($value) : $value;
 				}
 			}
-			
+
 			$data = $this->taskCopyMoveCheck($taskID,$action);
 			if(is_array($data['options']) && isset($data['options']['name'])){
 				unset($data['options']['name']);// 多选复制时,屏蔽指定任务名称;
@@ -651,7 +651,7 @@ class projectPlugin extends PluginBase{
 		ProjectModelLog::logAddClear();
 		show_json($out,$code,$this->logChange('task',false));
 	}
-	
+
 
 	// 评论权限检测处理;
 	public function commentCheckType($targetType,$targetID,$param){
@@ -661,13 +661,13 @@ class projectPlugin extends PluginBase{
 		if(!in_array($targetType,$allowType) || !$targetID) return;
 		$GLOBALS[$checkKey] = true;
 	}
-	
+
 	// 评论权限检测; $action=view,edit,remove [项目:是否允许讨论--取决于是否开启讨论引用; 任务是否允许讨论--取决于是否禁用了任务评论]
 	public function commentCheckAuth($targetType,$targetID,$authCheck){
 		$this->loadModelNow();
 		$allowType = array(ProjectModel::COMMENT_TYPE_PROJECT,ProjectModel::COMMENT_TYPE_PROJECT_TASK);
 		if(!in_array($targetType,$allowType) || !$targetID) return;
-		
+
 		if($targetType == ProjectModel::COMMENT_TYPE_PROJECT){
 			$this->in['projectID'] = $targetID;
 			if(!$this->model->checkAllowChat($targetID)){
@@ -682,7 +682,7 @@ class projectPlugin extends PluginBase{
 				show_json(LNG('project.tips.chatNotEnable'),false);
 			}
 		}
-		
+
 		// 自己为项目编辑者时,允许删除自己的评论
 		$action = strtolower(ACT);
 		if($action == 'remove' || $action == 'edit'){
@@ -699,16 +699,16 @@ class projectPlugin extends PluginBase{
 		$this->checkAuth($actionAuthMap[$authCheck]);
 		$this->commentChangeLog($targetType,$targetID,$authCheck);
 	}
-	
+
 	// 评论添加/删除;变更日志记录;
 	private function commentChangeLog($targetType,$targetID,$authCheck,$commentInfo = false){
 		$checkKey  = 'comment.checkAuth.'.$targetType.'.'.$targetID.'.'.$authCheck;
 		$GLOBALS[$checkKey] = true;
-		
+
 		$action = strtolower(ACT);
 		$commentEvent = 'comment.'.$action;
 		if(!in_array($action,array('add','edit','remove'))){return;}
-		
+
 		$dataLog = array('content' => _get($this->in,'content',''));
 		if($commentInfo && $action == 'edit'){
 			$dataLog['contentBefore'] = $commentInfo['content'];
@@ -716,7 +716,7 @@ class projectPlugin extends PluginBase{
 		if($commentInfo && $action == 'remove'){
 			$dataLog['content'] = $commentInfo['content'];
 		}
-		
+
 		if($targetType == ProjectModel::COMMENT_TYPE_PROJECT_TASK){
 			$this->modelTask->addLog($this->in['projectID'],$targetID,$commentEvent,$dataLog);
 		}else{// 项目讨论,记录日志到项目日志中(暂不不记录)
@@ -724,15 +724,15 @@ class projectPlugin extends PluginBase{
 		}
 		// trace_log([$action,$commentEvent,$dataLog,$targetID,$commentInfo]);
 	}
-	
-	
+
+
 	// 是否允许删除或修改自己的评论;默认允许(统一在commentCheckAuth中判断权限;)
 	// 删除权限: 预览者=无权限;编辑者=仅支持删除自己的评论;拥有者=支持删除所有人评论;
 	public function commentCheckSelf($targetType,$targetID,$action){
 		$checkKey = 'comment.checkSelf.'.$targetType.'.'.$targetID.'.'.$action;
 		$GLOBALS[$checkKey] = true;
 	}
-	
+
 	private function showProject($dataID=false){
 		$dataID   = $dataID ? $dataID : $this->in['projectID'];
 		$dataInfo = $this->getProjectInfo($dataID);
@@ -747,20 +747,20 @@ class projectPlugin extends PluginBase{
 		}
 		show_json($dataInfo,true,$this->logChange('task',$dataInfo));
 	}
-	
+
 	// 变更日志(从上次logID之后的更新; 排除当前请求产生的日志; 查询出任务变更的任务列表,前端做整理处理);
 	private function logChange($changeType,$data=false){
 		$projectID = $this->in['projectID'];
 		$log = $this->modelLog->logChange($projectID,$this->in['lastLogID']);
 		if(!$log['logList']){return $log;}
-		
+
 		$log['project'] = false;$taskArr = array();
 		foreach($log['logList'] as $item){
 			if($item['taskID'] == '0'){$log['project'] = $projectID;continue;}
 			if(in_array($item['taskID'],$taskArr)){continue;}
 			$taskArr[] = $item['taskID'];
 		}
-		
+
 		if($log['project']){
 			$projectInfo = ($changeType == 'project' && $data) ? $data:false;
 			if(!$projectInfo){$projectInfo = $this->getProjectInfo($projectID);}
@@ -777,7 +777,7 @@ class projectPlugin extends PluginBase{
 		}
 		return $log;
 	}
-	
+
 	private function getProjectInfo($projectID=false){
 		$projectID = $projectID ? $projectID:Input::get('projectID','number');
 		return $this->model->getInfo($projectID);
@@ -793,7 +793,7 @@ class projectPlugin extends PluginBase{
 		$this->in['projectID'] = $taskInfo['projectID'];
 		return $taskInfo;
 	}
-	
+
 	// 父任务检测; 是否存在,且在同一个项目;
 	private function checkTaskParent($pid,$projectID){
 		if(!$pid || $pid == 0) return;
@@ -812,7 +812,7 @@ class projectPlugin extends PluginBase{
 	private function checkTaskEdit(){
 		$taskInfo = $this->checkTask();
 		$this->checkAuthEdit();
-		
+
 		// 任务为个人tood,仅自己可以读写;
 		if($taskInfo['projectID'] == '0' && $taskInfo['createUser'] != KodUser::id()){
 			show_json(LNG('project.tips.notInProject'),false);
@@ -828,7 +828,7 @@ class projectPlugin extends PluginBase{
 		}
 		return $taskInfo;
 	}
-	
+
 	// 检测是否允许创建项目(系统管理员/项目管理员不检测;是否开启了允许用户创建项目; 用户是否达到创建项目上限);
 	private function checkAddProject(){
 		if($this->isAdmin){return true;}
@@ -842,13 +842,13 @@ class projectPlugin extends PluginBase{
 		}
 		return true;
 	}
-	
-	// 读写权限检测; 不存在处理;  show:[不登录须项目设置为公开;或自己在该项目中]; 
+
+	// 读写权限检测; 不存在处理;  show:[不登录须项目设置为公开;或自己在该项目中];
 	// view/edit/admin; 须自己在该项目成员中; 并且权限大于等于该权限;
 	private function checkAuth($type,$projectID=false){
 		if($this->isAdmin){return true;}
 		if($type == 'view'){$type = 'show';}
-		
+
 		$userID	= KodUser::id();
 		$projectID = $projectID ? $projectID:Input::get('projectID','number');
 		if(!$projectID || $projectID == '0'){
@@ -862,7 +862,7 @@ class projectPlugin extends PluginBase{
 		if(!$userID){show_json(LNG('user.loginFirst'),ERROR_CODE_LOGOUT);}
 		show_json(LNG('explorer.noPermissionAction'),false);
 	}
-	
+
 	// 返回自己在该项目的权限 show/edit/admin
 	private function selfAuthType($projectID){
 		if($this->isAdmin){return 'admin';}
@@ -871,11 +871,11 @@ class projectPlugin extends PluginBase{
 		$projectInfo = $this->getProjectInfo($projectID);
 		if(!$projectInfo){show_json(LNG('project.tips.emptyProject'),false);}
 		if($this->model->isTemplate($projectInfo)){return 'show';}
-		
+
 		$userList = $projectInfo['dataInfo']['userList'];
 		$isPublic = $projectInfo['metaInfo']['authType'] == 'public';
 		if(!$userID || !is_array($userList[$userID])){return $isPublic ? 'show':false;}
-		
+
 		$authType = $userList[$userID]['authType'];
 		if($authType == ProjectModel::AUTH_READ){return 'show';}
 		if($authType == ProjectModel::AUTH_WRITE){return 'edit';}
@@ -884,16 +884,16 @@ class projectPlugin extends PluginBase{
 	private function checkAuthShow(){return $this->checkAuth('show');}
 	private function checkAuthEdit(){return $this->checkAuth('edit');}
 	private function checkAuthAdmin(){return $this->checkAuth('admin');}
-	
-	
-	
+
+
+
 	// =============================管理员操作接口===============================
 	private function adminCheck($ignoreOut = false){
 		if(kodUser::isRoot()){return true;}
 		$userAdmin = _get($this->options,'userAdmin','');
 		$userAdmin = $userAdmin ? explode(',',$userAdmin):array();
 		if($userAdmin && in_array(kodUser::id(),$userAdmin)){return true;}
-		
+
 		if($ignoreOut){return false;}
 		show_json(LNG('explorer.noPermissionAction'),false);
 	}
@@ -909,7 +909,7 @@ class projectPlugin extends PluginBase{
 			"timeTo"		=> array("check"=>"number",'default'=>''),
 			"status"		=> array("check"=>"require",'default'=>''),
 			'words'			=> array("check"=>"require",'default'=>''),
-			
+
 			'sortField'		=> array("check"=>"require",'default'=>''),
 			'sortType'		=> array("check"=>"in",'default'=>'up','param'=>array('up','down')),
 		));
@@ -924,7 +924,7 @@ class projectPlugin extends PluginBase{
 			"timeTo"		=> array("check"=>"number",'default'=>''),
 			"logType"		=> array("check"=>"require",'default'=>''),
 			"projectID"		=> array("check"=>"number",'default'=>''),
-			
+
 			'sortField'		=> array("check"=>"require",'default'=>''),
 			'sortType'		=> array("check"=>"in",'default'=>'up','param'=>array('up','down')),
 		));
@@ -946,7 +946,7 @@ class projectPlugin extends PluginBase{
 		if($options){$this->setConfig($options);}
 		show_json(LNG('explorer.success'),true,$this->getConfig());
 	}
-	
+
 	// =============================项目分组操作===============================
 	private function getModelGroup(){
 		// 模版分组接口及model复用; 项目分组/模版分类;
@@ -999,7 +999,7 @@ class projectPlugin extends PluginBase{
 		$res = $this->getModelGroup()->sort($param['id'],$param['pid'],$param['beforeID']);
 		$this->groupInfoShow($res);
 	}
-	
+
 	private function groupInfoShow($res){
 		if(!$res){show_json(LNG('explorer.error'),false);}
 		$this->groupList();

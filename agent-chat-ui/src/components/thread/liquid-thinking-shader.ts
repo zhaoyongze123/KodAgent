@@ -64,7 +64,7 @@ fn mfEdgeGlow(col: vec3<f32>, uv: vec2<f32>, ctr: vec2<f32>, rad: f32,
               soft: f32, glow: f32, glowRGB: vec3<f32>) -> vec3<f32> {
   if (glow <= 0.0) { return col; }
   let r = length(uv - ctr);
-  
+
   let outside = smoothstep(rad - max(soft, 0.0005), rad + max(soft, 0.0005), r);
   return col + glowRGB * (glow * exp(-max(r - rad, 0.0) * 11.0) * outside);
 }
@@ -93,7 +93,7 @@ fn mfRampCyc(tIn: f32, n: f32,
   let k  = clamp(floor(n + 0.5), 1.0, 12.0);
   let x  = fract(tIn) * k;
   let i0 = min(floor(x), k - 1.0);
-  let i1 = select(i0 + 1.0, 0.0, i0 + 1.0 >= k);   
+  let i1 = select(i0 + 1.0, 0.0, i0 + 1.0 >= k);
   return mix(mfRampPick(i0, s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11),
              mfRampPick(i1, s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11),
              x - i0);
@@ -129,14 +129,14 @@ fn mfRampLinR(t: f32, r: MfRamp) -> vec3<f32> {
   return mfRampLin(t, r.n, r.s0, r.s1, r.s2, r.s3, r.s4, r.s5,
                    r.s6, r.s7, r.s8, r.s9, r.s10, r.s11);
 }
-const GL_FU:   f32 = 0.88172043;   
+const GL_FU:   f32 = 0.88172043;
 const GL_BSIG_CLEAR: f32 = 0.01800000;
 const GL_BSIG_GLASS: f32 = 0.03990000;
 const GL_KA:  f32 = 6.0;
 const GL_KG:  f32 = 4.1209;
 const GL_KWA: f32 = 0.5;
 const GL_KR:  f32 = 0.32;
-const GL_GH:  f32 = 1.73205081;   
+const GL_GH:  f32 = 1.73205081;
 const GL_CLEAR_EA: f32 = 0.995;
 const GL_CLEAR_EB: f32 = 1.04;
 fn lqHash(pIn: vec2<f32>) -> f32 {
@@ -166,7 +166,7 @@ fn lqFbm(pIn: vec2<f32>, bs: f32) -> vec2<f32> {
     m  = m + a;
     a  = a * 0.5;
     g  = g * GL_KG;
-    
+
     p = vec2<f32>(0.8 * p.x - 0.6 * p.y, 0.6 * p.x + 0.8 * p.y) * 2.03;
   }
   return vec2<f32>(s / m, GL_KR * sqrt(vr) / m);
@@ -178,7 +178,7 @@ fn lqRamp(v: f32, cA: vec3<f32>, cB: vec3<f32>, cC: vec3<f32>, cD: vec3<f32>) ->
   var c = mix(cA, cB, smoothstep(0.0, 0.45, v));
   c = mix(c, cC, smoothstep(0.38, 0.72, v));
   c = mix(c, cD, smoothstep(0.68, 1.0, v));
-  
+
   return select(c, mfRampLin(v, u.paletteCount,
                              u.paletteStop0.rgb, u.paletteStop1.rgb, u.paletteStop2.rgb,
                              u.paletteStop3.rgb, u.paletteStop4.rgb, u.paletteStop5.rgb,
@@ -218,7 +218,7 @@ fn glsSiriBand(q: vec2<f32>, drift: f32, phaseOffset: f32, amplitude: f32,
   return vec2<f32>(line, band);
 }
 fn glsSiriFluid(p: vec2<f32>, t: f32) -> vec3<f32> {
-  
+
   let scale = 0.74 + u.zoom * 0.34;
   let q = p / scale;
   let xNorm = q.x;
@@ -273,7 +273,7 @@ fn glsSpectrumLayer(q: vec2<f32>, height: f32, softness: f32) -> f32 {
          * smoothstep(0.0, 0.045, height);
 }
 fn glsSpectrumFluid(p: vec2<f32>, t: f32) -> vec3<f32> {
-  
+
   let scale = 0.74 + u.zoom * 0.34;
   let q = p / scale;
   let amplitude = 0.26 + u.ridgeAmt * 0.27;
@@ -409,7 +409,7 @@ fn glsOpalFluid(p: vec2<f32>, t: f32) -> vec3<f32> {
   return glsFinishPresetFluid(color, p);
 }
 fn glsFrostFluid(p: vec2<f32>, t: f32) -> vec3<f32> {
-  
+
   var q = p * (0.66 + u.zoom * 0.92);
   q.y = q.y + t * 0.055;
   let blur = 0.011 + 0.006 * u.zoom;
@@ -431,7 +431,7 @@ fn glsFrostFluid(p: vec2<f32>, t: f32) -> vec3<f32> {
   return glsFinishPresetFluid(color, p);
 }
 fn glsVoiceWaveFluid(p: vec2<f32>, t: f32) -> vec3<f32> {
-  
+
   let scale = 0.76 + u.zoom * 0.34;
   let q = p / scale;
   let rimEnvelope = pow(max(1.0 - q.x * q.x, 0.0), 0.72);
@@ -458,7 +458,7 @@ fn glsVoiceWaveFluid(p: vec2<f32>, t: f32) -> vec3<f32> {
   return glsFinishPresetFluid(color, p);
 }
 fn glsBlueDropFluid(p: vec2<f32>, t: f32) -> vec3<f32> {
-  
+
   let depth = sqrt(max(1.0 - clamp(dot(p, p), 0.0, 1.0), 0.0));
   var q = p * mix(0.72, 1.0, depth * 0.62 + 0.38);
   q = glsRotate(q, -0.24 + 0.06 * sin(t * 0.17));
@@ -485,7 +485,7 @@ fn glsBlueDropFluid(p: vec2<f32>, t: f32) -> vec3<f32> {
   return glsFinishPresetFluid(color, p);
 }
 fn glsVioletEmberFluid(p: vec2<f32>, t: f32) -> vec3<f32> {
-  
+
   let scale = 1.08 + u.zoom * 1.18;
   let blur = 0.011 + 0.005 * u.zoom;
   let radius = length(p);
@@ -532,14 +532,14 @@ fn glsFluid(fu: vec2<f32>, md: i32, t: f32) -> vec3<f32> {
   let cB = u.colorB.rgb;
   let cC = u.colorC.rgb;
   let cD = u.colorD.rgb;
-  
-  
+
+
   let blurSigma = select(GL_BSIG_CLEAR, GL_BSIG_GLASS, u.glassEnabled > 0.5);
   let sp = blurSigma * u.zoom;
   let sw = sp * 1.1 * GL_KWA;
   var fcol: vec3<f32>;
   if (md < 0) {
-    
+
     var pp = fu * u.zoom;
     pp.y = pp.y + t * 0.05;
     let w = vec2<f32>(lqFbm(pp * 1.1 + vec2<f32>(0.0, t * 0.09), sw).x,
@@ -556,15 +556,15 @@ fn glsFluid(fu: vec2<f32>, md: i32, t: f32) -> vec3<f32> {
                       lqFbm(pp * 1.1 + vec2<f32>(7.7, -t * 0.07), sw).x);
     let q = pp + u.warp * (w - vec2<f32>(0.5));
     if (md == 0) {
-      
-      
+
+
       let n0 = lqFbm(q * 2.2, sp * 2.2);
       let damp = exp(-18.0 * n0.y * n0.y - 24.5 * sp * sp);
       var v = 0.5 + 0.5 * damp * sin(q.x * 7.0 + n0.x * 6.0 + t * 0.35);
       v = mix(v, lqFbm(q * 1.4 + vec2<f32>(t * 0.03), sp * 1.4).x, 0.25);
       fcol = lqRamp(v, cA, cB, cC, cD);
     } else if (md == 1) {
-      
+
       let v = lqRidgeS(lqFbm(q * 1.4 + vec2<f32>(t * 0.06, 0.0), sp * 1.4), u.sharp)
             * lqRidgeS(lqFbm(q * 1.7 - vec2<f32>(0.0, t * 0.05), sp * 1.7), u.sharp);
       fcol = lqRamp(pow(v, 0.7), cA, cB, cC, cD);
@@ -579,9 +579,9 @@ fn glsFluid(fu: vec2<f32>, md: i32, t: f32) -> vec3<f32> {
       fcol = lqRamp(lqPowS(v, 1.5), cA, cB, cC, cD);
     }
   }
-  
-  
-  
+
+
+
   fcol = mix(fcol, u.highlightColor.rgb,
              u.shade * 0.3 * smoothstep(0.25, 1.25, dot(fu, vec2<f32>(-0.32, 0.78))));
   fcol = fcol * (1.0 - u.shade * 0.42 * smoothstep(-0.05, 1.25, dot(fu, vec2<f32>(0.45, -0.62))));
@@ -639,33 +639,33 @@ fn glsContourNormal(uv: vec2<f32>, rad: f32, t: f32, amount: f32) -> vec2<f32> {
   return normalize(radial - tangent * (rad * slope / distance));
 }
 fn orbGlassLiquidAnim(uv01: vec2<f32>) -> vec4<f32> {
-  
+
   let fc = vec2<f32>(uv01.x, 1.0 - uv01.y) * u.size;
   let uv = (2.0 * fc - u.size) / max(min(u.size.x, u.size.y), 1.0);
   let rad = max(u.radius, 0.05);
   let t = u.time * u.speed;
   let contourRad = rad * glsContourScale(uv, t, u.contourDeform);
-  
-  
-  
-  
-  
-  
-  
-  
-  
+
+
+
+
+
+
+
+
+
   if (length(uv) > contourRad * (1.01 + mfEdgeD(u.edgeSoftness))) {
-    
+
     return vec4<f32>(clamp(mfEdgeGlow(vec3<f32>(0.0), uv, vec2<f32>(0.0), contourRad,
                                       u.edgeSoftness, u.edgeGlow, u.glowColor.rgb),
                            vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
   }
-  let p   = uv / contourRad;     
+  let p   = uv / contourRad;
   let pd  = length(p);
-  
+
   let fu = p / GL_FU;
-  
-  
+
+
   let s = i32(u.style + 0.5);
   var md: i32 = -1;
   if (s == 1) { md = 1; }
@@ -685,8 +685,8 @@ fn orbGlassLiquidAnim(uv01: vec2<f32>) -> vec4<f32> {
   if (clearFa > 0.0) {
     if (s >= 9) {
       if (u.glassEnabled > 0.5) {
-        
-        
+
+
         let channelSplit = 0.14 * clamp(u.gloss, 0.0, 2.0)
                            * clamp(u.glassOpacity, 0.0, 1.0)
                            * refractionProfile;
@@ -699,14 +699,14 @@ fn orbGlassLiquidAnim(uv01: vec2<f32>) -> vec4<f32> {
     }
     else { fcol = glsFluid(fu, md, t); }
   }
-  
+
   let lum = dot(fcol, vec3<f32>(0.213, 0.715, 0.072));
   let clearSat = clamp(vec3<f32>(lum) + (fcol - vec3<f32>(lum)) * 1.22,
                        vec3<f32>(0.0), vec3<f32>(1.0));
   var col = glsOver(u.canvasColor.rgb, clearSat, 0.99 * clearFa);
   if (u.glassEnabled > 0.5) {
-    
-    
+
+
     let surfaceWidth = 0.026 + 0.055 * clamp(u.shellEdgeAlpha, 0.0, 1.0);
     let surfaceBand = (1.0 - smoothstep(0.0, surfaceWidth, edgeDepth)) * clearFa;
     let opticalRim = pow(surfaceBand, 1.8);
@@ -732,10 +732,10 @@ fn orbGlassLiquidAnim(uv01: vec2<f32>) -> vec4<f32> {
     col = glsOver(col, u.sheenColor.rgb, key);
     col = glsOver(col, u.specColor.rgb, fill);
   }
-  
+
   let ballA = 1.0 - smoothstep(0.99 - mfEdgeD(u.edgeSoftness), 1.01 + mfEdgeD(u.edgeSoftness), pd);
   col = clamp(col * max(u.exposure, 0.0), vec3<f32>(0.0), vec3<f32>(1.0)) * ballA;
-  
+
   let edged = mfEdgeGlow(col, uv, vec2<f32>(0.0), contourRad,
                          u.edgeSoftness, u.edgeGlow, u.glowColor.rgb);
   return vec4<f32>(clamp(edged, vec3<f32>(0.0), vec3<f32>(1.0)), 1.0);
