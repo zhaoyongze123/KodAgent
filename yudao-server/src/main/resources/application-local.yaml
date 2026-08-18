@@ -3,14 +3,69 @@ server:
   port: ${SERVER_PORT:7800}
 
 yudao:
+  agent:
+    artifact:
+      # 通用附件由当前用户受控下载并自动过期。
+      ttl-seconds: ${OA_AGENT_ARTIFACT_TTL_SECONDS:86400}
+    project:
+      # Java 与 KodCloud project 插件共用的桥接密钥；绝不传给浏览器、LangGraph 或模型提示词。
+      bridge-base-url: ${KOD_PROJECT_BRIDGE_BASE_URL:http://127.0.0.1:8001/index.php?plugin/project/agent}
+      bridge-secret: ${KOD_PROJECT_BRIDGE_SECRET:}
+      ticket-ttl-seconds: ${KOD_PROJECT_BRIDGE_TICKET_TTL_SECONDS:60}
+      report-ttl-seconds: ${KOD_PROJECT_REPORT_TTL_SECONDS:86400}
+      rag:
+        # 默认关闭：真实资料评测通过后，由 Secrets Overlay 注入 embedding 服务。
+        enabled: ${OA_AGENT_PROJECT_RAG_ENABLED:false}
+        retrieval-mode: ${OA_AGENT_PROJECT_RAG_RETRIEVAL_MODE:hybrid}
+        embedding-base-url: ${OA_AGENT_PROJECT_EMBEDDING_BASE_URL:}
+        embedding-api-key: ${OA_AGENT_PROJECT_EMBEDDING_API_KEY:}
+        embedding-model: ${OA_AGENT_PROJECT_EMBEDDING_MODEL:Qwen/Qwen3-VL-Embedding-8B}
+        embedding-dimensions: ${OA_AGENT_PROJECT_EMBEDDING_DIMENSIONS:4096}
+        embedding-timeout-ms: ${OA_AGENT_PROJECT_EMBEDDING_TIMEOUT_MS:5000}
+        embedding-batch-size: ${OA_AGENT_PROJECT_EMBEDDING_BATCH_SIZE:16}
+        embedding-processing-timeout-ms: ${OA_AGENT_PROJECT_EMBEDDING_PROCESSING_TIMEOUT_MS:300000}
+        embedding-worker-interval-ms: ${OA_AGENT_PROJECT_EMBEDDING_WORKER_INTERVAL_MS:60000}
+    batch-test:
+      # Production profiles ignore this local-only fault-injection hook.
+      failpoint: ${OA_AGENT_BATCH_TEST_FAILPOINT:}
+      gate: ${OA_AGENT_BATCH_TEST_GATE:}
+    events:
+      postgres:
+        enabled: ${AGENT_EVENT_POSTGRES_ENABLED:true}
+        url: ${AGENT_EVENT_POSTGRES_URL:}
+        username: ${AGENT_EVENT_POSTGRES_USERNAME:}
+        password: ${AGENT_EVENT_POSTGRES_PASSWORD:}
+        driver-class-name: org.postgresql.Driver
+    auth:
+      enabled: ${OA_AGENT_AUTH_ENABLED:true}
+      api-key: ${OA_AGENT_API_KEY:}
+      username: ${OA_AGENT_USERNAME:}
+      password: ${OA_AGENT_PASSWORD:}
+      tenant-id: ${OA_AGENT_TENANT_ID:1}
+      refresh-ahead-seconds: ${OA_AGENT_REFRESH_AHEAD_SECONDS:60}
+      header-name: X-Agent-Key
+    identity:
+      secret: ${OA_AGENT_IDENTITY_SECRET:}
+      ttl-seconds: ${OA_AGENT_IDENTITY_TTL_SECONDS:7200}
+      header-name: X-Agent-Identity
   security:
     permit-all-urls:
+      - /agent/tools/**
+      - /agent/drafts/**
+      - /agent/artifacts/**
+      - /agent/runs/**
+      - /agent/threads/**
       - /admin-api/system/auth/kod-sso/start
       - /admin-api/system/auth/kod-sso/callback
       - /admin-api/system/auth/kod-sso/direct-login
       - /admin-api/system/auth/kod-sso/exchange
   tenant:
     ignore-urls:
+      - /agent/tools/**
+      - /agent/drafts/**
+      - /agent/artifacts/**
+      - /agent/runs/**
+      - /agent/threads/**
       - /admin-api/system/auth/kod-sso/start
       - /admin-api/system/auth/kod-sso/callback
       - /admin-api/system/auth/kod-sso/direct-login

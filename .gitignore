@@ -110,3 +110,21 @@ application-my.yaml
 
 # The Maven wrapper is source-controlled and must remain tracked.
 !.mvn/wrapper/maven-wrapper.jar
+
+# Agent runtime credentials and generated artifacts.
+/agent-python/.env
+/agent-python/.data/
+/agent-python/.langgraph_api/
+/agent-python/.pytest_cache/
+/agent-python/.venv/
+/agent-python/**/__pycache__/
+/agent-python/**/*.py[cod]
+/agent-python/**/*.egg-info/
+/agent-chat-ui/.env.local
+/agent-chat-ui/.next/
+/agent-chat-ui/.next-dev/
+/agent-chat-ui/node_modules/
+/agent-chat-ui/coverage/
+/agent-chat-ui/.turbo/
+/agent-chat-ui/*.tsbuildinfo
+/agent-chat-ui/next-env.d.ts

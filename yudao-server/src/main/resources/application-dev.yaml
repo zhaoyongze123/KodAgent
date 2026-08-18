@@ -3,6 +3,12 @@ server:
   port: ${SERVER_PORT:}
 
 yudao:
+  security:
+    permit-all-urls:
+      - /agent/tools/**
+  tenant:
+    ignore-urls:
+      - /agent/tools/**
   kod-sso:
     # 部署环境与本地隔离：默认关闭，由部署环境单独注入
     enabled: ${KOD_SSO_ENABLED:}

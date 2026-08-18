@@ -415,6 +415,7 @@ public class AdminUserServiceImplTest extends BaseDbUnitTest {
     public void testImportUserList_01() {
         // 准备参数
         UserImportExcelVO importUser = randomPojo(UserImportExcelVO.class, o -> {
+            o.setUsername("importuserone");
             o.setEmail(randomEmail());
             o.setMobile(randomMobile());
         });
@@ -437,6 +438,7 @@ public class AdminUserServiceImplTest extends BaseDbUnitTest {
     public void testImportUserList_02() {
         // 准备参数
         UserImportExcelVO importUser = randomPojo(UserImportExcelVO.class, o -> {
+            o.setUsername("importusertwo");
             o.setStatus(randomEle(CommonStatusEnum.values()).getStatus()); // 保证 status 的范围
             o.setSex(randomEle(SexEnum.values()).getSex()); // 保证 sex 的范围
             o.setEmail(randomEmail());
@@ -468,7 +470,7 @@ public class AdminUserServiceImplTest extends BaseDbUnitTest {
     @Test
     public void testImportUserList_03() {
         // mock 数据
-        AdminUserDO dbUser = randomAdminUserDO();
+        AdminUserDO dbUser = randomAdminUserDO(o -> o.setUsername("existinguserthree"));
         userMapper.insert(dbUser);
         // 准备参数
         UserImportExcelVO importUser = randomPojo(UserImportExcelVO.class, o -> {
@@ -500,7 +502,7 @@ public class AdminUserServiceImplTest extends BaseDbUnitTest {
     @Test
     public void testImportUserList_04() {
         // mock 数据
-        AdminUserDO dbUser = randomAdminUserDO();
+        AdminUserDO dbUser = randomAdminUserDO(o -> o.setUsername("existinguserfour"));
         userMapper.insert(dbUser);
         // 准备参数
         UserImportExcelVO importUser = randomPojo(UserImportExcelVO.class, o -> {

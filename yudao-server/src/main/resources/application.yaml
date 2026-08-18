@@ -221,6 +221,16 @@ spring:
           enabled: false # TODO @芋艿：有 bug https://github.com/spring-projects/spring-ai/issues/4917 需要官方修复
 
 yudao:
+  agent:
+    events:
+      postgres:
+        enabled: ${AGENT_EVENT_POSTGRES_ENABLED:true}
+        url: ${AGENT_EVENT_POSTGRES_URL:}
+        username: ${AGENT_EVENT_POSTGRES_USERNAME:}
+        password: ${AGENT_EVENT_POSTGRES_PASSWORD:}
+        driver-class-name: org.postgresql.Driver
+      outbox:
+        retry-delay-ms: ${AGENT_EVENT_OUTBOX_RETRY_DELAY_MS:5000}
   ai:
     gemini: # 谷歌 Gemini
       enable: true
@@ -267,6 +277,19 @@ yudao:
   info:
     version: 1.0.0
     base-package: cn.iocoder.yudao
+  agent:
+    auth:
+      enabled: ${OA_AGENT_AUTH_ENABLED:true}
+      api-key: ${OA_AGENT_API_KEY:}
+      username: ${OA_AGENT_USERNAME:}
+      password: ${OA_AGENT_PASSWORD:}
+      tenant-id: ${OA_AGENT_TENANT_ID:1}
+      refresh-ahead-seconds: ${OA_AGENT_REFRESH_AHEAD_SECONDS:60}
+      header-name: X-Agent-Key
+    identity:
+      secret: ${OA_AGENT_IDENTITY_SECRET:}
+      ttl-seconds: ${OA_AGENT_IDENTITY_TTL_SECONDS:7200}
+      header-name: X-Agent-Identity
   web:
     admin-ui:
       url: ${YUDao_ADMIN_UI_URL:} # Admin 管理后台 UI 的地址，由运行时环境提供

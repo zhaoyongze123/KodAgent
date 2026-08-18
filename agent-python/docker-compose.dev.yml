@@ -1,0 +1,74 @@
+name: agent-python
+
+services:
+  langgraph-api:
+    image: agent-python-langgraph-api:latest
+    container_name: agent-python-langgraph-api-1
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      LANGGRAPH_SERVER_HOST: 0.0.0.0
+      PORT: 8000
+      # 本地源码通过 volume 挂载；显式开启 LangGraph 开发重载，避免 Python
+      # 已加载的 Graph/Middleware 与工作区源码版本脱节。生产部署不使用此文件。
+      LANGSMITH_LANGGRAPH_DESKTOP: "true"
+      LANGSERVE_GRAPHS: '{"oa_agent":"/deps/agent-python/src/langgraph_app.py:graph"}'
+      LANGGRAPH_RUNTIME_EDITION: postgres
+      # 该镜像直接启动 Uvicorn，不经过 langgraph CLI；必须显式传入自定义认证配置。
+      LANGGRAPH_AUTH: '{"path":"/deps/agent-python/src/auth.py:auth","disable_studio_auth":true}'
+      POSTGRES_URI: postgresql://langgraph:langgraph@host.docker.internal:15432/langgraph
+      LANGGRAPH_POSTGRES_URI: postgresql://langgraph:langgraph@host.docker.internal:15432/langgraph
+      # Meeting write workflows must not fall back to the legacy path when the
+      # Operation/Effect runtime cannot be opened.
+      OA_AGENT_RUNTIME_REQUIRED: "true"
+      OA_AGENT_RUNTIME_POSTGRES_URI: postgresql://langgraph:langgraph@host.docker.internal:15432/langgraph
+      # Test-only route evaluation switch; production must leave it false.
+      OA_AGENT_INTENT_EVAL_ROUTE_ONLY: "${OA_AGENT_INTENT_EVAL_ROUTE_ONLY:-false}"
+      # Redis is the shared host middleware exposed on port 16379.
+      # The compose file intentionally contains only the LangGraph API.
+      REDIS_URI: redis://host.docker.internal:16379
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    ports:
+      - "2024:8000"
+    volumes:
+      # 真实源码挂载：Tool、Agent、Skill 修改后由 uvicorn reload 自动加载。
+      - ./src:/deps/agent-python/src
+      # Skill 是按领域动态读取的资源，不能只依赖构建镜像中的旧副本。
+      - ./skills:/deps/agent-python/skills:ro
+      # Python 事件 Java 暂时不可用时先落本地 Outbox，容器重启后继续补投。
+      - ./.data:/deps/agent-python/.data
+    networks:
+      - default
+
+  runtime-outbox:
+    image: agent-python-langgraph-api:latest
+    container_name: agent-python-runtime-outbox-1
+    restart: unless-stopped
+    entrypoint: ["python"]
+    command: ["-m", "src.runtime.outbox_worker"]
+    working_dir: /deps/agent-python
+    healthcheck:
+      disable: true
+    env_file:
+      - .env
+    environment:
+      OA_AGENT_RUNTIME_POSTGRES_URI: postgresql://langgraph:langgraph@host.docker.internal:15432/langgraph
+      OA_AGENT_RUNTIME_OUTBOX_BATCH_SIZE: "50"
+      OA_AGENT_RUNTIME_OUTBOX_LEASE_SECONDS: "30"
+      OA_AGENT_RUNTIME_OUTBOX_MAX_ATTEMPTS: "10"
+      OA_AGENT_RUNTIME_OUTBOX_POLL_SECONDS: "2"
+      PYTHONUNBUFFERED: "1"
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    volumes:
+      - ./src:/deps/agent-python/src
+      - ./skills:/deps/agent-python/skills:ro
+    networks:
+      - default
+
+networks:
+  default:
+    name: agent-python_default
+    external: true

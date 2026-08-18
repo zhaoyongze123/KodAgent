@@ -1,0 +1,565 @@
+package cn.iocoder.yudao.server.service.agent;
+
+import cn.hutool.crypto.SecureUtil;
+import cn.iocoder.yudao.framework.common.exception.ServiceException;
+import cn.iocoder.yudao.framework.common.exception.util.ServiceExceptionUtil;
+import cn.iocoder.yudao.framework.common.util.json.JsonUtils;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.MediaType;
+import org.springframework.http.client.ClientHttpRequest;
+import org.springframework.http.client.ClientHttpResponse;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.client.RestTemplate;
+import org.springframework.web.client.HttpStatusCodeException;
+import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.client.RestClientException;
+
+import javax.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+
+import javax.annotation.Resource;
+import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
+import java.util.*;
+
+/** Agent 模型供应商、模型同步和 Run 模型解析。 */
+@Service
+public class AgentModelService {
+
+    @Resource
+    @Qualifier("agentEventJdbcTemplate")
+    private JdbcTemplate jdbcTemplate;
+
+    @Resource
+    private RestTemplate restTemplate;
+
+    /** The provider-key encryption key must be supplied by the environment. */
+    @org.springframework.beans.factory.annotation.Value("${AGENT_MODEL_ENCRYPTION_KEY:${yudao.agent.models.encryption-key:}}")
+    private String encryptionKey;
+
+    public List<Map<String, Object>> listProviders(Long tenantId) {
+        return jdbcTemplate.queryForList("SELECT id, name, provider_type, base_url, source, enabled, " +
+                "(SELECT status FROM agent_model_credential c WHERE c.provider_id = p.id) credential_status " +
+                "FROM agent_model_provider p WHERE tenant_id = ? AND deleted = FALSE ORDER BY id", tenantId);
+    }
+
+    /**
+     * 物理删除当前租户的供应商及其模型配置。
+     *
+     * <p>模型绑定依赖模型，模型和凭据依赖供应商；数据库没有级联删除，故必须按
+     * 绑定、模型、凭据、供应商的顺序删除，并放进同一事务，避免残留孤儿配置。</p>
+     *
+     * @param tenantId 当前租户编号
+     * @param providerId 要删除的供应商编号
+     */
+    @Transactional(transactionManager = "agentEventTransactionManager")
+    public void deleteProvider(Long tenantId, Long providerId) {
+        int deleted = physicalDeleteProvider(tenantId, providerId);
+        if (deleted == 0) throw ServiceExceptionUtil.exception0(404, "供应商不存在");
+    }
+
+    /**
+     * 按外键依赖顺序物理删除供应商配置，返回最终删除的供应商记录数。
+     *
+     * <p>每条语句都带租户条件，不能因外部传入的供应商编号跨租户删除数据。</p>
+     */
+    private int physicalDeleteProvider(Long tenantId, Long providerId) {
+        jdbcTemplate.update("DELETE FROM agent_model_binding WHERE model_id IN "
+                + "(SELECT m.id FROM agent_model m JOIN agent_model_provider p ON p.id=m.provider_id "
+                + "WHERE m.provider_id=? AND p.tenant_id=?)", providerId, tenantId);
+        jdbcTemplate.update("DELETE FROM agent_model WHERE provider_id=? AND EXISTS "
+                + "(SELECT 1 FROM agent_model_provider WHERE id=? AND tenant_id=?)",
+                providerId, providerId, tenantId);
+        jdbcTemplate.update("DELETE FROM agent_model_credential WHERE provider_id=? AND EXISTS "
+                + "(SELECT 1 FROM agent_model_provider WHERE id=? AND tenant_id=?)",
+                providerId, providerId, tenantId);
+        return jdbcTemplate.update("DELETE FROM agent_model_provider WHERE id=? AND tenant_id=?", providerId, tenantId);
+    }
+
+    /**
+     * 保存当前租户的模型供应商。
+     *
+     * <p>供应商名称是当前租户内的稳定标识。新增时会清理旧版本软删除留下的同名记录；
+     * 改名时必须先检查重复名称。查询检查用于给用户返回可理解的提示；数据库唯一索引用于处理并发提交的最终竞争。</p>
+     *
+     * @param tenantId 当前租户编号
+     * @param request 前端提交的供应商表单，包含 id（编辑时）、name、providerType、baseUrl、apiKey、enabled
+     * @return 脱敏后的已保存供应商配置，不包含 API Key
+     */
+    @Transactional(transactionManager = "agentEventTransactionManager")
+    public Map<String, Object> saveProvider(Long tenantId, Map<String, Object> request) {
+        String name = required(request, "name");
+        String baseUrl = required(request, "baseUrl").replaceAll("/+$", "");
+        String apiKey = String.valueOf(request.getOrDefault("apiKey", "")).trim();
+        Long id = request.get("id") == null ? null : Long.valueOf(String.valueOf(request.get("id")));
+        if (id == null) {
+            if (activeProviderNameExists(tenantId, name)) {
+                throw providerNameConflict(name);
+            }
+            // 旧版本删除供应商时仅标记 deleted，会占用唯一索引；新建同名配置前彻底清理它。
+            purgeDeletedProviderWithSameName(tenantId, name);
+            try {
+                jdbcTemplate.update("INSERT INTO agent_model_provider(tenant_id,name,provider_type,base_url,source) VALUES(?,?,?,?,?)",
+                        tenantId, name, request.getOrDefault("providerType", "OPENAI_COMPATIBLE"), baseUrl,
+                        request.getOrDefault("source", "CUSTOM"));
+            } catch (DuplicateKeyException ex) {
+                // 两个请求同时通过预检查时，由唯一索引裁决；此处不能向前端泄露数据库异常。
+                throw providerNameConflict(name);
+            }
+            id = jdbcTemplate.queryForObject("SELECT id FROM agent_model_provider WHERE tenant_id=? AND name=?", Long.class, tenantId, name);
+        } else {
+            if (providerNameExists(tenantId, name, id)) {
+                throw providerNameConflict(name);
+            }
+            try {
+                int updated = jdbcTemplate.update("UPDATE agent_model_provider SET name=?, provider_type=?, base_url=?, enabled=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND tenant_id=?",
+                        name, request.getOrDefault("providerType", "OPENAI_COMPATIBLE"), baseUrl,
+                        request.getOrDefault("enabled", true), id, tenantId);
+                if (updated == 0) throw ServiceExceptionUtil.exception0(404, "供应商不存在");
+            } catch (DuplicateKeyException ex) {
+                // 编辑时也可能与另一请求改出的同名配置竞争，统一转换为业务错误。
+                throw providerNameConflict(name);
+            }
+        }
+        if (!apiKey.isEmpty()) {
+            String encrypted = encrypt(apiKey);
+            jdbcTemplate.update("INSERT INTO agent_model_credential(provider_id,api_key_ciphertext,status) VALUES(?,?, 'UNKNOWN') " +
+                    "ON CONFLICT(provider_id) DO UPDATE SET api_key_ciphertext=EXCLUDED.api_key_ciphertext,status='UNKNOWN',updated_at=CURRENT_TIMESTAMP",
+                    id, encrypted);
+        }
+        return jdbcTemplate.queryForMap("SELECT id, name, provider_type, base_url, source, enabled FROM agent_model_provider WHERE id=? AND tenant_id=?", id, tenantId);
+    }
+
+    /**
+     * 检查租户内是否已有其他同名供应商，已删除记录也保留在检查范围内。
+     *
+     * <p>数据表的唯一索引不区分 deleted；忽略历史记录会导致预检查通过、插入时仍失败。</p>
+     */
+    private boolean activeProviderNameExists(Long tenantId, String name) {
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(1) FROM agent_model_provider WHERE tenant_id=? AND name=? AND deleted=FALSE",
+                Integer.class, tenantId, name);
+        return count != null && count > 0;
+    }
+
+    private boolean providerNameExists(Long tenantId, String name, Long excludedProviderId) {
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT COUNT(1) FROM agent_model_provider WHERE tenant_id=? AND name=? AND (? IS NULL OR id<>?)",
+                Integer.class, tenantId, name, excludedProviderId, excludedProviderId);
+        return count != null && count > 0;
+    }
+
+    /** 清理旧软删除实现留下的同名记录，使用户能重新创建该供应商。 */
+    private void purgeDeletedProviderWithSameName(Long tenantId, String name) {
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                "SELECT id FROM agent_model_provider WHERE tenant_id=? AND name=? AND deleted=TRUE",
+                tenantId, name);
+        for (Map<String, Object> row : rows) {
+            Object providerId = row.get("id");
+            if (providerId instanceof Number) {
+                physicalDeleteProvider(tenantId, ((Number) providerId).longValue());
+            }
+        }
+    }
+
+    /** 返回不暴露数据库约束名的统一重复名称错误。 */
+    private RuntimeException providerNameConflict(String name) {
+        return ServiceExceptionUtil.exception0(409,
+                "供应商名称“" + name + "”已存在，请编辑已有配置或使用其他名称");
+    }
+
+    public Map<String, Object> testProvider(Long tenantId, Long providerId) {
+        ProviderConfig provider = provider(tenantId, providerId);
+        String endpoint = provider.baseUrl + "/models";
+        long startedAt = System.currentTimeMillis();
+        try {
+            org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+            headers.setBearerAuth(provider.apiKey);
+            org.springframework.http.ResponseEntity<Map> entity = restTemplate.exchange(endpoint,
+                    org.springframework.http.HttpMethod.GET, new org.springframework.http.HttpEntity<>(headers), Map.class);
+            Map response = entity.getBody();
+            if (response == null || !(response.get("data") instanceof List)) {
+                String error = "接口响应缺少 data 模型数组";
+                jdbcTemplate.update("UPDATE agent_model_credential SET status='INVALID',last_test_at=CURRENT_TIMESTAMP,last_error=? WHERE provider_id=?", error, providerId);
+                return result(false, 0, error, endpoint, System.currentTimeMillis() - startedAt);
+            }
+            int count = ((List<?>) response.get("data")).size();
+            jdbcTemplate.update("UPDATE agent_model_credential SET status='VALID',last_test_at=CURRENT_TIMESTAMP,last_error=NULL WHERE provider_id=?", providerId);
+            return result(true, count, null, endpoint, System.currentTimeMillis() - startedAt);
+        } catch (Exception ex) {
+            jdbcTemplate.update("UPDATE agent_model_credential SET status='INVALID',last_test_at=CURRENT_TIMESTAMP,last_error=? WHERE provider_id=?", safeError(ex), providerId);
+            return result(false, 0, safeError(ex), endpoint, System.currentTimeMillis() - startedAt);
+        }
+    }
+
+    public Map<String, Object> syncModels(Long tenantId, Long providerId) {
+        ProviderConfig provider = provider(tenantId, providerId);
+        Map<String, Object> response;
+        try {
+            org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+            headers.setBearerAuth(provider.apiKey);
+            org.springframework.http.ResponseEntity<Map> entity = restTemplate.exchange(provider.baseUrl + "/models",
+                    org.springframework.http.HttpMethod.GET, new org.springframework.http.HttpEntity<>(headers), Map.class);
+            response = entity.getBody();
+        } catch (Exception ex) {
+            throw ServiceExceptionUtil.exception0(502, "模型列表获取失败：" + safeError(ex));
+        }
+        Object data = response == null ? null : response.get("data");
+        if (!(data instanceof List)) throw ServiceExceptionUtil.exception0(502, "供应商返回的模型列表格式无效");
+        int count = 0;
+        for (Object item : (List<?>) data) {
+            if (!(item instanceof Map)) continue;
+            Map itemMap = (Map) item;
+            String modelName = String.valueOf(itemMap.getOrDefault("id", "")).trim();
+            if (modelName.isEmpty()) continue;
+            Map<String, Object> capabilities = new LinkedHashMap<>();
+            capabilities.put("streaming", true);
+            // OpenAI-compatible /models responses often omit capability data.
+            // SiliconFlow must be conservative: models without an explicit
+            // function-calling capability must not be advertised as Agent
+            // models, otherwise the first tool call fails with provider 400.
+            capabilities.put("tools", inferToolsCapability(provider, itemMap));
+            capabilities.put("vision", modelName.toLowerCase().contains("vl") || modelName.toLowerCase().contains("vision"));
+            // PostgreSQL does not implicitly cast a JDBC String parameter to jsonb.
+            // Without the explicit cast the provider request succeeds, but the
+            // first model insert fails and the UI receives a generic 500.
+            jdbcTemplate.update("INSERT INTO agent_model(provider_id,model_name,display_name,capabilities,last_synced_at) VALUES(?,?,?,?::jsonb,CURRENT_TIMESTAMP) " +
+                            "ON CONFLICT(provider_id,model_name) DO UPDATE SET display_name=EXCLUDED.display_name,capabilities=EXCLUDED.capabilities,last_synced_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP",
+                    providerId, modelName, modelName, JsonUtils.toJsonString(capabilities));
+            count++;
+        }
+        return result(true, count, null, provider.baseUrl + "/models", null);
+    }
+
+    public List<Map<String, Object>> listModels(Long tenantId, Long providerId) {
+        // Agent models must support the two capabilities required by the
+        // runtime: streamed output and function/tool calling. Models without
+        // either capability are ordinary chat models and must not leak into
+        // Agent model pickers or default-binding configuration.
+        String capabilityFilter = " AND m.capabilities->>'streaming'='true' AND m.capabilities->>'tools'='true'";
+        if (providerId == null) return jdbcTemplate.queryForList("SELECT m.id,m.provider_id,p.name provider_name,m.model_name,m.display_name,m.capabilities::text capabilities,m.enabled FROM agent_model m JOIN agent_model_provider p ON p.id=m.provider_id WHERE p.tenant_id=? AND p.enabled=true AND p.deleted=false AND m.enabled=true" + capabilityFilter + " ORDER BY p.id,m.model_name", tenantId);
+        return jdbcTemplate.queryForList("SELECT m.id,m.provider_id,p.name provider_name,m.model_name,m.display_name,m.capabilities::text capabilities,m.enabled FROM agent_model m JOIN agent_model_provider p ON p.id=m.provider_id WHERE p.tenant_id=? AND p.id=? AND p.enabled=true AND p.deleted=false AND m.enabled=true" + capabilityFilter + " ORDER BY m.model_name", tenantId, providerId);
+    }
+
+    /** 查询当前租户的模型绑定，API Key 永不出现在返回值中。 */
+    public List<Map<String, Object>> listBindings(Long tenantId) {
+        return jdbcTemplate.queryForList("SELECT b.id,b.tenant_id,b.user_id,b.agent_name,b.model_id,b.enabled, " +
+                "m.model_name,m.display_name,p.name provider_name " +
+                "FROM agent_model_binding b JOIN agent_model m ON m.id=b.model_id " +
+                "JOIN agent_model_provider p ON p.id=m.provider_id " +
+                "WHERE b.tenant_id=? AND p.enabled=true AND p.deleted=false AND m.enabled=true AND m.capabilities->>'streaming'='true' AND m.capabilities->>'tools'='true' ORDER BY b.user_id NULLS FIRST,b.agent_name", tenantId);
+    }
+
+    /** 保存用户、租户或 Agent 的默认模型绑定。 */
+    @org.springframework.transaction.annotation.Transactional
+    public Map<String, Object> saveBinding(Long tenantId, Map<String, Object> request) {
+        String agentName = String.valueOf(request.getOrDefault("agentName", "oa-main-agent")).trim();
+        if (agentName.isEmpty()) agentName = "oa-main-agent";
+        Long userId = nullableLong(request.get("userId"));
+        Long modelId = nullableLong(request.get("modelId"));
+        if (modelId == null) throw ServiceExceptionUtil.exception0(400, "modelId 不能为空");
+        if (!modelBelongsToTenant(tenantId, modelId)) throw ServiceExceptionUtil.exception0(400, "模型不存在或不属于当前租户");
+        if (!agentCapabilitiesSupported(tenantId, modelId)) {
+            throw ServiceExceptionUtil.exception0(400, "该模型不满足 Agent 所需的流式输出和工具调用能力");
+        }
+        jdbcTemplate.update("DELETE FROM agent_model_binding WHERE tenant_id=? AND user_id IS NOT DISTINCT FROM ? AND agent_name=?", tenantId, userId, agentName);
+        jdbcTemplate.update("INSERT INTO agent_model_binding(tenant_id,user_id,agent_name,model_id,enabled) VALUES(?,?,?,?,?)",
+                tenantId, userId, agentName, modelId, request.getOrDefault("enabled", true));
+        return jdbcTemplate.queryForMap("SELECT b.id,b.tenant_id,b.user_id,b.agent_name,b.model_id,b.enabled,m.model_name,m.display_name,p.name provider_name " +
+                "FROM agent_model_binding b JOIN agent_model m ON m.id=b.model_id JOIN agent_model_provider p ON p.id=m.provider_id " +
+                "WHERE b.tenant_id=? AND b.user_id IS NOT DISTINCT FROM ? AND b.agent_name=?", tenantId, userId, agentName);
+    }
+
+    public void deleteBinding(Long tenantId, Long bindingId) {
+        int count = jdbcTemplate.update("DELETE FROM agent_model_binding WHERE id=? AND tenant_id=?", bindingId, tenantId);
+        if (count == 0) throw ServiceExceptionUtil.exception0(404, "模型绑定不存在");
+    }
+
+    /** 管理员可修正供应商无法可靠探测的能力。 */
+    public Map<String, Object> updateCapabilities(Long tenantId, Long modelId, Map<String, Object> capabilities) {
+        if (!modelBelongsToTenant(tenantId, modelId)) throw ServiceExceptionUtil.exception0(404, "模型不存在或不属于当前租户");
+        jdbcTemplate.update("UPDATE agent_model SET capabilities=?::jsonb,updated_at=CURRENT_TIMESTAMP WHERE id=?", JsonUtils.toJsonString(capabilities), modelId);
+        return jdbcTemplate.queryForMap("SELECT id,provider_id,model_name,display_name,capabilities,enabled FROM agent_model WHERE id=?", modelId);
+    }
+
+    private boolean agentCapabilitiesSupported(Long tenantId, Long modelId) {
+        Integer count = jdbcTemplate.queryForObject("SELECT COUNT(1) FROM agent_model m JOIN agent_model_provider p ON p.id=m.provider_id " +
+                "WHERE m.id=? AND p.tenant_id=? AND m.enabled=true AND p.enabled=true AND p.deleted=false " +
+                "AND m.capabilities->>'streaming'='true' AND m.capabilities->>'tools'='true'", Integer.class, modelId, tenantId);
+        return count != null && count > 0;
+    }
+
+    /** 显式模型优先，否则按用户+Agent、用户默认、租户+Agent、租户默认解析。 */
+    public Map<String, Object> resolveForRun(Long tenantId, Long userId, Long modelId, String agentName) {
+        if (modelId != null) return resolve(tenantId, userId, modelId);
+        String name = agentName == null || agentName.trim().isEmpty() ? "oa-main-agent" : agentName.trim();
+        Long selected = null;
+        List<Map<String, Object>> rows = jdbcTemplate.queryForList("SELECT model_id FROM agent_model_binding " +
+                "WHERE tenant_id=? AND enabled=true AND ((user_id=? AND agent_name=?) OR (user_id=? AND agent_name='*') OR " +
+                "(user_id IS NULL AND agent_name=?) OR (user_id IS NULL AND agent_name='*')) " +
+                "ORDER BY CASE WHEN user_id=? AND agent_name=? THEN 1 WHEN user_id=? AND agent_name='*' THEN 2 " +
+                "WHEN user_id IS NULL AND agent_name=? THEN 3 ELSE 4 END LIMIT 1",
+                tenantId, userId, name, userId, name, userId, name, userId, name);
+        if (!rows.isEmpty()) selected = ((Number) rows.get(0).get("model_id")).longValue();
+        if (selected == null) throw ServiceExceptionUtil.exception0(404, "尚未配置可用的默认模型");
+        return resolve(tenantId, userId, selected);
+    }
+
+    /** Python Agent 使用：按显式 modelId 解析本次 Run 的模型配置。 */
+    public Map<String, Object> resolve(Long tenantId, Long userId, Long modelId) {
+        String sql = "SELECT m.id model_id,m.model_name,m.capabilities,p.id provider_id,p.name provider_name,p.base_url,c.api_key_ciphertext " +
+                "FROM agent_model m JOIN agent_model_provider p ON p.id=m.provider_id JOIN agent_model_credential c ON c.provider_id=p.id " +
+                "WHERE m.id=? AND p.tenant_id=? AND p.enabled=true AND m.enabled=true";
+        Map<String, Object> row;
+        try { row = jdbcTemplate.queryForMap(sql, modelId, tenantId); }
+        catch (Exception ex) { throw ServiceExceptionUtil.exception0(404, "模型不存在或未启用"); }
+        if (!toolsSupported(row.get("capabilities")) || !streamingSupported(row.get("capabilities"))) {
+            throw ServiceExceptionUtil.exception0(400, "当前模型不满足 Agent 所需的流式输出和工具调用能力，请切换模型");
+        }
+        // The credential is deliberately selected only to prove that the
+        // provider has one configured. It must never cross the Java/Python
+        // boundary. The model gateway below is the only code path allowed to
+        // decrypt and use it.
+        row.remove("api_key_ciphertext");
+        return row;
+    }
+
+    /**
+     * Proxy one OpenAI-compatible chat completion while keeping the provider
+     * credential inside Java. The response body is copied as-is so both JSON
+     * and text/event-stream clients keep the provider protocol.
+     */
+    public void proxyChatCompletion(Long tenantId, Long modelId, byte[] requestBody,
+                                    HttpServletResponse servletResponse) {
+        GatewayConfig gateway = null;
+        try {
+            // 模型网关多数请求接受 SSE。若在进入上游前发现本地密钥或模型配置错误，
+            // 不能交给全局 JSON 异常处理器：它会受 Accept:text/event-stream 协商影响，
+            // 使客户端收到 200 空流并误判为模型没有生成内容。
+            final GatewayConfig resolvedGateway = gatewayConfig(tenantId, modelId);
+            gateway = resolvedGateway;
+            Map<String, Object> request = JsonUtils.parseObject(new String(requestBody, StandardCharsets.UTF_8), Map.class);
+            if (request == null) throw ServiceExceptionUtil.exception0(400, "模型请求体不能为空");
+            request.put("model", resolvedGateway.modelName);
+            byte[] normalizedBody = JsonUtils.toJsonString(request).getBytes(StandardCharsets.UTF_8);
+            boolean stream = Boolean.TRUE.equals(request.get("stream"));
+            String endpoint = resolvedGateway.baseUrl + "/chat/completions";
+            restTemplate.execute(endpoint, HttpMethod.POST, clientRequest -> {
+                HttpHeaders headers = clientRequest.getHeaders();
+                headers.setContentType(MediaType.APPLICATION_JSON);
+                headers.setAccept(Collections.singletonList(stream
+                        ? MediaType.TEXT_EVENT_STREAM : MediaType.APPLICATION_JSON));
+                headers.setBearerAuth(resolvedGateway.apiKey);
+                headers.setContentLength(normalizedBody.length);
+                OutputStream output = clientRequest.getBody();
+                output.write(normalizedBody);
+            }, response -> copyProviderResponse(response, servletResponse));
+        } catch (ServiceException ex) {
+            if (!servletResponse.isCommitted()) {
+                writeJsonError(servletResponse, HttpServletResponse.SC_INTERNAL_SERVER_ERROR,
+                        ex.getMessage() == null ? "模型网关配置无效" : ex.getMessage());
+            }
+        } catch (HttpStatusCodeException ex) {
+            writeProviderError(servletResponse, ex.getRawStatusCode(), ex.getResponseBodyAsByteArray(),
+                    gateway == null ? "" : gateway.apiKey);
+        } catch (ResourceAccessException ex) {
+            if (!servletResponse.isCommitted()) {
+                writeJsonError(servletResponse, HttpServletResponse.SC_BAD_GATEWAY,
+                        "模型供应商连接失败，请稍后重试");
+            }
+        } catch (RestClientException ex) {
+            if (!servletResponse.isCommitted()) {
+                writeJsonError(servletResponse, HttpServletResponse.SC_BAD_GATEWAY,
+                        "模型供应商响应读取失败，请稍后重试");
+            }
+        }
+    }
+
+    private Void copyProviderResponse(ClientHttpResponse providerResponse,
+                                      HttpServletResponse servletResponse) throws IOException {
+        servletResponse.setStatus(providerResponse.getRawStatusCode());
+        MediaType contentType = providerResponse.getHeaders().getContentType();
+        if (contentType != null) servletResponse.setContentType(contentType.toString());
+        if (providerResponse.getHeaders().containsKey(HttpHeaders.CACHE_CONTROL)) {
+            servletResponse.setHeader(HttpHeaders.CACHE_CONTROL,
+                    providerResponse.getHeaders().getFirst(HttpHeaders.CACHE_CONTROL));
+        }
+        // Prevent an intermediary from buffering model SSE chunks.
+        if (contentType != null && MediaType.TEXT_EVENT_STREAM.includes(contentType)) {
+            servletResponse.setHeader("X-Accel-Buffering", "no");
+        }
+        try (InputStream input = providerResponse.getBody(); OutputStream output = servletResponse.getOutputStream()) {
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = input.read(buffer)) >= 0) {
+                if (read == 0) continue;
+                output.write(buffer, 0, read);
+                output.flush();
+            }
+        }
+        return null;
+    }
+
+    private void writeProviderError(HttpServletResponse response, int status, byte[] body, String apiKey) {
+        if (response.isCommitted()) return;
+        response.setStatus(status);
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        String text = new String(body == null ? new byte[0] : body, StandardCharsets.UTF_8);
+        if (apiKey != null && !apiKey.isEmpty()) text = text.replace(apiKey, "***");
+        try {
+            response.getWriter().write(text.isEmpty()
+                    ? JsonUtils.toJsonString(Collections.singletonMap("error", "模型供应商请求失败")) : text);
+        } catch (IOException ignored) {
+            // The client connection may already be closed; there is no safe
+            // second response channel to use here.
+        }
+    }
+
+    private void writeJsonError(HttpServletResponse response, int status, String message) {
+        response.setStatus(status);
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        try {
+            response.getWriter().write(JsonUtils.toJsonString(Collections.singletonMap("error", message)));
+        } catch (IOException ignored) {
+            // The client connection may already be closed.
+        }
+    }
+
+    private GatewayConfig gatewayConfig(Long tenantId, Long modelId) {
+        Map<String, Object> row;
+        try {
+            row = jdbcTemplate.queryForMap("SELECT m.model_name,m.capabilities,p.base_url,c.api_key_ciphertext " +
+                    "FROM agent_model m JOIN agent_model_provider p ON p.id=m.provider_id " +
+                    "JOIN agent_model_credential c ON c.provider_id=p.id " +
+                    "WHERE m.id=? AND p.tenant_id=? AND p.enabled=true AND p.deleted=false AND m.enabled=true",
+                    modelId, tenantId);
+        } catch (Exception ex) {
+            throw ServiceExceptionUtil.exception0(404, "模型不存在或未启用");
+        }
+        if (!toolsSupported(row.get("capabilities")) || !streamingSupported(row.get("capabilities"))) {
+            throw ServiceExceptionUtil.exception0(400, "当前模型不满足 Agent 所需的流式输出和工具调用能力，请切换模型");
+        }
+        String baseUrl = String.valueOf(row.get("base_url")).replaceAll("/+$", "");
+        String apiKey = decrypt(String.valueOf(row.get("api_key_ciphertext")));
+        if (baseUrl.isEmpty() || apiKey.isEmpty()) {
+            throw ServiceExceptionUtil.exception0(502, "模型供应商凭据或地址无效");
+        }
+        return new GatewayConfig(baseUrl, String.valueOf(row.get("model_name")), apiKey);
+    }
+
+    @SuppressWarnings("rawtypes")
+    private boolean inferToolsCapability(ProviderConfig provider, Map item) {
+        String modelName = String.valueOf(item.getOrDefault("id", "")).toLowerCase(Locale.ROOT);
+        Object explicit = firstNonNull(item.get("tools"), item.get("tool_calling"),
+                item.get("function_calling"), item.get("supports_tools"));
+        if (explicit instanceof Boolean) return (Boolean) explicit;
+        String endpoint = provider.baseUrl.toLowerCase(Locale.ROOT);
+        // SiliconFlow's /models response does not reliably expose capability
+        // flags. Do not disable every model by provider name. Only obvious
+        // embedding, reranking, media and non-chat models are excluded; chat
+        // and coding models remain available and the runtime remains the
+        // final authority when a provider rejects a tool call.
+        if (endpoint.contains("siliconflow")) return !looksLikeNonChatModel(modelName);
+        return true;
+    }
+
+    private boolean looksLikeNonChatModel(String modelName) {
+        return modelName.contains("embedding") || modelName.contains("reranker") ||
+                modelName.contains("bge-") || modelName.contains("ocr") ||
+                modelName.contains("speech") || modelName.contains("audio") ||
+                modelName.contains("tts") || modelName.contains("kolors") ||
+                modelName.contains("z-image") || modelName.contains("image-edit") ||
+                modelName.contains("wan2") || modelName.contains("captioner");
+    }
+
+    private Object firstNonNull(Object... values) {
+        for (Object value : values) if (value != null) return value;
+        return null;
+    }
+
+    private boolean toolsSupported(Object capabilities) {
+        if (capabilities == null) return true;
+        String value = String.valueOf(capabilities).replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
+        return !value.contains("\"tools\":false") && !value.contains("\"tool_calling\":false");
+    }
+
+    private boolean streamingSupported(Object capabilities) {
+        if (capabilities == null) return true;
+        String value = String.valueOf(capabilities).replaceAll("\\s+", "").toLowerCase(Locale.ROOT);
+        return !value.contains("\"streaming\":false");
+    }
+
+    private ProviderConfig provider(Long tenantId, Long providerId) {
+        Map<String, Object> row;
+        try { row = jdbcTemplate.queryForMap("SELECT p.id,p.base_url,c.api_key_ciphertext FROM agent_model_provider p JOIN agent_model_credential c ON c.provider_id=p.id WHERE p.id=? AND p.tenant_id=? AND p.enabled=true", providerId, tenantId); }
+        catch (Exception ex) { throw ServiceExceptionUtil.exception0(404, "供应商不存在、未启用或未配置 API Key"); }
+        return new ProviderConfig(String.valueOf(row.get("base_url")), decrypt(String.valueOf(row.get("api_key_ciphertext"))));
+    }
+
+    private boolean modelBelongsToTenant(Long tenantId, Long modelId) {
+        Integer count = jdbcTemplate.queryForObject("SELECT COUNT(1) FROM agent_model m JOIN agent_model_provider p ON p.id=m.provider_id " +
+                "WHERE m.id=? AND p.tenant_id=? AND p.deleted=false", Integer.class, modelId, tenantId);
+        return count != null && count > 0;
+    }
+
+    private Long nullableLong(Object value) {
+        if (value == null || String.valueOf(value).trim().isEmpty() || "null".equalsIgnoreCase(String.valueOf(value))) return null;
+        return Long.valueOf(String.valueOf(value));
+    }
+
+    private String required(Map<String, Object> request, String field) {
+        String value = String.valueOf(request.getOrDefault(field, "")).trim();
+        if (value.isEmpty()) throw ServiceExceptionUtil.exception0(400, field + " 不能为空");
+        return value;
+    }
+
+    private String encrypt(String value) { return SecureUtil.aes(requireEncryptionKey()).encryptBase64(value); }
+    private String decrypt(String value) { return SecureUtil.aes(requireEncryptionKey()).decryptStr(value); }
+    private byte[] requireEncryptionKey() {
+        String value = encryptionKey == null ? "" : encryptionKey.trim();
+        byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+        if (!(bytes.length == 16 || bytes.length == 24 || bytes.length == 32)) {
+            throw ServiceExceptionUtil.exception0(500,
+                    "Agent 模型加密密钥未配置或长度无效，必须为 16、24 或 32 字节");
+        }
+        return bytes;
+    }
+    private String safeError(Exception ex) { return String.valueOf(ex.getMessage()).replaceAll("(?i)(api[_-]?key|authorization|bearer)\\s*[:=]?\\s*\\S+", "$1=***").substring(0, Math.min(900, String.valueOf(ex.getMessage()).length())); }
+    private Map<String, Object> result(boolean success, int count, String error, String endpoint, Long latencyMs) {
+        Map<String,Object> result = new LinkedHashMap<>();
+        result.put("success", success);
+        result.put("count", count);
+        result.put("endpoint", endpoint);
+        if (latencyMs != null) result.put("latencyMs", latencyMs);
+        if (error != null) result.put("error", error);
+        return result;
+    }
+    private static final class ProviderConfig {
+        private final String baseUrl;
+        private final String apiKey;
+
+        private ProviderConfig(String baseUrl, String apiKey) {
+            this.baseUrl = baseUrl;
+            this.apiKey = apiKey;
+        }
+    }
+
+    private static final class GatewayConfig {
+        private final String baseUrl;
+        private final String modelName;
+        private final String apiKey;
+
+        private GatewayConfig(String baseUrl, String modelName, String apiKey) {
+            this.baseUrl = baseUrl;
+            this.modelName = modelName;
+            this.apiKey = apiKey;
+        }
+    }
+}

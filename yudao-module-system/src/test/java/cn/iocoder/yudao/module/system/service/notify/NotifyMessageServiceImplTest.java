@@ -9,7 +9,9 @@ import cn.iocoder.yudao.module.system.controller.admin.notify.vo.message.NotifyM
 import cn.iocoder.yudao.module.system.dal.dataobject.notify.NotifyMessageDO;
 import cn.iocoder.yudao.module.system.dal.dataobject.notify.NotifyTemplateDO;
 import cn.iocoder.yudao.module.system.dal.mysql.notify.NotifyMessageMapper;
+import cn.iocoder.yudao.module.system.service.notice.NoticeService;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 
 import javax.annotation.Resource;
@@ -39,6 +41,9 @@ public class NotifyMessageServiceImplTest extends BaseDbUnitTest {
 
     @Resource
     private NotifyMessageMapper notifyMessageMapper;
+
+    @MockBean
+    private NoticeService noticeService;
 
     @Test
     public void testCreateNotifyMessage_success() {
